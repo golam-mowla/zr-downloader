@@ -336,6 +336,32 @@ fn find_exe_in_augmented_path(bin_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn ensure_ffmpeg_available() -> Option<PathBuf> {
+    // 1. Check well-known locations first
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            let candidates = [
+                PathBuf::from(&local).join("Goat Download Manager").join("bin").join("ffmpeg.exe"),
+                PathBuf::from(&local).join("GM-Downloader").join("bin").join("ffmpeg.exe"),
+                PathBuf::from(&local).join("ffmpeg.exe"),
+            ];
+            for p in &candidates {
+                if p.exists() {
+                    return Some(p.clone());
+                }
+            }
+        }
+    }
+
+    // 2. Scan augmented PATH
+    if let Some(existing) = find_exe_in_augmented_path("ffmpeg") {
+        return Some(existing);
+    }
+
+    None
+}
+
 fn ensure_ytdlp_available() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -954,7 +980,7 @@ pub async fn start_download(
         }
 
         // Ensure FFmpeg location is explicitly passed if found
-        if let Some(ffmpeg_path) = find_exe_in_augmented_path("ffmpeg") {
+        if let Some(ffmpeg_path) = ensure_ffmpeg_available() {
             if let Some(parent) = ffmpeg_path.parent() {
                 cmd.args(["--ffmpeg-location", &parent.to_string_lossy()]);
             }
@@ -1606,14 +1632,26 @@ pub async fn start_download(
 
         if !status.as_ref().map(|s| s.success()).unwrap_or(false) {
             let errs = err_lines.lock().unwrap();
-            let last_err = errs.last().cloned().unwrap_or_else(|| "Unknown yt-dlp error".to_string());
-            let _ = app.emit("download-error", serde_json::json!({ "id": tid.clone(), "error": last_err }));
+            // Find the most meaningful error: prioritize lines starting with "ERROR:",
+            // then lines containing "error" or "failed", then fall back to the last non-empty line.
+            let meaningful_err = errs.iter().rev()
+                .find(|l| l.starts_with("ERROR:") || l.starts_with("error:"))
+                .or_else(|| errs.iter().rev().find(|l| {
+                    let low = l.to_lowercase();
+                    (low.contains("error") || low.contains("failed") || low.contains("not found"))
+                        && !low.contains("[download]")
+                        && !low.contains("warning")
+                }))
+                .or_else(|| errs.iter().rev().find(|l| !l.trim().is_empty()))
+                .cloned()
+                .unwrap_or_else(|| "Unknown yt-dlp error".to_string());
+            let _ = app.emit("download-error", serde_json::json!({ "id": tid.clone(), "error": meaningful_err }));
             let _ = app.emit(
                 "download-progress",
                 serde_json::json!({
                     "id": tid.clone(),
                     "status": "error",
-                    "error_message": last_err,
+                    "error_message": meaningful_err,
                     "speed": "0 B/s",
                     "speed_formatted": "0 B/s",
                     "eta": "--",

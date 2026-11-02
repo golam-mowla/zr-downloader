@@ -134,6 +134,16 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
           {/* Metrics Grid */}
           <div className="grid grid-cols-2 gap-2.5 p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40">
+            {/* Error Message Banner */}
+            {isError && (task.errorMessage || (task as any).error) && (
+              <div className="col-span-2 p-2.5 rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50">
+                <p className="text-[12px] font-medium text-red-700 dark:text-red-400 break-words leading-relaxed">
+                  <span className="font-bold">Error: </span>
+                  {task.errorMessage || (task as any).error}
+                </p>
+              </div>
+            )}
+
             {/* Status */}
             <div className="flex items-center justify-between">
               <span className="text-[13px] font-medium text-gdm-secondary">

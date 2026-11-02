@@ -168,6 +168,7 @@ export const App: React.FC = () => {
             eta_formatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
             etaFormatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
             eta: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
+            errorMessage: updated.error_message || updated.errorMessage || current.errorMessage,
             speedHistory: newHistory,
           };
           return updatedList;
@@ -232,7 +233,7 @@ export const App: React.FC = () => {
       const error = payload.error || "Download error";
       if (id) {
         setTasks((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, status: "error", error } : t))
+          prev.map((t) => (t.id === id ? { ...t, status: "error", error, errorMessage: error } : t))
         );
       }
     });
