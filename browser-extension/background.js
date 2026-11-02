@@ -22,6 +22,7 @@ const INTERCEPT_EXTENSIONS = new Set([
 
 // Keep track of downloads we are actively intercepting to avoid loops
 const interceptedDownloadIds = new Set();
+const SERVICE_WORKER_START_TIME = Date.now();
 
 // Passive media stream sniffer cache: tabId -> Map(streamUrl -> streamInfo)
 const tabMediaStreams = new Map();
@@ -234,6 +235,27 @@ chrome.runtime.onInstalled.addListener(() => {
 // Intercept standard HTTP/HTTPS file downloads (IDM style)
 async function handleDownloadInterception(downloadItem, suggest) {
   try {
+    if (!downloadItem) return false;
+
+    // 1. Prevent startup notification/interception storms:
+    // If browser just launched or restored tabs, ignore historical items
+    if (Date.now() - SERVICE_WORKER_START_TIME < 4000) {
+      return false;
+    }
+
+    // 2. Ignore non-active downloads (completed, interrupted, paused from previous sessions)
+    if (downloadItem.state && downloadItem.state !== "in_progress") {
+      return false;
+    }
+
+    // 3. Ignore stale downloads whose start time was before this session or > 12 seconds ago
+    if (downloadItem.startTime) {
+      const ageMs = Date.now() - new Date(downloadItem.startTime).getTime();
+      if (ageMs > 12000) {
+        return false;
+      }
+    }
+
     const rawUrl = downloadItem.finalUrl || downloadItem.url;
     if (!rawUrl || !rawUrl.startsWith("http")) return false;
 
@@ -257,7 +279,7 @@ async function handleDownloadInterception(downloadItem, suggest) {
       rawUrl.toLowerCase().includes(".torrent");
 
     if (INTERCEPT_EXTENSIONS.has(ext) || isTorrent) {
-      const storage = await chrome.storage.local.get(["interceptDownloads"]);
+      const storage = await chrome.storage.local.get(["interceptDownloads", "showNotifications"]);
       if (storage.interceptDownloads === false) {
         return false; // User disabled interception in popup/settings
       }
@@ -272,16 +294,18 @@ async function handleDownloadInterception(downloadItem, suggest) {
         });
       } catch (e) {}
 
-      // Show desktop notification
-      chrome.notifications.create({
-        type: "basic",
-        iconUrl: "icons/icon128.png",
-        title: "Goat Download Manager 🐐",
-        message: isTorrent
-          ? `Intercepted BitTorrent download:\n${downloadItem.filename || "Torrent file"}`
-          : `Intercepted high-speed download:\n${downloadItem.filename || ext.toUpperCase() + " file"}`,
-        priority: 2,
-      });
+      // Only show desktop notification if user explicitly enabled it (default: silent like IDM)
+      if (storage.showNotifications === true) {
+        chrome.notifications.create({
+          type: "basic",
+          iconUrl: "icons/icon128.png",
+          title: "Goat Download Manager 🐐",
+          message: isTorrent
+            ? `Intercepted BitTorrent download:\n${downloadItem.filename || "Torrent file"}`
+            : `Intercepted high-speed download:\n${downloadItem.filename || ext.toUpperCase() + " file"}`,
+          priority: 1,
+        });
+      }
 
       // Forward to GDM Desktop Engine
       const cleanFilename = downloadItem.filename ? downloadItem.filename.replace(/^.*[\\\/]/, "") : "";
