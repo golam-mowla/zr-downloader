@@ -125,7 +125,7 @@ fun DownloadItemCard(
             }
 
             LinearProgressIndicator(
-                progress = { progressVal },
+                progress = progressVal,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp)

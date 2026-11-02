@@ -22,7 +22,7 @@ import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Zap
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -191,7 +191,7 @@ fun DownloadDetailsDialog(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Transfer rate:", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(imageVector = Icons.Default.Zap, contentDescription = null, tint = StatusWarning, modifier = Modifier.size(14.dp))
+                                Icon(imageVector = Icons.Default.Bolt, contentDescription = null, tint = StatusWarning, modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = if (item.isDownloading) item.speedFormatted else "--",
@@ -235,7 +235,7 @@ fun DownloadDetailsDialog(
                 Spacer(modifier = Modifier.height(6.dp))
 
                 LinearProgressIndicator(
-                    progress = { pct },
+                    progress = pct,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(8.dp)

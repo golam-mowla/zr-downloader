@@ -9,6 +9,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -164,8 +165,7 @@ class DownloadEngine @Inject constructor(
         var lastTime = System.currentTimeMillis()
 
         // Ticker job for real-time speed & ETA calculation
-        val tickerScope = this
-        val tickerJob = kotlinx.coroutines.launch {
+        val tickerJob = launch {
             while (isActive && !isCancelled.get()) {
                 delay(800)
                 val now = System.currentTimeMillis()
