@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 import {
   Download,
   Plus,
@@ -448,6 +449,65 @@ export const App: React.FC = () => {
     const interval = setInterval(checkBridge, 4000);
     return () => clearInterval(interval);
   }, []);
+
+  // Windows Taskbar Dynamic Progress Bar Sync
+  useEffect(() => {
+    try {
+      const win = getCurrentWindow();
+      const activeDownloading = tasks.filter(
+        (t) => t.status === "downloading" || t.status === "assembling"
+      );
+      const activePaused = tasks.filter((t) => t.status === "paused");
+      const activeErrors = tasks.filter((t) => t.status === "error");
+
+      if (activeDownloading.length > 0) {
+        let totalBytes = 0;
+        let downloadedBytes = 0;
+        let knownBytesCount = 0;
+        let totalPercent = 0;
+
+        for (const t of activeDownloading) {
+          const total = t.total_bytes || t.totalBytes || 0;
+          const down = t.downloaded_bytes || t.downloadedBytes || 0;
+          const pct = typeof t.percent === "number" ? t.percent : parseFloat(String(t.percent || 0)) || 0;
+          if (total > 0) {
+            totalBytes += total;
+            downloadedBytes += down;
+            knownBytesCount++;
+          }
+          totalPercent += pct;
+        }
+
+        let overallPercent = 0;
+        if (knownBytesCount > 0 && totalBytes > 0) {
+          overallPercent = Math.min(100, Math.max(0, (downloadedBytes / totalBytes) * 100));
+        } else {
+          overallPercent = Math.min(100, Math.max(0, totalPercent / activeDownloading.length));
+        }
+
+        win.setProgressBar({
+          status: ProgressBarStatus.Normal,
+          progress: Math.round(overallPercent),
+        }).catch(() => {});
+      } else if (activePaused.length > 0 && activeDownloading.length === 0) {
+        win.setProgressBar({
+          status: ProgressBarStatus.Paused,
+          progress: 50,
+        }).catch(() => {});
+      } else if (activeErrors.length > 0 && activeDownloading.length === 0) {
+        win.setProgressBar({
+          status: ProgressBarStatus.Error,
+          progress: 100,
+        }).catch(() => {});
+      } else {
+        win.setProgressBar({
+          status: ProgressBarStatus.None,
+        }).catch(() => {});
+      }
+    } catch {
+      // Non-tauri context fallback
+    }
+  }, [tasks]);
 
   // Helper to check if task is a yt-dlp media extraction task
   const isMediaTask = (task?: DownloadTask, id?: string) => {

@@ -68,7 +68,7 @@ fun AddDownloadDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🐐", fontSize = 20.sp)
+                        Text(text = "🚀", fontSize = 20.sp)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Add New Download",

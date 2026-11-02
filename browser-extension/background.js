@@ -226,7 +226,7 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "download-with-gdm",
-      title: "Download with Goat (GDM) 🐐",
+      title: "Download with ZR Downloader 🚀",
       contexts: ["all"],
     });
   });

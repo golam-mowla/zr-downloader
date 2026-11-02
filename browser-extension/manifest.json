@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Goat Download Manager (GDM) Assistant",
+  "name": "ZR Downloader Assistant",
   "version": "3.5.0",
-  "description": "High-speed 16-segment HTTP download accelerator and intelligent media stream grabber for Goat Download Manager (GDM).",
+  "description": "High-speed 16-segment HTTP download accelerator and intelligent media stream grabber for ZR Downloader.",
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -36,7 +36,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Goat Download Manager (GDM)",
+    "default_title": "ZR Downloader",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",

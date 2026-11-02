@@ -85,7 +85,7 @@ fun DownloadDetailsDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🐐", fontSize = 20.sp)
+                        Text(text = "🚀", fontSize = 20.sp)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (item.isCompleted) "Download Complete" else "${String.format("%.1f", item.percent)}% of File",

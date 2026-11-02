@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Goat Download Manager</string>
-    <string name="title_activity_main">GDM</string>
-    <string name="package_name">com.golammowla.gmdownloader</string>
-    <string name="custom_url_scheme">com.golammowla.gmdownloader</string>
+    <string name="app_name">ZR Downloader</string>
+    <string name="title_activity_main">ZR Downloader</string>
+    <string name="package_name">com.golammowla.zrdownloader</string>
+    <string name="custom_url_scheme">com.golammowla.zrdownloader</string>
 </resources>

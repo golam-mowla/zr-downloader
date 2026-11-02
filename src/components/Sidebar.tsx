@@ -79,11 +79,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex flex-col">
             <div className="flex items-center space-x-1.5">
               <span className="font-bold text-[15px] tracking-tight text-gdm-primary">
-                GDM
+                ZR Downloader
               </span>
             </div>
             <span className="text-[12px] font-medium text-gdm-secondary">
-              Goat Download Manager
+              High-Speed Download Accelerator
             </span>
           </div>
         </div>

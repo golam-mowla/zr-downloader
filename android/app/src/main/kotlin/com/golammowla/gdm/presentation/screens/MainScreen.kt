@@ -66,16 +66,16 @@ fun MainScreen(
             TopAppBar(
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🐐", fontSize = 24.sp)
+                        Text(text = "🚀", fontSize = 24.sp)
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
-                                text = "GDM",
+                                text = "ZR Downloader",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Goat Download Manager",
+                                text = "High-Speed Download Accelerator",
                                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

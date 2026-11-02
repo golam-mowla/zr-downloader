@@ -10,6 +10,7 @@ export interface ChunkProgress {
 export type TaskStatus =
   | "queued"
   | "downloading"
+  | "assembling"
   | "seeding"
   | "paused"
   | "interrupted"
