@@ -391,7 +391,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-gdm bg-gdm-tableHead transition-colors">
           <div className="flex items-center space-x-2.5">
             <div className="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center bg-transparent shrink-0">
-              <img src="/icon.png" alt="Goat" className="w-full h-full object-contain" />
+              <img src="/icon.png" alt="ZR Downloader" className="w-full h-full object-contain" />
             </div>
             <div>
               <h2 className="font-semibold text-[14px] text-gdm-primary">

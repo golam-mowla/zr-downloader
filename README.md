@@ -1,7 +1,7 @@
 # ZR Downloader
 
 <p align="center">
-  <img src="public/icon.png" width="120" height="120" alt="ZR Downloader Logo" style="border-radius: 24px; box-shadow: 0 0 30px rgba(34, 197, 94, 0.4);">
+  <img src="public/icon.png" width="120" height="120" alt="ZR Downloader Logo" style="border-radius: 24px; box-shadow: 0 0 30px rgba(212, 2, 3, 0.5);">
   <br><br>
   <strong>Ultra-Fast Multi-Threaded Download Accelerator & Media Extractor for Windows and Android</strong>
   <br>
@@ -65,7 +65,7 @@ Seamless 1-click download interception for Chrome, Brave, and Edge. Automaticall
 
 ---
 
-## 📦 Downloads (v1.2.3)
+## 📦 Downloads (v1.2.5)
 
 Grab the latest pre-compiled installers directly from [GitHub Releases](https://github.com/golam-mowla/zr-downloader/releases):
 

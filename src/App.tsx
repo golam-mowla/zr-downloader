@@ -1131,20 +1131,20 @@ export const App: React.FC = () => {
           {filteredTasks.length === 0 ? (
             /* Empty State */
             <div className="h-[65vh] flex flex-col items-center justify-center text-center p-8 space-y-4">
-              <div className="w-24 h-24 rounded-full overflow-hidden flex items-center justify-center shadow-lg bg-transparent">
+              <div className="w-20 h-20 rounded-2xl overflow-hidden flex items-center justify-center shadow-lg border border-white/20 bg-[#D40203]">
                 <img
                   src="/icon.png"
-                  alt="Goat"
-                  className="w-full h-full object-contain"
+                  alt="ZR Downloader"
+                  className="w-full h-full object-cover"
                 />
               </div>
 
               <div className="max-w-md space-y-2">
                 <h2 className="text-xl font-bold text-gdm-primary">
-                  Goat Download Manager (GDM)
+                  ZR Downloader
                 </h2>
                 <p className="text-[13px] leading-relaxed text-gdm-secondary">
-                  High-speed 16-segment HTTP download acceleration & all-in-one social media stream extractor.
+                  Ultra-fast multi-threaded download acceleration, media stream grabber and BitTorrent client.
                   Paste any download link above or use the browser extension to intercept downloads.
                 </p>
                 <div className="pt-2">
@@ -1154,7 +1154,7 @@ export const App: React.FC = () => {
                       setModalInitialFilename("");
                       setIsAddModalOpen(true);
                     }}
-                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[13px] shadow-xs transition-colors inline-flex items-center space-x-2"
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-b from-[#3b9bff] to-[#0a6cf0] hover:brightness-105 text-white font-semibold text-[13px] shadow-[0_4px_14px_rgba(10,108,240,0.4)] transition-all inline-flex items-center space-x-2"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Add New Download</span>

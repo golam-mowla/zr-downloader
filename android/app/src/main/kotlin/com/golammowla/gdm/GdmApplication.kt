@@ -21,6 +21,6 @@ class GdmApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         Timber.plant(Timber.DebugTree())
-        Timber.i("Goat Download Manager (GDM) Native Android Initialized")
+        Timber.i("ZR Downloader Native Android Initialized")
     }
 }

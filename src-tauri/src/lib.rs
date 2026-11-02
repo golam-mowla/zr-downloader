@@ -278,7 +278,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     }
 
                     if req_str.contains("/ping") {
-                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"Goat Download Manager\",\"version\":\"1.0.0\"}\r\n";
+                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.5\"}\r\n";
                         let _ = stream.write_all(resp.as_bytes()).await;
                         return;
                     }
@@ -338,7 +338,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                                 let _ = win.set_focus();
                             }
                         }
-                        let body = "{\"status\":\"ok\",\"received\":true,\"app\":\"GDM\"}";
+                        let body = "{\"status\":\"ok\",\"received\":true,\"app\":\"ZR Downloader\"}";
                         let resp = format!(
                             "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                             body.len(),
@@ -366,9 +366,9 @@ fn register_windows_protocols() {
         let exe_str = exe_path.to_string_lossy();
         let cmd = format!("\"{}\" \"%1\"", exe_str);
 
-        // Register gdm:// protocol
+        // Register gdm:// and zr:// protocols
         let _ = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Classes\\gdm", "/ve", "/d", "URL:Goat Download Manager Protocol", "/f"])
+            .args(["add", "HKCU\\Software\\Classes\\gdm", "/ve", "/d", "URL:ZR Downloader Protocol", "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .status();
         let _ = Command::new("reg")
@@ -377,6 +377,19 @@ fn register_windows_protocols() {
             .status();
         let _ = Command::new("reg")
             .args(["add", "HKCU\\Software\\Classes\\gdm\\shell\\open\\command", "/ve", "/d", &cmd, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+
+        let _ = Command::new("reg")
+            .args(["add", "HKCU\\Software\\Classes\\zr", "/ve", "/d", "URL:ZR Downloader Protocol", "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        let _ = Command::new("reg")
+            .args(["add", "HKCU\\Software\\Classes\\zr", "/v", "URL Protocol", "/d", "", "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        let _ = Command::new("reg")
+            .args(["add", "HKCU\\Software\\Classes\\zr\\shell\\open\\command", "/ve", "/d", &cmd, "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .status();
 
@@ -537,13 +550,13 @@ pub fn run() {
 
             // Setup System Tray
             if let (Ok(show_i), Ok(quit_i)) = (
-                MenuItem::with_id(app, "show", "Open GDM", true, None::<&str>),
-                MenuItem::with_id(app, "quit", "Exit GDM", true, None::<&str>),
+                MenuItem::with_id(app, "show", "Open ZR Downloader", true, None::<&str>),
+                MenuItem::with_id(app, "quit", "Exit ZR Downloader", true, None::<&str>),
             ) {
                 if let Ok(tray_menu) = Menu::with_items(app, &[&show_i, &quit_i]) {
                     if let Some(icon) = app.default_window_icon() {
                         let _ = TrayIconBuilder::new()
-                            .tooltip("Goat Download Manager (GDM)")
+                            .tooltip("ZR Downloader")
                             .icon(icon.clone())
                             .menu(&tray_menu)
                             .show_menu_on_left_click(false)
@@ -621,5 +634,5 @@ pub fn run() {
             torrent::get_torrent_pieces
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Goat Download Manager");
+        .expect("error while running ZR Downloader");
 }

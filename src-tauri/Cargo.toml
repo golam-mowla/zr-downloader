@@ -1,6 +1,6 @@
 [package]
 name = "gdm"
-version = "1.2.4"
+version = "1.2.5"
 description = "ZR Downloader - High-performance multithreaded HTTP, media and torrent downloader"
 authors = ["Golam Mowla"]
 edition = "2021"

@@ -1,6 +1,10 @@
 package com.golammowla.gdm.presentation.screens
 
+import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,38 +23,49 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.golammowla.gdm.R
 import com.golammowla.gdm.presentation.components.AddDownloadDialog
 import com.golammowla.gdm.presentation.components.CategoryFilterRow
 import com.golammowla.gdm.presentation.components.DownloadDetailsDialog
 import com.golammowla.gdm.presentation.components.DownloadItemCard
+import com.golammowla.gdm.presentation.components.StatusFilterChipsRow
+import com.golammowla.gdm.presentation.theme.GlassAccentGradientEnd
+import com.golammowla.gdm.presentation.theme.GlassAccentGradientStart
+import com.golammowla.gdm.presentation.theme.GlassDarkCard
+import com.golammowla.gdm.presentation.theme.GlassDarkStroke
+import com.golammowla.gdm.presentation.theme.GlassLightCard
+import com.golammowla.gdm.presentation.theme.GlassLightStroke
 import com.golammowla.gdm.presentation.theme.PrimaryBlue
-import com.golammowla.gdm.presentation.theme.StatusWarning
 import com.golammowla.gdm.presentation.viewmodel.DownloadViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,158 +75,371 @@ fun MainScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val isDark = uiState.isDarkTheme
+    val context = LocalContext.current
+    var isSearchVisible by remember { mutableStateOf(false) }
+
+    // Glass Background Colors (from GDM Android - Glass App Preview)
+    val backgroundBrush = if (isDark) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF1B1B2B),
+                Color(0xFF241A5E),
+                Color(0xFF1F1838),
+                Color(0xFF0F2A36)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFFF2F4FA),
+                Color(0xFFE4E7F5),
+                Color(0xFFEAF5F8)
+            )
+        )
+    }
+
+    val cardBg = if (isDark) GlassDarkCard else GlassLightCard
+    val strokeColor = if (isDark) GlassDarkStroke else GlassLightStroke
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🚀", fontSize = 24.sp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(
-                                text = "ZR Downloader",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "High-Speed Download Accelerator",
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                actions = {
-                    // Live Speed & Active Downloads Gauge
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.padding(end = 4.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Bolt,
-                                contentDescription = null,
-                                tint = StatusWarning,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "${uiState.totalSpeedFormatted} | ${uiState.activeDownloadsCount} active",
-                                style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    // Theme Toggle
-                    IconButton(onClick = { viewModel.toggleDarkTheme(!uiState.isDarkTheme) }) {
-                        Icon(
-                            imageVector = if (uiState.isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                            contentDescription = "Toggle Theme"
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
-            )
-        },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.openAddDialog() },
-                containerColor = PrimaryBlue,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                shape = CircleShape
-            ) {
-                Icon(imageVector = Icons.Default.Add, contentDescription = "Add Download")
-            }
-        },
-        modifier = modifier
+        containerColor = Color.Transparent,
+        modifier = modifier.background(backgroundBrush)
     ) { paddingValues ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Search Bar
-            OutlinedTextField(
-                value = uiState.searchQuery,
-                onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("Search downloads...") },
-                leadingIcon = {
-                    Icon(imageVector = Icons.Default.Search, contentDescription = "Search", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-
-            // Category Filter Chips
-            CategoryFilterRow(
-                selectedCategory = uiState.selectedCategory,
-                onSelectCategory = { viewModel.setCategory(it) }
-            )
-
-            // Download List or Empty State
-            if (uiState.downloads.isEmpty()) {
-                Box(
+                    .fillMaxSize()
+                    .padding(bottom = 76.dp) // Room for floating dock
+            ) {
+                // Top Header Row (.top: Logo + ZR Downloader + Theme Button + Search Button)
+                Row(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier.size(64.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.DownloadDone,
-                                    contentDescription = null,
-                                    tint = PrimaryBlue,
-                                    modifier = Modifier.size(32.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "No Downloads Found",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                    // Red Goat Logo Tile (.logo: 36x36, radius 12dp)
+                    val logoShape = RoundedCornerShape(12.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(logoShape)
+                            .background(Color(0xFFD40203))
+                            .border(1.dp, strokeColor, logoShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.mipmap.ic_launcher),
+                            contentDescription = "ZR Downloader Logo",
+                            modifier = Modifier.size(38.dp)
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Tap the + button below or share any link from your browser to start downloading.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
+                            text = "ZR Downloader",
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            letterSpacing = (-0.2).sp
+                        )
+                        Text(
+                            text = "High-Speed Accelerator",
+                            fontSize = 11.5.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // Circular Glass Theme Toggle (.ib)
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(cardBg)
+                            .border(1.dp, strokeColor, CircleShape)
+                            .clickable { viewModel.toggleDarkTheme(!uiState.isDarkTheme) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (uiState.isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
+                            contentDescription = "Toggle Appearance",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // Circular Glass Search Button (.ib)
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(cardBg)
+                            .border(1.dp, strokeColor, CircleShape)
+                            .clickable { isSearchVisible = !isSearchVisible },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isSearchVisible) Icons.Default.Close else Icons.Default.Search,
+                            contentDescription = "Search Downloads",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+
+                // Glass Summary Card (.sum: Speed & Active)
+                val sumCardShape = RoundedCornerShape(22.dp)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .clip(sumCardShape)
+                        .background(cardBg)
+                        .border(1.dp, strokeColor, sumCardShape)
+                        .padding(horizontal = 18.dp, vertical = 12.dp)
                 ) {
-                    items(uiState.downloads, key = { it.id }) { item ->
-                        DownloadItemCard(
-                            item = item,
-                            onClick = { viewModel.selectItem(item) },
-                            onPause = { viewModel.pauseDownload(item.id) },
-                            onResume = { viewModel.resumeDownload(item.id) },
-                            onDelete = { viewModel.deleteDownload(item.id, deleteFile = false) }
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Speed",
+                                fontSize = 11.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = uiState.totalSpeedFormatted,
+                                fontSize = 23.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = "Active",
+                                fontSize = 11.5.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "${uiState.activeDownloadsCount}",
+                                fontSize = 23.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
+                }
+
+                // Search Input (When visible)
+                if (isSearchVisible) {
+                    OutlinedTextField(
+                        value = uiState.searchQuery,
+                        onValueChange = { viewModel.setSearchQuery(it) },
+                        placeholder = { Text("Search downloads...") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Search,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        trailingIcon = {
+                            if (uiState.searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Clear",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = PrimaryBlue,
+                            unfocusedBorderColor = strokeColor,
+                            focusedContainerColor = cardBg,
+                            unfocusedContainerColor = cardBg
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+
+                // Status Filter Chips (.chips: All, Downloading, Finished, Paused, Error)
+                StatusFilterChipsRow(
+                    selectedStatus = uiState.selectedStatus,
+                    onSelectStatus = { viewModel.setStatusFilter(it) },
+                    isDark = isDark
+                )
+
+                // Category Filter Row
+                CategoryFilterRow(
+                    selectedCategory = uiState.selectedCategory,
+                    onSelectCategory = { viewModel.setCategory(it) },
+                    isDark = isDark
+                )
+
+                // Downloads List or Empty State (.list / .empty)
+                if (uiState.downloads.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "Nothing here",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Tap Add URL to start a download.",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(uiState.downloads, key = { it.id }) { item ->
+                            DownloadItemCard(
+                                item = item,
+                                onClick = { viewModel.selectItem(item) },
+                                onPause = { viewModel.pauseDownload(item.id) },
+                                onResume = { viewModel.resumeDownload(item.id) },
+                                onDelete = { viewModel.deleteDownload(item.id, deleteFile = false) },
+                                isDark = isDark
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Floating Action Button (.fab: ＋ Add URL pill with blue gradient)
+            val fabShape = RoundedCornerShape(18.dp)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 84.dp)
+                    .shadow(elevation = 12.dp, shape = fabShape, ambientColor = PrimaryBlue, spotColor = PrimaryBlue)
+                    .clip(fabShape)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(GlassAccentGradientStart, GlassAccentGradientEnd)
+                        )
+                    )
+                    .clickable { viewModel.openAddDialog() }
+                    .padding(horizontal = 18.dp, vertical = 13.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add Download",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Add URL",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            }
+
+            // Floating Glass Bottom Navigation Dock (.nav)
+            val dockShape = RoundedCornerShape(26.dp)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, bottom = 10.dp)
+                    .height(64.dp)
+                    .clip(dockShape)
+                    .background(cardBg)
+                    .border(1.dp, strokeColor, dockShape)
+                    .padding(horizontal = 6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Downloads Tab
+                    GlassDockTab(
+                        icon = "⬇",
+                        label = "Downloads",
+                        isSelected = uiState.currentTab == "downloads",
+                        onClick = { viewModel.setTab("downloads") }
+                    )
+
+                    // Grabber Tab
+                    GlassDockTab(
+                        icon = "✦",
+                        label = "Grabber",
+                        isSelected = uiState.currentTab == "grabber",
+                        onClick = {
+                            viewModel.setTab("grabber")
+                            viewModel.openAddDialog()
+                            Toast.makeText(context, "Media Grabber: Paste video or audio URL", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+
+                    // Browser Tab
+                    GlassDockTab(
+                        icon = "🌐",
+                        label = "Browser",
+                        isSelected = uiState.currentTab == "browser",
+                        onClick = {
+                            viewModel.setTab("browser")
+                            Toast.makeText(context, "Browser Bridge active on port 9666", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+
+                    // Settings Tab
+                    GlassDockTab(
+                        icon = "⚙",
+                        label = "Settings",
+                        isSelected = uiState.currentTab == "settings",
+                        onClick = {
+                            viewModel.setTab("settings")
+                            viewModel.toggleDarkTheme(!uiState.isDarkTheme)
+                            Toast.makeText(context, "Theme toggled", Toast.LENGTH_SHORT).show()
+                        }
+                    )
                 }
             }
         }
@@ -237,5 +465,44 @@ fun MainScreen(
                 onDelete = { viewModel.deleteDownload(selected.id, deleteFile = false) }
             )
         }
+    }
+}
+
+@Composable
+private fun GlassDockTab(
+    icon: String,
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    val pillShape = RoundedCornerShape(15.dp)
+
+    Column(
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(width = 54.dp, height = 28.dp)
+                .clip(pillShape)
+                .background(if (isSelected) PrimaryBlue else Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = icon,
+                fontSize = 16.sp,
+                color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

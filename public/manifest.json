@@ -1,11 +1,11 @@
 {
-  "name": "Goat Download Manager",
-  "short_name": "GDM",
+  "name": "ZR Downloader",
+  "short_name": "ZR Downloader",
   "description": "High-Performance 16-Segment HTTP & Media Downloader",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#090d16",
-  "theme_color": "#8b5cf6",
+  "background_color": "#1b1b2b",
+  "theme_color": "#3b6cff",
   "orientation": "portrait-primary",
   "icons": [
     {

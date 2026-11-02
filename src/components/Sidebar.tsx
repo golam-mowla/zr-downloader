@@ -65,14 +65,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="w-64 h-screen flex flex-col justify-between border-r border-gdm bg-gdm-surface text-gdm-primary p-4 z-20 select-none overflow-y-auto transition-colors">
       {/* Top Section */}
-      <div className="space-y-5">
-        {/* Goat Branding */}
-        <div className="flex items-center space-x-3 px-1 pt-1">
-          <div className="w-10 h-10 rounded-full overflow-hidden flex-shrink-0 bg-transparent">
+      <div className="space-y-4">
+        {/* Window Lights (Glass aesthetic) */}
+        <div className="flex items-center space-x-2 px-1 pt-1 pb-1">
+          <span className="w-3 h-3 rounded-full bg-[#ff5f57] shadow-xs inline-block opacity-90" />
+          <span className="w-3 h-3 rounded-full bg-[#febc2e] shadow-xs inline-block opacity-90" />
+          <span className="w-3 h-3 rounded-full bg-[#28c840] shadow-xs inline-block opacity-90" />
+        </div>
+
+        {/* ZR Downloader Branding */}
+        <div className="flex items-center space-x-3 px-1 py-1">
+          <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 shadow-md">
             <img
               src="/icon.png"
-              alt="Goat Logo"
-              className="w-full h-full object-contain"
+              alt="ZR Downloader Logo"
+              className="w-full h-full object-cover"
             />
           </div>
 
@@ -82,22 +89,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ZR Downloader
               </span>
             </div>
-            <span className="text-[12px] font-medium text-gdm-secondary">
-              High-Speed Download Accelerator
+            <span className="text-[11.5px] font-medium text-gdm-secondary">
+              Download Accelerator
             </span>
           </div>
         </div>
 
-        {/* Media Grabber Button */}
+        {/* Media Grabber Button (Mac Glass Gradient) */}
         <button
           onClick={onOpenMediaModal}
-          className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg bg-[#2563EB] hover:bg-blue-600 transition-colors text-[13px] font-semibold text-white shadow-xs"
+          className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-gradient-to-b from-[#3b9bff] to-[#0a6cf0] hover:brightness-105 transition-all text-[13px] font-semibold text-white shadow-[0_4px_14px_rgba(10,108,240,0.4)] border-t border-white/30"
         >
           <div className="flex items-center space-x-2">
             <Sparkles className="w-4 h-4 text-yellow-300" />
             <span>Media Grabber</span>
           </div>
-          <span className="text-[12px] bg-black/25 text-white px-2 py-0.5 rounded font-mono font-medium">
+          <span className="text-[10.5px] bg-white/20 text-white px-2 py-0.5 rounded-md font-mono font-medium backdrop-blur-xs">
             yt-dlp
           </span>
         </button>

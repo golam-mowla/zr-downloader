@@ -1,10 +1,15 @@
 package com.golammowla.gdm.presentation.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -21,18 +26,15 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Widgets
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -42,6 +44,12 @@ import androidx.compose.ui.unit.sp
 import com.golammowla.gdm.domain.model.DownloadCategory
 import com.golammowla.gdm.domain.model.DownloadItem
 import com.golammowla.gdm.domain.model.DownloadStatus
+import com.golammowla.gdm.presentation.theme.GlassDarkCard
+import com.golammowla.gdm.presentation.theme.GlassDarkStroke
+import com.golammowla.gdm.presentation.theme.GlassLightCard
+import com.golammowla.gdm.presentation.theme.GlassLightStroke
+import com.golammowla.gdm.presentation.theme.GlassProgressGradientEnd
+import com.golammowla.gdm.presentation.theme.GlassProgressGradientStart
 import com.golammowla.gdm.presentation.theme.PrimaryBlue
 import com.golammowla.gdm.presentation.theme.StatusError
 import com.golammowla.gdm.presentation.theme.StatusQueued
@@ -55,40 +63,40 @@ fun DownloadItemCard(
     onPause: () -> Unit,
     onResume: () -> Unit,
     onDelete: () -> Unit,
+    isDark: Boolean = isSystemInDarkTheme(),
     modifier: Modifier = Modifier
 ) {
-    Card(
+    val cardBg = if (isDark) GlassDarkCard else GlassLightCard
+    val strokeColor = if (isDark) GlassDarkStroke else GlassLightStroke
+    val cardShape = RoundedCornerShape(20.dp)
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            .clip(cardShape)
+            .background(cardBg)
+            .border(1.dp, strokeColor, cardShape)
+            .clickable(onClick = onClick)
+            .padding(14.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp)
-        ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Category Icon
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.size(40.dp)
+                // Category Icon Tile (.fi: 44x44, radius 14dp)
+                val tileShape = RoundedCornerShape(14.dp)
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(tileShape)
+                        .background(if (isDark) Color(0x33FFFFFF) else Color(0x4DFFFFFF))
+                        .border(1.dp, strokeColor, tileShape),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = getCategoryIcon(item.category),
-                        contentDescription = item.category.name,
-                        tint = PrimaryBlue,
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .size(24.dp)
+                    Text(
+                        text = getCategoryEmoji(item.category),
+                        fontSize = 20.sp
                     )
                 }
 
@@ -97,25 +105,29 @@ fun DownloadItemCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = item.filename,
-                        style = MaterialTheme.typography.titleMedium,
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = buildSizeProgressText(item),
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                // Status Badge
-                StatusBadge(status = item.status)
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Status Badge Pill
+                GlassStatusBadge(status = item.status)
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Main Progress Bar
+            // Main Progress Track (.trk: height 6dp, radius 9dp)
             val progressVal = if (item.totalBytes > 0) {
                 (item.downloadedBytes.toFloat() / item.totalBytes.toFloat()).coerceIn(0f, 1f)
             } else if (item.isCompleted) {
@@ -124,20 +136,29 @@ fun DownloadItemCard(
                 (item.percent / 100f).coerceIn(0f, 1f)
             }
 
-            LinearProgressIndicator(
-                progress = progressVal,
+            val trackShape = RoundedCornerShape(9.dp)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp)),
-                color = when (item.status) {
-                    DownloadStatus.COMPLETED -> StatusSuccess
-                    DownloadStatus.ERROR -> StatusError
-                    DownloadStatus.PAUSED -> StatusWarning
-                    else -> PrimaryBlue
-                },
-                trackColor = MaterialTheme.colorScheme.surfaceVariant
-            )
+                    .clip(trackShape)
+                    .background(Color(0x33787896))
+            ) {
+                val fillBrush = when (item.status) {
+                    DownloadStatus.COMPLETED -> Brush.horizontalGradient(listOf(StatusSuccess, StatusSuccess))
+                    DownloadStatus.PAUSED -> Brush.horizontalGradient(listOf(StatusWarning, StatusWarning))
+                    DownloadStatus.ERROR -> Brush.horizontalGradient(listOf(StatusError, StatusError))
+                    else -> Brush.horizontalGradient(listOf(GlassProgressGradientStart, GlassProgressGradientEnd))
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction = progressVal)
+                        .fillMaxHeight()
+                        .clip(trackShape)
+                        .background(fillBrush)
+                )
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -149,7 +170,7 @@ fun DownloadItemCard(
                 percent = item.percent
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // Footer Row: Speed / ETA + Action Buttons
             Row(
@@ -167,7 +188,7 @@ fun DownloadItemCard(
                     } else {
                         item.status.name
                     },
-                    style = MaterialTheme.typography.bodySmall,
+                    fontSize = 11.5.sp,
                     color = if (item.isError) StatusError else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -219,45 +240,49 @@ fun DownloadItemCard(
 }
 
 @Composable
-fun StatusBadge(status: DownloadStatus) {
-    val (bgColor, textColor) = when (status) {
-        DownloadStatus.COMPLETED -> StatusSuccess.copy(alpha = 0.15f) to StatusSuccess
-        DownloadStatus.DOWNLOADING -> PrimaryBlue.copy(alpha = 0.15f) to PrimaryBlue
-        DownloadStatus.PAUSED -> StatusWarning.copy(alpha = 0.15f) to StatusWarning
-        DownloadStatus.ERROR -> StatusError.copy(alpha = 0.15f) to StatusError
-        DownloadStatus.QUEUED -> StatusQueued.copy(alpha = 0.15f) to StatusQueued
+fun GlassStatusBadge(status: DownloadStatus) {
+    val (bgColor, textColor, label) = when (status) {
+        DownloadStatus.COMPLETED -> Triple(StatusSuccess.copy(alpha = 0.18f), StatusSuccess, "Completed")
+        DownloadStatus.DOWNLOADING -> Triple(PrimaryBlue.copy(alpha = 0.18f), PrimaryBlue, "Downloading")
+        DownloadStatus.PAUSED -> Triple(StatusWarning.copy(alpha = 0.18f), StatusWarning, "Paused")
+        DownloadStatus.ERROR -> Triple(StatusError.copy(alpha = 0.18f), StatusError, "Error")
+        DownloadStatus.QUEUED -> Triple(StatusQueued.copy(alpha = 0.18f), StatusQueued, "Queued")
     }
 
-    Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = bgColor,
-        modifier = Modifier.padding(start = 8.dp)
+    val pillShape = RoundedCornerShape(999.dp)
+    Box(
+        modifier = Modifier
+            .clip(pillShape)
+            .background(bgColor)
+            .padding(horizontal = 9.dp, vertical = 3.dp),
+        contentAlignment = Alignment.Center
     ) {
         Text(
-            text = status.name,
-            style = MaterialTheme.typography.labelMedium.copy(fontSize = 10.sp),
-            fontWeight = FontWeight.Bold,
-            color = textColor,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+            text = label,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = textColor
         )
     }
 }
 
-private fun getCategoryIcon(cat: DownloadCategory): ImageVector {
+private fun getCategoryEmoji(cat: DownloadCategory): String {
     return when (cat) {
-        DownloadCategory.VIDEOS -> Icons.Default.Movie
-        DownloadCategory.AUDIO -> Icons.Default.MusicNote
-        DownloadCategory.COMPRESSED -> Icons.Default.FolderZip
-        DownloadCategory.PROGRAMS -> Icons.Default.Widgets
-        DownloadCategory.DOCUMENTS -> Icons.Default.Description
-        else -> Icons.Default.Description
+        DownloadCategory.VIDEOS -> "🎬"
+        DownloadCategory.AUDIO -> "🎵"
+        DownloadCategory.COMPRESSED -> "🗜️"
+        DownloadCategory.PROGRAMS -> "⚙️"
+        DownloadCategory.DOCUMENTS -> "📄"
+        DownloadCategory.TORRENTS -> "📡"
+        else -> "⬇️"
     }
 }
 
 private fun buildSizeProgressText(item: DownloadItem): String {
     val downStr = formatByteUnits(item.downloadedBytes)
     val totStr = if (item.totalBytes > 0) formatByteUnits(item.totalBytes) else "Unknown"
-    return "$downStr / $totStr (${String.format("%.1f", item.percent)}%)"
+    val spdStr = if (item.isDownloading && item.speedBps > 0) " · ${item.speedFormatted}" else ""
+    return "$downStr of $totStr$spdStr"
 }
 
 fun formatByteUnits(bytes: Long): String {

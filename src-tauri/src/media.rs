@@ -342,6 +342,8 @@ fn ensure_ffmpeg_available() -> Option<PathBuf> {
     {
         if let Ok(local) = env::var("LOCALAPPDATA") {
             let candidates = [
+                PathBuf::from(&local).join("ZR Downloader").join("bin").join("ffmpeg.exe"),
+                PathBuf::from(&local).join("ZR Downloader").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("Goat Download Manager").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("GM-Downloader").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("ffmpeg.exe"),
@@ -366,6 +368,10 @@ fn ensure_ytdlp_available() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(local) = env::var("LOCALAPPDATA") {
+            let p_zr = PathBuf::from(&local).join("ZR Downloader").join("bin").join("yt-dlp.exe");
+            if p_zr.exists() { return Some(p_zr); }
+            let p_zr_root = PathBuf::from(&local).join("ZR Downloader").join("yt-dlp.exe");
+            if p_zr_root.exists() { return Some(p_zr_root); }
             let p_gdm = PathBuf::from(&local).join("Goat Download Manager").join("bin").join("yt-dlp.exe");
             if p_gdm.exists() { return Some(p_gdm); }
             let p_gdm_root = PathBuf::from(&local).join("Goat Download Manager").join("yt-dlp.exe");

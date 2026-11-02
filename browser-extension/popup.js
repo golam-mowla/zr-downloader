@@ -1,4 +1,4 @@
-// Goat Download Manager (GDM) - Popup Script
+// ZR Downloader - Popup Script
 
 const statusPill = document.getElementById("status-pill");
 const statusDot = document.getElementById("status-dot");

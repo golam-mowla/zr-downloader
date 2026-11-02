@@ -1,4 +1,4 @@
-// Goat Download Manager (GDM) - IDM-Style Video & Media Overlay Grabber
+// ZR Downloader - Media Overlay Grabber
 // Seamless video detection across YouTube, Instagram, Facebook, Kick, Twitch, TikTok, Twitter, and ANY HTML5 video website.
 
 (() => {
@@ -73,7 +73,7 @@
     if (href.startsWith("magnet:")) {
       e.preventDefault();
       e.stopPropagation();
-      showToast("Goat Download Manager 🐐", "Adding magnet link to GDM Torrent engine...", "info");
+      showToast("ZR Downloader 🚀", "Adding magnet link to GDM Torrent engine...", "info");
       chrome.runtime.sendMessage({
         action: "SEND_TO_GDM",
         url: href,
@@ -85,7 +85,7 @@
     if (href.toLowerCase().endsWith(".torrent") || href.toLowerCase().includes(".torrent?")) {
       e.preventDefault();
       e.stopPropagation();
-      showToast("Goat Download Manager 🐐", "Adding .torrent file to GDM Torrent engine...", "info");
+      showToast("ZR Downloader 🚀", "Adding .torrent file to GDM Torrent engine...", "info");
       chrome.runtime.sendMessage({
         action: "SEND_TO_GDM",
         url: href,
@@ -608,7 +608,7 @@
       e.stopPropagation();
       hideDropdown();
       showToast(
-        "Goat Download Manager 🐐",
+        "ZR Downloader 🚀",
         `Starting Best Quality download in GDM...`,
         "success"
       );
@@ -660,7 +660,7 @@
           activeGrabberButton.style.display = "none";
         }
         showToast(
-          "Goat Download Manager 🐐",
+          "ZR Downloader 🚀",
           `Starting ${opt.quality} download in GDM...`,
           "success"
         );
@@ -736,7 +736,7 @@
         <span style="display:inline-flex;align-items:center;color:#64748b;cursor:grab;font-size:12px;padding:0 2px;user-select:none;" title="Drag to move" id="gdm-drag-handle">⠿</span>
         <span style="display:inline-block;color:#16a34a;font-size:12px;font-weight:900;text-shadow:0 1px 1px rgba(0,0,0,0.25);">▶</span>
         <span style="font-size:12px;font-weight:800;letter-spacing:0.2px;font-family:Arial,Tahoma,sans-serif;color:#dc2626;text-shadow:0 1px 0 #ffffff;white-space:nowrap;">Download this video</span>
-        <span style="font-size:11px;color:#475569;font-weight:bold;margin-left:4px;padding:0 4px;border-left:1px solid #94a3b8;cursor:pointer;" title="Goat Download Manager (GDM)" id="gdm-help-btn">?</span>
+        <span style="font-size:11px;color:#475569;font-weight:bold;margin-left:4px;padding:0 4px;border-left:1px solid #94a3b8;cursor:pointer;" title="ZR Downloader" id="gdm-help-btn">?</span>
         <span style="font-size:11px;color:#475569;font-weight:bold;padding:0 2px;cursor:pointer;" title="Hide overlay" id="gdm-close-btn">✕</span>
       </div>
     `;
@@ -813,7 +813,7 @@
         e.stopPropagation();
         e.preventDefault();
         showToast(
-          "Goat Download Manager 🐐",
+          "ZR Downloader 🚀",
           "GDM High-Speed HTTP & Media Extractor",
           "info"
         );

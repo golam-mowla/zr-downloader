@@ -187,8 +187,8 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                   <span>Browser Integration & Bridge</span>
                 </div>
                 <p className="text-gdm-secondary text-[12px] leading-relaxed">
-                  Goat Download Manager listens on <b>http://127.0.0.1:9666</b> and handles the custom Windows protocols <b>gdm://</b>.
-                  Standard browser downloads (.zip, .exe, .iso, .pdf, .mp4) are caught automatically when using the GDM extension.
+                  ZR Downloader listens on <b>http://127.0.0.1:9666</b> and handles the custom protocol <b>gdm://</b>.
+                  Standard browser downloads (.zip, .exe, .iso, .pdf, .mp4) are caught automatically when using the ZR Downloader extension.
                 </p>
               </div>
             </div>

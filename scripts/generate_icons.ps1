@@ -1,6 +1,13 @@
 Add-Type -AssemblyName System.Drawing
-$sourcePath = 'C:\Users\GM desktop\.gemini\antigravity\brain\ca7d5d30-435e-4eb6-9950-df68f728190b\.user_uploaded\media_1793629425692_2fe001e5.jpg'
+$sourcePath = 'C:\Users\GM desktop\.gemini\antigravity\brain\ca7d5d30-435e-4eb6-9950-df68f728190b\.user_uploaded\media_1793632007079_3c2704f0.jpg'
 $srcImg = [System.Drawing.Image]::FromFile($sourcePath)
+
+# Sample background color from corner
+$sampleBmp = New-Object System.Drawing.Bitmap($srcImg)
+$px = $sampleBmp.GetPixel(10, 10)
+$hexColor = '#{0:X2}{1:X2}{2:X2}' -f $px.R, $px.G, $px.B
+Write-Host "Corner background color: $hexColor"
+$sampleBmp.Dispose()
 
 function Resize-Image($src, $w, $h, $dest) {
     $bmp = New-Object System.Drawing.Bitmap($w, $h)

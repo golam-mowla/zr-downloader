@@ -3,63 +3,110 @@
 @tailwind utilities;
 
 :root {
-  /* LIGHT THEME (Default) */
-  --bg-app: #F8FAFC;
-  --bg-surface: #FFFFFF;
-  --bg-table-head: #F1F5F9;
-  --border-color: #E2E8F0;
+  /* LIGHT THEME */
+  --bg1: #6d5dfc;
+  --bg2: #ff7eb6;
+  --bg3: #35d0ba;
 
-  --text-primary: #0F172A;
-  --text-secondary: #475569;
-  --text-muted: #64748B;
+  --glass: rgba(255, 255, 255, 0.65);
+  --glass2: rgba(255, 255, 255, 0.45);
+  --stroke: rgba(255, 255, 255, 0.75);
+  --row: rgba(255, 255, 255, 0.62);
 
-  --color-accent: #2563EB;
+  --bg-app: #f2f4fa;
+  --bg-surface: rgba(255, 255, 255, 0.7);
+  --bg-table-head: rgba(255, 255, 255, 0.5);
+  --border-color: rgba(226, 232, 240, 0.85);
+
+  --text-primary: #14161f;
+  --text-secondary: #5d6377;
+  --text-muted: #8c93a7;
+
+  --color-accent: #0a7aff;
 
   --status-success-text: #166534;
-  --status-success-bg: #DCFCE7;
-  --status-warning-text: #92400E;
-  --status-warning-bg: #FEF3C7;
-  --status-danger-text: #991B1B;
-  --status-danger-bg: #FEE2E2;
-  --status-info-text: #1E40AF;
-  --status-info-bg: #DBEAFE;
+  --status-success-bg: rgba(31, 169, 113, 0.16);
+  --status-warning-text: #92400e;
+  --status-warning-bg: rgba(224, 138, 0, 0.16);
+  --status-danger-text: #991b1b;
+  --status-danger-bg: rgba(229, 72, 77, 0.16);
+  --status-info-text: #1e40af;
+  --status-info-bg: rgba(10, 122, 255, 0.16);
 
-  --transfer-rate: #92400E; /* amber-800 */
+  --transfer-rate: #d97706;
 }
 
 .dark {
-  /* DARK THEME */
-  --bg-app: #0B1120;
-  --bg-surface: #111827;
-  --bg-table-head: #1E293B;
-  --border-color: #334155;
+  /* DARK THEME (macOS Glass Redesign) */
+  --bg1: #241a5e;
+  --bg2: #6a1f58;
+  --bg3: #0f5a56;
 
-  --text-primary: #F1F5F9;
-  --text-secondary: #CBD5E1;
-  --text-muted: #94A3B8;
+  --glass: rgba(28, 28, 40, 0.62);
+  --glass2: rgba(36, 36, 52, 0.52);
+  --stroke: rgba(255, 255, 255, 0.14);
+  --row: rgba(255, 255, 255, 0.07);
 
-  --color-accent: #60A5FA;
+  --bg-app: #151522;
+  --bg-surface: rgba(28, 28, 40, 0.65);
+  --bg-table-head: rgba(40, 40, 60, 0.45);
+  --border-color: rgba(255, 255, 255, 0.12);
 
-  --status-success-text: #4ADE80;
-  --status-success-bg: rgba(74, 222, 128, 0.15);
-  --status-warning-text: #FBBF24;
-  --status-warning-bg: rgba(251, 191, 36, 0.15);
-  --status-danger-text: #F87171;
-  --status-danger-bg: rgba(248, 113, 113, 0.15);
-  --status-info-text: #60A5FA;
-  --status-info-bg: rgba(96, 165, 250, 0.15);
+  --text-primary: #f2f3f8;
+  --text-secondary: #9ba1b5;
+  --text-muted: #6e7488;
 
-  --transfer-rate: #FBBF24; /* amber-400 */
+  --color-accent: #4a9bff;
+
+  --status-success-text: #4ade80;
+  --status-success-bg: rgba(31, 169, 113, 0.22);
+  --status-warning-text: #fbbf24;
+  --status-warning-bg: rgba(224, 138, 0, 0.22);
+  --status-danger-text: #f87171;
+  --status-danger-bg: rgba(229, 72, 77, 0.22);
+  --status-info-text: #60a5fa;
+  --status-info-bg: rgba(74, 155, 255, 0.22);
+
+  --transfer-rate: #fbbf24;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background-color: var(--bg-app);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: radial-gradient(60% 60% at 15% 20%, var(--bg1), transparent 70%),
+              radial-gradient(55% 55% at 85% 25%, var(--bg2), transparent 70%),
+              radial-gradient(60% 60% at 50% 95%, var(--bg3), transparent 70%),
+              var(--bg-app);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.42857;
   user-select: none;
-  overflow-x: hidden;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Glassmorphism Surface Helpers */
+.glass-container {
+  background: var(--glass2);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid var(--stroke);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.glass-card {
+  background: var(--row);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+}
+
+.glass-pill {
+  background: var(--row);
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
 }
 
 /* Custom Scrollbar */
@@ -69,11 +116,11 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--bg-app);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
+  background: var(--stroke);
   border-radius: 9999px;
 }
 
@@ -81,17 +128,17 @@ body {
   background: var(--text-muted);
 }
 
-/* Universal Inputs respecting tokens */
+/* Universal Inputs */
 input[type="text"],
 input[type="password"],
 input[type="number"],
 input[type="url"],
 select,
 textarea {
-  background-color: var(--bg-surface);
+  background-color: var(--row);
   color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  font-size: 14px;
+  border: 1px solid var(--stroke);
+  font-size: 13.5px;
 }
 
 input::placeholder,
@@ -104,23 +151,19 @@ input:focus,
 select:focus,
 textarea:focus {
   border-color: var(--color-accent) !important;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25) !important;
+  box-shadow: 0 0 0 2px rgba(74, 155, 255, 0.3) !important;
   outline: none !important;
-}
-
-.dark input:focus,
-.dark select:focus,
-.dark textarea:focus {
-  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.3) !important;
 }
 
 /* Utility classes for theme tokens */
 .bg-gdm-app {
-  background-color: var(--bg-app);
+  background-color: transparent;
 }
 
 .bg-gdm-surface {
-  background-color: var(--bg-surface);
+  background-color: var(--glass);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
 }
 
 .bg-gdm-table-head {
@@ -128,7 +171,7 @@ textarea:focus {
 }
 
 .border-gdm {
-  border-color: var(--border-color);
+  border-color: var(--stroke);
 }
 
 .text-gdm-primary {
@@ -179,10 +222,33 @@ textarea:focus {
 
 .badge-status-queued {
   color: var(--text-secondary);
-  background-color: var(--bg-table-head);
+  background-color: var(--row);
 }
 
-/* Shimmer animation for active progress bars */
+/* Progress track */
+.progress-track {
+  height: 6px;
+  border-radius: 9px;
+  background: rgba(120, 120, 150, 0.25);
+  overflow: hidden;
+}
+
+.progress-fill-active {
+  background: linear-gradient(90deg, #3b9bff, #7a6bff);
+}
+
+.progress-fill-done {
+  background: #1fa971;
+}
+
+.progress-fill-paused {
+  background: #e08a00;
+}
+
+.progress-fill-error {
+  background: #e5484d;
+}
+
 @keyframes shimmer {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(100%); }

@@ -1,4 +1,4 @@
-// Goat Download Manager (GDM) - Background Service Worker (Manifest V3)
+// ZR Downloader - Background Service Worker (Manifest V3)
 // IDM-Style High-Speed Interception & Passive Media Stream Sniffer
 
 const GDM_BRIDGE_PORT = 9666;
@@ -299,7 +299,7 @@ async function handleDownloadInterception(downloadItem, suggest) {
         chrome.notifications.create({
           type: "basic",
           iconUrl: "icons/icon128.png",
-          title: "Goat Download Manager 🐐",
+          title: "ZR Downloader 🚀",
           message: isTorrent
             ? `Intercepted BitTorrent download:\n${downloadItem.filename || "Torrent file"}`
             : `Intercepted high-speed download:\n${downloadItem.filename || ext.toUpperCase() + " file"}`,
@@ -408,7 +408,7 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
     try {
       await chrome.tabs.sendMessage(effectiveTabId, {
         action: "SHOW_TOAST",
-        title: "Goat Download Manager 🐐",
+        title: "ZR Downloader 🚀",
         message: isTorrent
           ? "Adding torrent to GDM engine..."
           : quality
@@ -442,7 +442,7 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
         try {
           await chrome.tabs.sendMessage(effectiveTabId, {
             action: "SHOW_TOAST",
-            title: "Goat Download Manager 🐐",
+            title: "ZR Downloader 🚀",
             message: isTorrent
               ? "Torrent added in GDM!"
               : quality
@@ -482,7 +482,7 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
 
       await chrome.tabs.sendMessage(effectiveTabId, {
         action: "SHOW_TOAST",
-        title: "Goat Download Manager 🐐",
+        title: "ZR Downloader 🚀",
         message: "Opening GDM desktop app...",
         status: "info",
       });

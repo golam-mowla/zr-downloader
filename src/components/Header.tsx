@@ -53,11 +53,11 @@ export const Header: React.FC<HeaderProps> = ({
       <header className="flex flex-wrap items-center justify-between gap-3 px-3 sm:px-6 py-2.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 sticky top-0 z-30">
         {/* Left Side: Brand + FULL PARROT + "+ Add" Button (Image 2) */}
         <div className="flex items-center gap-3">
-          {/* Goat Icon */}
+          {/* ZR Downloader Icon */}
           <div className="relative shrink-0 flex items-center justify-center">
             <img
               src="/icon.png"
-              alt="Goat Download Manager"
+              alt="ZR Downloader"
               className="w-10 h-10 object-contain drop-shadow-[0_4px_10px_rgba(6,182,212,0.4)] hover:scale-105 transition-transform"
             />
           </div>
@@ -65,10 +65,10 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-black tracking-tight bg-gradient-to-r from-slate-900 via-indigo-700 to-cyan-600 dark:from-white dark:via-cyan-300 dark:to-indigo-400 bg-clip-text text-transparent">
-                Goat Download Manager
+                ZR Downloader
               </h1>
               <span className="px-2 py-0.5 text-[10px] font-black uppercase tracking-wider rounded-full bg-cyan-50 dark:bg-cyan-950/60 text-cyan-700 dark:text-cyan-300 border border-cyan-300 dark:border-cyan-700 flex items-center gap-1">
-                v1.2.0
+                v1.2.4
               </span>
             </div>
             <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
@@ -209,11 +209,11 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="text-center space-y-2">
               <img
                 src="/icon.png"
-                alt="Goat Download Manager"
+                alt="ZR Downloader"
                 className="w-16 h-16 object-contain mx-auto drop-shadow-md"
               />
               <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                Goat Download Manager v1.2.0
+                ZR Downloader v1.2.4
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Created by Golam Mowla &bull; Powered by Multi-Threaded Engine, BitTorrent &amp; yt-dlp
@@ -222,7 +222,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             <div className="text-xs text-slate-600 dark:text-slate-300 space-y-2 border-y border-slate-100 dark:border-slate-800 py-3">
               <p>
-                <strong>GM Downloader</strong> is an advanced, multi-platform media downloader, dynamic format picker, and precision timeframe clipper built for Windows, macOS, Linux, and Android.
+                <strong>ZR Downloader</strong> is an advanced, high-performance download accelerator, media extractor, and BitTorrent client built for Windows and Android.
               </p>
               <p>
                 Includes full Parabolic options, 13 audio/video container formats, automatic 18+ age restriction bypass, and crash-resilient resuming.

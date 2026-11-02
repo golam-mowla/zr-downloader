@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "GoatDownloadManager"
+rootProject.name = "ZRDownloader"
 include(":app")
