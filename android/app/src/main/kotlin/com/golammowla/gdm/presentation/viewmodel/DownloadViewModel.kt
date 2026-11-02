@@ -29,6 +29,14 @@ data class DownloadUiState(
     val isDarkTheme: Boolean = true
 )
 
+private data class FilterResult(
+    val all: List<DownloadItem>,
+    val filtered: List<DownloadItem>,
+    val category: DownloadCategory,
+    val query: String,
+    val totalSpeedBps: Long
+)
+
 @HiltViewModel
 class DownloadViewModel @Inject constructor(
     private val repository: DownloadRepository,
@@ -41,34 +49,52 @@ class DownloadViewModel @Inject constructor(
     private val _isAddDialogOpen = MutableStateFlow(false)
     private val _initialAddUrl = MutableStateFlow("")
 
-    val uiState: StateFlow<DownloadUiState> = combine(
+    private val filterFlow = combine(
         repository.getAllDownloads(),
         _selectedCategory,
-        _searchQuery,
-        _selectedItem,
-        _isAddDialogOpen,
-        _initialAddUrl,
-        preferencesRepository.preferencesFlow
-    ) { downloads, category, query, selectedItem, isAddOpen, initialUrl, prefs ->
-        val filtered = downloads
-            .filter { item ->
-                if (category == DownloadCategory.ALL) true else item.category == category
-            }
-            .filter { item ->
-                if (query.isBlank()) true else item.filename.contains(query, ignoreCase = true)
-            }
-
+        _searchQuery
+    ) { downloads, category, query ->
+        val filtered = downloads.filter { item ->
+            (category == DownloadCategory.ALL || item.category == category) &&
+            (query.isBlank() || item.filename.contains(query, ignoreCase = true))
+        }
         val active = downloads.filter { it.status == DownloadStatus.DOWNLOADING }
-        val totalSpeedBps = active.sumOf { it.speedBps }
+        val speedBps = active.sumOf { it.speedBps }
+        FilterResult(
+            all = downloads,
+            filtered = filtered,
+            category = category,
+            query = query,
+            totalSpeedBps = speedBps
+        )
+    }
+
+    private val dialogFlow = combine(
+        _isAddDialogOpen,
+        _initialAddUrl
+    ) { isOpen, url ->
+        Pair(isOpen, url)
+    }
+
+    val uiState: StateFlow<DownloadUiState> = combine(
+        filterFlow,
+        _selectedItem,
+        dialogFlow,
+        preferencesRepository.preferencesFlow
+    ) { filterResult, selectedItem, (isOpen, initialUrl), prefs ->
+        val activeCount = filterResult.all.count { it.status == DownloadStatus.DOWNLOADING }
+        val resolvedSelected = selectedItem?.let { sel ->
+            filterResult.all.find { it.id == sel.id } ?: sel
+        }
 
         DownloadUiState(
-            downloads = filtered,
-            selectedCategory = category,
-            searchQuery = query,
-            activeDownloadsCount = active.size,
-            totalSpeedFormatted = DownloadEngine.formatSpeed(totalSpeedBps),
-            selectedItem = selectedItem?.let { sel -> downloads.find { it.id == sel.id } ?: sel },
-            isAddDialogOpen = isAddOpen,
+            downloads = filterResult.filtered,
+            selectedCategory = filterResult.category,
+            searchQuery = filterResult.query,
+            activeDownloadsCount = activeCount,
+            totalSpeedFormatted = DownloadEngine.formatSpeed(filterResult.totalSpeedBps),
+            selectedItem = resolvedSelected,
+            isAddDialogOpen = isOpen,
             initialAddUrl = initialUrl,
             isDarkTheme = prefs.isDarkTheme
         )
@@ -107,7 +133,6 @@ class DownloadViewModel @Inject constructor(
                 filename = filename,
                 chunkCount = connections
             )
-            // Auto open details dialog for newly started download
             val created = repository.getDownload(id)
             if (created != null) {
                 _selectedItem.value = created
