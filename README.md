@@ -1,7 +1,7 @@
 # ZR Downloader
 
 <p align="center">
-  <img src="public/icon.png" width="120" height="120" alt="ZR Downloader Logo" style="border-radius: 24px; box-shadow: 0 0 30px rgba(212, 2, 3, 0.5);">
+  <img src="public/icon.png" width="128" height="128" alt="ZR Downloader Logo" style="border-radius: 28px; box-shadow: 0 0 30px rgba(238, 44, 44, 0.4);">
   <br><br>
   <strong>Ultra-Fast Multi-Threaded Download Accelerator & Media Extractor for Windows and Android</strong>
   <br>
