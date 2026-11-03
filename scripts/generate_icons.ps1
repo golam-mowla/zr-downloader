@@ -1,21 +1,62 @@
 Add-Type -AssemblyName System.Drawing
+
 $sourcePath = 'C:\Users\GM desktop\.gemini\antigravity\brain\ca7d5d30-435e-4eb6-9950-df68f728190b\.user_uploaded\media_1793632007079_3c2704f0.jpg'
 $srcImg = [System.Drawing.Image]::FromFile($sourcePath)
 
-# Sample background color from corner
-$sampleBmp = New-Object System.Drawing.Bitmap($srcImg)
-$px = $sampleBmp.GetPixel(10, 10)
-$hexColor = '#{0:X2}{1:X2}{2:X2}' -f $px.R, $px.G, $px.B
-Write-Host "Corner background color: $hexColor"
-$sampleBmp.Dispose()
+function Create-RoundedRectanglePath([System.Drawing.RectangleF]$rect, [float]$radius) {
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $diameter = $radius * 2.0
+    $arc = New-Object System.Drawing.RectangleF($rect.X, $rect.Y, $diameter, $diameter)
+    
+    # Top-left arc
+    $path.AddArc($arc, 180, 90)
+    
+    # Top-right arc
+    $arc.X = $rect.Right - $diameter
+    $path.AddArc($arc, 270, 90)
+    
+    # Bottom-right arc
+    $arc.Y = $rect.Bottom - $diameter
+    $path.AddArc($arc, 0, 90)
+    
+    # Bottom-left arc
+    $arc.X = $rect.Left
+    $path.AddArc($arc, 90, 90)
+    
+    $path.CloseFigure()
+    return $path
+}
 
-function Resize-Image($src, $w, $h, $dest) {
-    $bmp = New-Object System.Drawing.Bitmap($w, $h)
+function Generate-Squircle-Image($src, $w, $h, $dest, [bool]$isCircle = $false) {
+    $bmp = New-Object System.Drawing.Bitmap($w, $h, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
     $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $g.DrawImage($src, 0, 0, $w, $h)
+    $g.Clear([System.Drawing.Color]::Transparent)
+
+    $pad = [Math]::Max(1.0, [float]($w * 0.035))
+    $rect = New-Object System.Drawing.RectangleF($pad, $pad, [float]($w - 2.0 * $pad), [float]($h - 2.0 * $pad))
+
+    if ($isCircle) {
+        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $path.AddEllipse($rect)
+    } else {
+        # 22% squircle radius for smooth PotPlayer-like softness
+        $radius = [float]($rect.Width * 0.22)
+        $path = Create-RoundedRectanglePath $rect $radius
+    }
+
+    $g.SetClip($path)
+    # Fill with base red color
+    $redBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 212, 2, 3))
+    $g.FillRectangle($redBrush, 0, 0, $w, $h)
+    $redBrush.Dispose()
+
+    # Draw source image scaled to the squircle area
+    $g.DrawImage($src, $rect)
+    $g.ResetClip()
+
     $dir = [System.IO.Path]::GetDirectoryName($dest)
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -25,30 +66,32 @@ function Resize-Image($src, $w, $h, $dest) {
     $bmp.Dispose()
 }
 
+# Android Mipmaps
 $androidMipmaps = @{
-    'android/app/src/main/res/mipmap-mdpi/ic_launcher.png' = 48
-    'android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png' = 48
-    'android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png' = 108
-    'android/app/src/main/res/mipmap-hdpi/ic_launcher.png' = 72
-    'android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png' = 72
-    'android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png' = 162
-    'android/app/src/main/res/mipmap-xhdpi/ic_launcher.png' = 96
-    'android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png' = 96
-    'android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png' = 216
-    'android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png' = 144
-    'android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png' = 144
-    'android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png' = 324
-    'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png' = 192
-    'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png' = 192
-    'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png' = 432
+    'android/app/src/main/res/mipmap-mdpi/ic_launcher.png' = @{ Size = 48; Circle = $false }
+    'android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png' = @{ Size = 48; Circle = $true }
+    'android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png' = @{ Size = 108; Circle = $false }
+    'android/app/src/main/res/mipmap-hdpi/ic_launcher.png' = @{ Size = 72; Circle = $false }
+    'android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png' = @{ Size = 72; Circle = $true }
+    'android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png' = @{ Size = 162; Circle = $false }
+    'android/app/src/main/res/mipmap-xhdpi/ic_launcher.png' = @{ Size = 96; Circle = $false }
+    'android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png' = @{ Size = 96; Circle = $true }
+    'android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png' = @{ Size = 216; Circle = $false }
+    'android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png' = @{ Size = 144; Circle = $false }
+    'android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png' = @{ Size = 144; Circle = $true }
+    'android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png' = @{ Size = 324; Circle = $false }
+    'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png' = @{ Size = 192; Circle = $false }
+    'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png' = @{ Size = 192; Circle = $true }
+    'android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png' = @{ Size = 432; Circle = $false }
 }
 
 foreach ($path in $androidMipmaps.Keys) {
-    $s = $androidMipmaps[$path]
-    Resize-Image $srcImg $s $s $path
+    $info = $androidMipmaps[$path]
+    Generate-Squircle-Image $srcImg $info.Size $info.Size $path $info.Circle
     Write-Host "Generated $path"
 }
 
+# Desktop PNG Icons
 $desktopIcons = @{
     'src-tauri/icons/32x32.png' = 32
     'src-tauri/icons/64x64.png' = 64
@@ -78,23 +121,73 @@ $desktopIcons = @{
 
 foreach ($path in $desktopIcons.Keys) {
     $s = $desktopIcons[$path]
-    Resize-Image $srcImg $s $s $path
+    Generate-Squircle-Image $srcImg $s $s $path $false
     Write-Host "Generated $path"
 }
 
-$srcImg.Save('public/goat-logo.jpg', [System.Drawing.Imaging.ImageFormat]::Jpeg)
+# Generate multi-frame Windows icon.ico with PNG frames
+$tempDir = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "zr_icons_" + [System.Guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
-# Generate icon.ico
-$icoBmp = New-Object System.Drawing.Bitmap($srcImg, 256, 256)
-$hIcon = $icoBmp.GetHicon()
-$icon = [System.Drawing.Icon]::FromHandle($hIcon)
-$fs = New-Object System.IO.FileStream('src-tauri/icons/icon.ico', [System.IO.FileMode]::Create)
-$icon.Save($fs)
-$fs.Close()
-$fs = New-Object System.IO.FileStream('public/favicon.ico', [System.IO.FileMode]::Create)
-$icon.Save($fs)
-$fs.Close()
-$icoBmp.Dispose()
+$icoSizes = @(16, 24, 32, 48, 64, 128, 256)
+$icoPngFiles = @()
+
+foreach ($size in $icoSizes) {
+    $tmpPng = [System.IO.Path]::Combine($tempDir, "icon_$size.png")
+    Generate-Squircle-Image $srcImg $size $size $tmpPng $false
+    $icoPngFiles += $tmpPng
+}
+
+function Save-MultiResolutionIco($pngList, $destIco) {
+    $streams = @()
+    foreach ($png in $pngList) {
+        $bytes = [System.IO.File]::ReadAllBytes($png)
+        $bmp = [System.Drawing.Image]::FromFile($png)
+        $w = if ($bmp.Width -ge 256) { [byte]0 } else { [byte]$bmp.Width }
+        $h = if ($bmp.Height -ge 256) { [byte]0 } else { [byte]$bmp.Height }
+        $bmp.Dispose()
+        $streams += @{ Width = $w; Height = $h; Bytes = $bytes }
+    }
+    
+    $count = $streams.Count
+    $headerSize = 6 + ($count * 16)
+    $offset = $headerSize
+    
+    $fs = [System.IO.File]::Create($destIco)
+    $bw = New-Object System.IO.BinaryWriter($fs)
+    
+    # ICONDIR
+    $bw.Write([uint16]0) # Reserved
+    $bw.Write([uint16]1) # Type (1 = Icon)
+    $bw.Write([uint16]$count) # Count
+    
+    # ICONDIRENTRY list
+    foreach ($item in $streams) {
+        $bw.Write([byte]$item.Width)
+        $bw.Write([byte]$item.Height)
+        $bw.Write([byte]0)   # Color count
+        $bw.Write([byte]0)   # Reserved
+        $bw.Write([uint16]1) # Color planes
+        $bw.Write([uint16]32) # Bits per pixel
+        $bw.Write([uint32]$item.Bytes.Length)
+        $bw.Write([uint32]$offset)
+        $offset += $item.Bytes.Length
+    }
+    
+    # Image data (PNG blocks)
+    foreach ($item in $streams) {
+        $bw.Write($item.Bytes)
+    }
+    
+    $bw.Flush()
+    $fs.Close()
+    Write-Host "Created multi-resolution ICO: $destIco ($count sizes)"
+}
+
+Save-MultiResolutionIco $icoPngFiles 'src-tauri/icons/icon.ico'
+Save-MultiResolutionIco $icoPngFiles 'public/favicon.ico'
+
+Remove-Item -Recurse -Force $tempDir
 
 $srcImg.Dispose()
-Write-Host 'All icons generated successfully!'
+Write-Host 'All icons with soft rounded squircle edges generated successfully!'

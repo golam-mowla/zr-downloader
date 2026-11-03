@@ -66,13 +66,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-64 h-screen flex flex-col justify-between border-r border-gdm bg-gdm-surface text-gdm-primary p-4 z-20 select-none overflow-y-auto transition-colors">
       {/* Top Section */}
       <div className="space-y-4">
-        {/* Window Lights (Glass aesthetic) */}
-        <div className="flex items-center space-x-2 px-1 pt-1 pb-1">
-          <span className="w-3 h-3 rounded-full bg-[#ff5f57] shadow-xs inline-block opacity-90" />
-          <span className="w-3 h-3 rounded-full bg-[#febc2e] shadow-xs inline-block opacity-90" />
-          <span className="w-3 h-3 rounded-full bg-[#28c840] shadow-xs inline-block opacity-90" />
-        </div>
-
         {/* ZR Downloader Branding */}
         <div className="flex items-center space-x-3 px-1 py-1">
           <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 shadow-md">

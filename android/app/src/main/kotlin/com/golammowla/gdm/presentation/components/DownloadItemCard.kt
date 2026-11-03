@@ -240,6 +240,11 @@ fun DownloadItemCard(
 }
 
 @Composable
+fun StatusBadge(status: DownloadStatus) {
+    GlassStatusBadge(status = status)
+}
+
+@Composable
 fun GlassStatusBadge(status: DownloadStatus) {
     val (bgColor, textColor, label) = when (status) {
         DownloadStatus.COMPLETED -> Triple(StatusSuccess.copy(alpha = 0.18f), StatusSuccess, "Completed")

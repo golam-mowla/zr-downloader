@@ -386,7 +386,7 @@ fun MainScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, bottom = 10.dp)
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp)
                     .height(64.dp)
                     .clip(dockShape)
                     .background(cardBg)
