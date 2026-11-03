@@ -15,6 +15,7 @@ import {
   Layers,
   Zap,
   Radio,
+  Info,
 } from "lucide-react";
 import {
   DownloadTask,
@@ -90,18 +91,18 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
   return (
     <div className="w-full bg-gdm-surface border border-gdm rounded-xl overflow-hidden shadow-xs">
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse">
+      <div className="overflow-x-auto scrollbar-thin">
+        <table className="w-full min-w-[760px] text-left border-collapse">
           <thead>
             <tr className="border-b border-gdm bg-gdm-tableHead text-gdm-secondary text-[12px] font-semibold uppercase tracking-wide select-none">
-              <th className="py-3 px-3 w-10 text-center">#</th>
-              <th className="py-3 px-3">File Name</th>
-              <th className="py-3 px-3 w-36">Size</th>
-              <th className="py-3 px-3 w-52">Progress</th>
-              <th className="py-3 px-3 w-32">Status</th>
-              <th className="py-3 px-3 w-32">Speed</th>
-              <th className="py-3 px-3 w-28">Time Left</th>
-              <th className="py-3 px-3 w-36 text-right">Actions</th>
+              <th className="py-3 px-3 w-10 text-center whitespace-nowrap">#</th>
+              <th className="py-3 px-3 whitespace-nowrap min-w-[200px]">File Name</th>
+              <th className="py-3 px-3 w-32 whitespace-nowrap">Size</th>
+              <th className="py-3 px-3 w-48 whitespace-nowrap">Progress</th>
+              <th className="py-3 px-3 w-28 whitespace-nowrap">Status</th>
+              <th className="py-3 px-3 w-28 whitespace-nowrap hidden sm:table-cell">Speed</th>
+              <th className="py-3 px-3 w-24 whitespace-nowrap hidden md:table-cell">Time Left</th>
+              <th className="py-3 px-3 w-36 whitespace-nowrap text-right shrink-0">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gdm">
@@ -211,7 +212,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                     </td>
 
                     {/* Status Badge */}
-                    <td className="py-3 px-3">
+                    <td className="py-3 px-3 whitespace-nowrap">
                       <span
                         className={`inline-block text-[12px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-md ${getStatusBadgeClass(
                           task.status
@@ -222,7 +223,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                     </td>
 
                     {/* Speed: Transfer rate */}
-                    <td className="py-3 px-3 text-[13px] font-semibold tabular-nums text-amber-800 dark:text-amber-400">
+                    <td className="py-3 px-3 text-[13px] font-semibold tabular-nums text-amber-800 dark:text-amber-400 whitespace-nowrap hidden sm:table-cell">
                       {isDownloading || task.status === "downloading" || task.status === "seeding" ? (
                         <div>
                           <div>{getSpeedFormatted(task)}</div>
@@ -238,14 +239,14 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                     </td>
 
                     {/* Time Left (ETA) */}
-                    <td className="py-3 px-3 text-[13px] tabular-nums font-sans text-gdm-secondary">
+                    <td className="py-3 px-3 text-[13px] tabular-nums font-sans text-gdm-secondary whitespace-nowrap hidden md:table-cell">
                       {isDownloading ? getEtaFormatted(task) : "--"}
                     </td>
 
                     {/* Action Buttons: 32px hit area, 18px icons, text-secondary */}
-                    <td className="py-3 px-3 text-right">
+                    <td className="py-3 px-3 text-right whitespace-nowrap shrink-0">
                       <div
-                        className="flex items-center justify-end space-x-1"
+                        className="flex items-center justify-end space-x-1 shrink-0"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isDownloading && (
@@ -296,7 +297,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                           title="View Download Details"
                           aria-label="Open Download Dialog"
                         >
-                          <span className="text-[14px]">🐐</span>
+                          <Info className="w-[18px] h-[18px]" />
                         </button>
 
                         <button

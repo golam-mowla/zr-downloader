@@ -245,17 +245,17 @@
             .trim() || "Instagram Video";
       }
 
-      if (vid && vid.currentSrc && isValidDownloadUrl(vid.currentSrc)) {
-        return {
-          url: stripRangeParams(vid.currentSrc),
-          title: postTitle,
-          postUrl,
-          videoEl: vid,
-        };
-      }
+      const effectivePostUrl =
+        (postUrl && (postUrl.includes("/reel/") || postUrl.includes("/p/")))
+          ? postUrl
+          : (window.location.href.includes("/reel/") || window.location.href.includes("/p/"))
+          ? window.location.href
+          : (vid && vid.currentSrc ? stripRangeParams(vid.currentSrc) : postUrl);
 
       return {
-        url: stripRangeParams(postUrl),
+        url: effectivePostUrl,
+        directSrc: vid && vid.currentSrc ? stripRangeParams(vid.currentSrc) : "",
+        pageUrl: postUrl || window.location.href,
         title: postTitle,
         postUrl,
         videoEl: vid,
@@ -447,39 +447,22 @@
         { label: `${title}, MP3 Audio, Highest Quality`, quality: "Audio", url: mediaTarget.url }
       );
     } else if (hostname.includes("instagram.com")) {
-      // 2. Instagram (Reels & Feed) - Show ALL sniffed streams with bitrates and duration matching IDM
+      // 2. Instagram (Reels & Feed) - Send Post/Reel URL so yt-dlp fetches and muxes both Video & Audio
       const cleanTitle = title.length > 55 ? title.slice(0, 55) + "..." : title;
-      const seen = new Set();
+      const targetInstagramUrl =
+        (mediaTarget.postUrl && (mediaTarget.postUrl.includes("/reel/") || mediaTarget.postUrl.includes("/p/")))
+          ? mediaTarget.postUrl
+          : (window.location.href.includes("/reel/") || window.location.href.includes("/p/"))
+          ? window.location.href
+          : (mediaTarget.url || window.location.href);
 
-      const validStreams = sniffedStreams
-        .filter((st) => !st.isAudio && (st.bitrate > 0 || (st.quality && st.quality.includes("p"))))
-        .sort((a, b) => (b.bitrate || b.contentLength || 0) - (a.bitrate || a.contentLength || 0));
-
-      validStreams.forEach((st) => {
-        const key = `${st.quality}_${st.bitrate}_${st.url}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-
-        const dur = st.duration > 0 ? formatDurationHuman(st.duration) : durStr;
-        const bitStr = st.bitrate > 0 ? `, ${st.bitrate} kbps` : "";
-        const sizeStr = st.sizeFormatted ? `, ${st.sizeFormatted}` : "";
-
-        options.push({
-          label: `${cleanTitle} MP4 file, ${dur}quality ${st.quality}${bitStr}${sizeStr}`,
-          quality: st.quality,
-          url: st.url,
-        });
-      });
-
-      if (options.length === 0) {
-        const targetVideoSrc = directSrc || stripRangeParams(mediaTarget.url || window.location.href);
-        options.push(
-          { label: `${cleanTitle} MP4 file, ${durStr}quality 1080p HD`, quality: "1080p HD", url: targetVideoSrc },
-          { label: `${cleanTitle} MP4 file, ${durStr}quality 720p HD`, quality: "720p HD", url: targetVideoSrc },
-          { label: `${cleanTitle} MP4 file, ${durStr}quality 480p`, quality: "480p", url: targetVideoSrc },
-          { label: `${cleanTitle} MP3 Audio`, quality: "Audio", url: targetVideoSrc }
-        );
-      }
+      options.push(
+        { label: `${cleanTitle}, MP4 file, ${durStr}quality 1080p HD (with Sound)`, quality: "1080p HD", url: targetInstagramUrl },
+        { label: `${cleanTitle}, MP4 file, ${durStr}quality 720p HD (with Sound)`, quality: "720p HD", url: targetInstagramUrl },
+        { label: `${cleanTitle}, MP4 file, ${durStr}quality 480p (with Sound)`, quality: "480p", url: targetInstagramUrl },
+        { label: `${cleanTitle}, MP4 file, ${durStr}Best Available HD (with Sound)`, quality: "Best", url: targetInstagramUrl },
+        { label: `${cleanTitle}, MP3 Audio, Highest Quality`, quality: "Audio", url: targetInstagramUrl }
+      );
     } else if (hostname.includes("kick.com")) {
       // 3. Kick.com (VODs & Live Streams) - Authentic IDM pairs (TS file and MP4 file)
       const cleanTitle = title.length > 55 ? title.slice(0, 55) + "..." : title;

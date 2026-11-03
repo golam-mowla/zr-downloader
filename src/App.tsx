@@ -271,6 +271,17 @@ export const App: React.FC = () => {
         }
         clean = clean.replace(/^["'`[]+|["'`\]]+$/g, "").trim();
 
+        // Check for Instagram direct CDN stream where audio is separate:
+        if (
+          (clean.includes("cdninstagram.com") ||
+            clean.includes("fbcdn.net") ||
+            (clean.includes("instagram.com") && clean.includes(".mp4"))) &&
+          raw.referrer &&
+          (raw.referrer.includes("/reel/") || raw.referrer.includes("/p/"))
+        ) {
+          clean = raw.referrer;
+        }
+
         const lower = clean.toLowerCase();
         if (isTorrent || lower.startsWith("magnet:") || lower.endsWith(".torrent") || lower.includes(".torrent")) {
           if (autoStart) {

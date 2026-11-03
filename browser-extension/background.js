@@ -392,6 +392,17 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
   let cleanUrl = normalizeMediaUrl((mediaUrl || "").trim());
   if (!cleanUrl) return;
 
+  // Resolve Instagram reel/post page URL if direct video-only CDN URL was intercepted
+  if (
+    cleanUrl.includes("cdninstagram.com") ||
+    cleanUrl.includes("fbcdn.net") ||
+    (cleanUrl.includes("instagram.com") && cleanUrl.includes(".mp4"))
+  ) {
+    if (referrer && (referrer.includes("/reel/") || referrer.includes("/p/"))) {
+      cleanUrl = referrer;
+    }
+  }
+
   // Resolve active tab if not passed
   let effectiveTabId = tabId;
   if (!effectiveTabId) {

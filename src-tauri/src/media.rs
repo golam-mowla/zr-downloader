@@ -1168,7 +1168,11 @@ pub async fn start_download(
                 options.audio_stream_id.clone()
             };
 
-            let fmt_expr = format!("{}+{}/{}/b", vid_sel, aud_sel, vid_sel);
+            let fmt_expr = if options.url.contains("instagram.com") {
+                "bv*+ba/b/best".to_string()
+            } else {
+                format!("{}+{}/{}/b", vid_sel, aud_sel, vid_sel)
+            };
             cmd.args(["-f", &fmt_expr]);
 
             // Video Containers: Video (Generic), MP4 (Video), WEBM (Video), MKV (Video), MOV (Video), AVI (Video)
