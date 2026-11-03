@@ -135,7 +135,7 @@ class DownloadViewModel @Inject constructor(
             selectedItem = resolvedSelected,
             isAddDialogOpen = dialogs.isAddOpen,
             isGrabberDialogOpen = dialogs.isGrabberOpen,
-            isSettingsDialogOpen = dialogs.isSetOpen,
+            isSettingsDialogOpen = dialogs.isSettingsOpen,
             initialAddUrl = dialogs.initialUrl,
             isDarkTheme = prefs.isDarkTheme,
             defaultConnections = prefs.defaultConnections,

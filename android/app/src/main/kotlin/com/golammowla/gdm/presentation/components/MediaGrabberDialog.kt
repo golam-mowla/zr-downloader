@@ -19,7 +19,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Sparkles
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -108,7 +108,7 @@ fun MediaGrabberDialog(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Sparkles,
+                                imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = null,
                                 tint = Color.Yellow,
                                 modifier = Modifier.size(20.dp)
