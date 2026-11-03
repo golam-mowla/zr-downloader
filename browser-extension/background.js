@@ -400,6 +400,13 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
   ) {
     if (referrer && (referrer.includes("/reel/") || referrer.includes("/p/"))) {
       cleanUrl = referrer;
+    } else if (effectiveTabId) {
+      try {
+        const tabInfo = await chrome.tabs.get(effectiveTabId);
+        if (tabInfo && tabInfo.url && (tabInfo.url.includes("/reel/") || tabInfo.url.includes("/p/"))) {
+          cleanUrl = tabInfo.url;
+        }
+      } catch {}
     }
   }
 

@@ -229,6 +229,8 @@ fn get_augmented_path() -> String {
         let local = PathBuf::from(&local_app_data);
         // App's own local managed bin directory
         extra_dirs.push(local.clone());
+        extra_dirs.push(local.join("ZR Downloader").join("bin"));
+        extra_dirs.push(local.join("ZR Downloader"));
         extra_dirs.push(local.join("Goat Download Manager").join("bin"));
         extra_dirs.push(local.join("GM-Downloader").join("bin"));
         extra_dirs.push(local.join("Programs").join("yt-dlp"));
@@ -987,9 +989,7 @@ pub async fn start_download(
 
         // Ensure FFmpeg location is explicitly passed if found
         if let Some(ffmpeg_path) = ensure_ffmpeg_available() {
-            if let Some(parent) = ffmpeg_path.parent() {
-                cmd.args(["--ffmpeg-location", &parent.to_string_lossy()]);
-            }
+            cmd.arg("--ffmpeg-location").arg(ffmpeg_path.to_string_lossy().to_string());
         }
 
         let is_subtitles_only = options.download_mode == "subtitles";
@@ -1032,7 +1032,17 @@ pub async fn start_download(
         let out_tmpl = if let Some(ref custom_name) = options.custom_filename {
             let trimmed = custom_name.trim();
             if !trimmed.is_empty() {
-                let sanitized: String = trimmed.chars().map(|c| match c {
+                let name_without_ext = if let Some(dot_idx) = trimmed.rfind('.') {
+                    let ext = &trimmed[dot_idx + 1..];
+                    if ext.len() <= 4 && ext.chars().all(|c| c.is_alphanumeric()) {
+                        &trimmed[..dot_idx]
+                    } else {
+                        trimmed
+                    }
+                } else {
+                    trimmed
+                };
+                let sanitized: String = name_without_ext.chars().map(|c| match c {
                     '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
                     _ => c,
                 }).collect();
@@ -1077,11 +1087,12 @@ pub async fn start_download(
                 suffix_tag
             )
         };
+        let is_youtube = options.url.contains("youtube.com") || options.url.contains("youtu.be");
         let is_hls = options.url.contains(".m3u8")
             || options.url.contains("kick.com")
             || options.url.contains("twitch.tv");
 
-        if is_hls {
+        if is_hls || is_youtube {
             cmd.args([
                 "-o", &out_tmpl,
                 "--windows-filenames",
@@ -1090,10 +1101,12 @@ pub async fn start_download(
                 "--retries", "10",
                 "--fragment-retries", "15",
                 "--file-access-retries", "5",
-                "--skip-unavailable-fragments",
                 "-c",
                 "--part",
             ]);
+            if is_hls {
+                cmd.arg("--skip-unavailable-fragments");
+            }
         } else {
             cmd.args([
                 "-o", &out_tmpl,
@@ -1103,6 +1116,7 @@ pub async fn start_download(
                 "--concurrent-fragments", "4",
                 "--retries", "10",
                 "--fragment-retries", "15",
+                "--file-access-retries", "5",
                 "-c",
                 "--part",
             ]);
@@ -1176,7 +1190,7 @@ pub async fn start_download(
             cmd.args(["-f", &fmt_expr]);
 
             // Video Containers: Video (Generic), MP4 (Video), WEBM (Video), MKV (Video), MOV (Video), AVI (Video)
-            if !container_upper.starts_with("VIDEO (GENERIC)") {
+            if !container_upper.starts_with("VIDEO (GENERIC)") && !container_upper.is_empty() {
                 if container_upper.starts_with("MP4") {
                     cmd.args(["--merge-output-format", "mp4"]);
                 } else if container_upper.starts_with("WEBM") {
@@ -1188,6 +1202,8 @@ pub async fn start_download(
                 } else if container_upper.starts_with("AVI") {
                     cmd.args(["--recode-video", "avi"]);
                 }
+            } else {
+                cmd.args(["--merge-output-format", "mp4"]);
             }
         }
 

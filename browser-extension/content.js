@@ -227,6 +227,20 @@
         }
       }
 
+      if (!postUrl || (!postUrl.includes("/reel/") && !postUrl.includes("/p/"))) {
+        let parent = vid ? vid.parentElement : element?.parentElement;
+        let depth = 0;
+        while (parent && depth < 14) {
+          const link = parent.querySelector("a[href*='/reel/'], a[href*='/p/']");
+          if (link && link.href) {
+            postUrl = link.href;
+            break;
+          }
+          parent = parent.parentElement;
+          depth++;
+        }
+      }
+
       if (postTitle) {
         postTitle = postTitle
           .replace(/\s*\.\.\.\s*more$/i, "")
@@ -456,13 +470,63 @@
           ? window.location.href
           : (mediaTarget.url || window.location.href);
 
-      options.push(
-        { label: `${cleanTitle}, MP4 file, ${durStr}quality 1080p HD (with Sound)`, quality: "1080p HD", url: targetInstagramUrl },
-        { label: `${cleanTitle}, MP4 file, ${durStr}quality 720p HD (with Sound)`, quality: "720p HD", url: targetInstagramUrl },
-        { label: `${cleanTitle}, MP4 file, ${durStr}quality 480p (with Sound)`, quality: "480p", url: targetInstagramUrl },
-        { label: `${cleanTitle}, MP4 file, ${durStr}Best Available HD (with Sound)`, quality: "Best", url: targetInstagramUrl },
-        { label: `${cleanTitle}, MP3 Audio, Highest Quality`, quality: "Audio", url: targetInstagramUrl }
+      // Filter all sniffed network video streams
+      const validStreams = sniffedStreams
+        .filter((st) => !st.isAudio && (st.contentLength > 50000 || st.bitrate > 0 || st.quality))
+        .map((st) => ({
+          ...st,
+          url: stripRangeParams(st.url),
+        }));
+
+      validStreams.sort(
+        (a, b) => (b.bitrate || b.contentLength || 0) - (a.bitrate || a.contentLength || 0)
       );
+
+      const seen = new Set();
+      validStreams.forEach((st) => {
+        const bitStr = st.bitrate ? `${st.bitrate} kbps` : "";
+        const sizeStr = st.sizeFormatted || (st.contentLength ? formatBytes(st.contentLength) : "");
+        const key = `${st.quality}_${bitStr}_${sizeStr}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        const detailsList = [bitStr, sizeStr].filter(Boolean);
+        const detailStr = detailsList.length > 0 ? `, ${detailsList.join(", ")}` : "";
+
+        options.push({
+          label: `${cleanTitle}, MP4 file, ${durStr}quality ${st.quality}${detailStr} (with Sound)`,
+          quality: st.quality || "HD Video",
+          url: targetInstagramUrl,
+          directSrc: st.url,
+          container: "MP4",
+        });
+      });
+
+      // If no sniffed streams found or cached, provide standard resolutions with estimated sizes
+      if (options.length === 0) {
+        const dur = durationSec > 0 ? durationSec : 30;
+        const est1080 = formatBytes(Math.round((4500 * 1000 * dur) / 8));
+        const est720 = formatBytes(Math.round((2400 * 1000 * dur) / 8));
+        const est480 = formatBytes(Math.round((1200 * 1000 * dur) / 8));
+        const est360 = formatBytes(Math.round((700 * 1000 * dur) / 8));
+
+        options.push(
+          { label: `${cleanTitle}, MP4 file, ${durStr}quality 1080p HD, ${est1080} (with Sound)`, quality: "1080p HD", url: targetInstagramUrl, container: "MP4" },
+          { label: `${cleanTitle}, MP4 file, ${durStr}quality 720p HD, ${est720} (with Sound)`, quality: "720p HD", url: targetInstagramUrl, container: "MP4" },
+          { label: `${cleanTitle}, MP4 file, ${durStr}quality 480p, ${est480} (with Sound)`, quality: "480p", url: targetInstagramUrl, container: "MP4" },
+          { label: `${cleanTitle}, MP4 file, ${durStr}quality 360p, ${est360} (with Sound)`, quality: "360p", url: targetInstagramUrl, container: "MP4" }
+        );
+      }
+
+      // Always include MP3 Audio extraction option with size
+      const dur = durationSec > 0 ? durationSec : 30;
+      const estAudio = formatBytes(Math.round((192 * 1000 * dur) / 8));
+      options.push({
+        label: `${cleanTitle}, MP3 Audio, ${durStr}Highest Quality, ${estAudio}`,
+        quality: "Audio",
+        url: targetInstagramUrl,
+        container: "MP3",
+      });
     } else if (hostname.includes("kick.com")) {
       // 3. Kick.com (VODs & Live Streams) - Authentic IDM pairs (TS file and MP4 file)
       const cleanTitle = title.length > 55 ? title.slice(0, 55) + "..." : title;

@@ -1138,7 +1138,7 @@ export const App: React.FC = () => {
         </div>
 
         {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto p-5 space-y-4">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
           {filteredTasks.length === 0 ? (
             /* Empty State */
             <div className="h-[65vh] flex flex-col items-center justify-center text-center p-8 space-y-4">
