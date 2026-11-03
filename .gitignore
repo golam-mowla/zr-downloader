@@ -23,6 +23,7 @@ Thumbs.db
 # Android
 *.apk
 *.keystore
+!android/app/release.keystore
 local.properties
 .gradle/
 build/

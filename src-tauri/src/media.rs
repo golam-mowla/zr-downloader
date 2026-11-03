@@ -1752,39 +1752,44 @@ pub async fn cancel_download(
 pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // 1. yt-dlp installed and latest version check
-        let ytdlp_ver = make_command("yt-dlp")
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "Not Found".to_string());
-
-        let latest_ytdlp = make_command("python")
-            .args(["-c", "import urllib.request, json; print(json.loads(urllib.request.urlopen('https://pypi.org/pypi/yt-dlp/json', timeout=3).read())['info']['version'])"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| ytdlp_ver.clone());
-
-        let has_ytdlp_update = if ytdlp_ver != "Not Found" && !latest_ytdlp.is_empty() {
-            let norm_inst = ytdlp_ver.replace(".0", ".");
-            let norm_late = latest_ytdlp.replace(".0", ".");
-            norm_inst != norm_late
+        let ytdlp_exe = ensure_ytdlp_available();
+        let ytdlp_ver = if let Some(ref exe) = ytdlp_exe {
+            make_command(&exe.to_string_lossy())
+                .arg("--version")
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "Not Found".to_string())
         } else {
-            false
+            "Not Found".to_string()
         };
+
+        // Fetch latest version from PyPI / GitHub via PowerShell without requiring python installation
+        #[cfg(target_os = "windows")]
+        let latest_ytdlp = {
+            let ps_script = "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; try { (Invoke-RestMethod -Uri 'https://pypi.org/pypi/yt-dlp/json' -TimeoutSec 4).info.version } catch { '' }";
+            let mut ps_cmd = std::process::Command::new("powershell.exe");
+            ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", ps_script]);
+            use std::os::windows::process::CommandExt;
+            ps_cmd.creation_flags(0x08000000);
+            ps_cmd.output()
+                .ok()
+                .and_then(|o| {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if !s.is_empty() { Some(s) } else { None }
+                })
+                .unwrap_or_else(|| ytdlp_ver.clone())
+        };
+        #[cfg(not(target_os = "windows"))]
+        let latest_ytdlp = ytdlp_ver.clone();
+
+        let has_ytdlp_update = ytdlp_ver == "Not Found" || (!latest_ytdlp.is_empty() && ytdlp_ver != latest_ytdlp);
 
         // 2. Deno
         let deno_ver = make_command("deno")
@@ -1805,22 +1810,27 @@ pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
             .unwrap_or_else(|| "Not Found".to_string());
 
         // 3. FFmpeg
-        let ffmpeg_ver = make_command("ffmpeg")
-            .arg("-version")
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    let s = String::from_utf8_lossy(&o.stdout);
-                    s.lines()
-                        .next()
-                        .and_then(|l| l.split_whitespace().nth(2))
-                        .map(|v| v.chars().take(18).collect::<String>())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "Not Found".to_string());
+        let ffmpeg_exe = ensure_ffmpeg_available();
+        let ffmpeg_ver = if let Some(ref exe) = ffmpeg_exe {
+            make_command(&exe.to_string_lossy())
+                .arg("-version")
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        let s = String::from_utf8_lossy(&o.stdout);
+                        s.lines()
+                            .next()
+                            .and_then(|l| l.split_whitespace().nth(2))
+                            .map(|v| v.chars().take(18).collect::<String>())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "Not Found".to_string())
+        } else {
+            "Not Found".to_string()
+        };
 
         Ok(vec![
             ToolStatus {
@@ -1848,19 +1858,46 @@ pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
 }
 
 #[command]
-pub async fn update_tool(tool_name: String) -> Result<String, String> {
+pub async fn update_tool(tool_name: Option<String>, name: Option<String>) -> Result<String, String> {
+    let resolved = tool_name.or(name).unwrap_or_else(|| "yt-dlp".to_string());
     tauri::async_runtime::spawn_blocking(move || {
-        let lower = tool_name.to_lowercase();
+        let lower = resolved.to_lowercase();
         if lower.contains("yt-dlp") {
-            let out = make_command("python")
-                .args(["-m", "pip", "install", "-U", "yt-dlp"])
-                .output();
-            let _ = make_command("yt-dlp").arg("-U").output();
-            if let Ok(o) = out {
-                if o.status.success() {
-                    return Ok("yt-dlp updated to the latest version successfully!".to_string());
+            // 1. Try yt-dlp -U if an executable is already available
+            if let Some(exe_path) = ensure_ytdlp_available() {
+                let out = make_command(&exe_path.to_string_lossy()).arg("-U").output();
+                if let Ok(o) = out {
+                    let stdout = String::from_utf8_lossy(&o.stdout);
+                    if o.status.success() || stdout.contains("Updated") || stdout.contains("up to date") {
+                        return Ok(format!("yt-dlp: {}", stdout.trim()));
+                    }
                 }
             }
+
+            // 2. Direct download of latest official standalone yt-dlp.exe
+            #[cfg(target_os = "windows")]
+            {
+                if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                    let target_dir = std::path::PathBuf::from(&local_app_data).join("ZR Downloader").join("bin");
+                    let _ = std::fs::create_dir_all(&target_dir);
+                    let target_exe = target_dir.join("yt-dlp.exe");
+
+                    let ps_script = format!(
+                        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', '{}')",
+                        target_exe.display()
+                    );
+                    let mut ps_cmd = std::process::Command::new("powershell.exe");
+                    ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
+                    use std::os::windows::process::CommandExt;
+                    ps_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+                    if let Ok(status) = ps_cmd.status() {
+                        if status.success() && target_exe.exists() {
+                            return Ok("yt-dlp updated to the latest version successfully!".to_string());
+                        }
+                    }
+                }
+            }
+
             Ok("yt-dlp update check completed!".to_string())
         } else if lower.contains("deno") {
             let out = make_command("deno").arg("upgrade").output();
@@ -1869,26 +1906,21 @@ pub async fn update_tool(tool_name: String) -> Result<String, String> {
                     return Ok("Deno JS runtime updated successfully!".to_string());
                 }
             }
-            let _ = make_command("winget")
-                .args([
-                    "upgrade",
-                    "--id",
-                    "DenoLand.Deno",
-                    "--accept-source-agreements",
-                    "--accept-package-agreements",
-                ])
-                .output();
             Ok("Deno JS runtime is up to date!".to_string())
         } else {
-            let _ = make_command("winget")
-                .args([
-                    "upgrade",
-                    "--id",
-                    "yt-dlp.FFmpeg",
-                    "--accept-source-agreements",
-                    "--accept-package-agreements",
-                ])
-                .output();
+            // FFmpeg
+            #[cfg(target_os = "windows")]
+            {
+                let _ = make_command("winget")
+                    .args([
+                        "upgrade",
+                        "--id",
+                        "yt-dlp.FFmpeg",
+                        "--accept-source-agreements",
+                        "--accept-package-agreements",
+                    ])
+                    .output();
+            }
             Ok("FFmpeg updated to the latest version successfully!".to_string())
         }
     })

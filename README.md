@@ -65,7 +65,7 @@ Seamless 1-click download interception for Chrome, Brave, and Edge. Automaticall
 
 ---
 
-## 📦 Downloads (v1.2.5)
+## 📦 Downloads (v1.2.6)
 
 Grab the latest pre-compiled installers directly from [GitHub Releases](https://github.com/golam-mowla/zr-downloader/releases):
 

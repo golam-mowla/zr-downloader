@@ -58,6 +58,8 @@ import com.golammowla.gdm.presentation.components.AddDownloadDialog
 import com.golammowla.gdm.presentation.components.CategoryFilterRow
 import com.golammowla.gdm.presentation.components.DownloadDetailsDialog
 import com.golammowla.gdm.presentation.components.DownloadItemCard
+import com.golammowla.gdm.presentation.components.MediaGrabberDialog
+import com.golammowla.gdm.presentation.components.SettingsDialog
 import com.golammowla.gdm.presentation.components.StatusFilterChipsRow
 import com.golammowla.gdm.presentation.theme.GlassAccentGradientEnd
 import com.golammowla.gdm.presentation.theme.GlassAccentGradientStart
@@ -413,8 +415,7 @@ fun MainScreen(
                         isSelected = uiState.currentTab == "grabber",
                         onClick = {
                             viewModel.setTab("grabber")
-                            viewModel.openAddDialog()
-                            Toast.makeText(context, "Media Grabber: Paste video or audio URL", Toast.LENGTH_SHORT).show()
+                            viewModel.openGrabberDialog()
                         }
                     )
 
@@ -436,8 +437,7 @@ fun MainScreen(
                         isSelected = uiState.currentTab == "settings",
                         onClick = {
                             viewModel.setTab("settings")
-                            viewModel.toggleDarkTheme(!uiState.isDarkTheme)
-                            Toast.makeText(context, "Theme toggled", Toast.LENGTH_SHORT).show()
+                            viewModel.openSettingsDialog()
                         }
                     )
                 }
@@ -452,6 +452,34 @@ fun MainScreen(
                 onStartDownload = { url, filename, connections ->
                     viewModel.startDownload(url, filename, connections)
                 }
+            )
+        }
+
+        // Media Grabber Dialog
+        if (uiState.isGrabberDialogOpen) {
+            MediaGrabberDialog(
+                initialUrl = uiState.initialAddUrl,
+                onDismiss = { viewModel.closeGrabberDialog() },
+                onStartDownload = { url, filename, connections ->
+                    viewModel.startDownload(url, filename, connections)
+                }
+            )
+        }
+
+        // Settings & Engines Dialog
+        if (uiState.isSettingsDialogOpen) {
+            SettingsDialog(
+                isDarkTheme = uiState.isDarkTheme,
+                defaultConnections = uiState.defaultConnections,
+                ytdlpVersion = uiState.ytdlpVersion,
+                ffmpegVersion = uiState.ffmpegVersion,
+                isUpdating = uiState.isUpdatingEngine,
+                updateMessage = uiState.engineUpdateMessage,
+                onToggleDarkTheme = { viewModel.toggleDarkTheme(it) },
+                onUpdateConnections = { viewModel.updateDefaultConnections(it) },
+                onUpdateYtdlp = { viewModel.updateYtdlpEngine() },
+                onUpdateFfmpeg = { viewModel.updateFfmpegEngine() },
+                onDismiss = { viewModel.closeSettingsDialog() }
             )
         }
 

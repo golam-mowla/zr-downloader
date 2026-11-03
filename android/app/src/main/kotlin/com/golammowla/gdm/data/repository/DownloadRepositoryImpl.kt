@@ -33,7 +33,7 @@ class DownloadRepositoryImpl @Inject constructor(
     private val preferencesRepository: UserPreferencesRepository
 ) : DownloadRepository {
 
-    private val workManager = WorkManager.getInstance(context)
+    private val workManager by lazy { WorkManager.getInstance(context) }
 
     override fun getAllDownloads(): Flow<List<DownloadItem>> {
         return downloadDao.getAllFlow().map { list -> list.map { it.toDomain() } }

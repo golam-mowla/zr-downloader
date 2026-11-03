@@ -78,7 +78,15 @@ class MainActivity : ComponentActivity() {
         if (!targetUrl.isNullOrBlank()) {
             val cleanUrl = targetUrl.trim().removeSurrounding("\"", "\"").removeSurrounding("'", "'")
             Timber.i("Intercepted download URL from external browser/app: $cleanUrl")
-            viewModel.openAddDialog(cleanUrl)
+            val isVideoLink = cleanUrl.contains("youtube.com") || cleanUrl.contains("youtu.be") ||
+                    cleanUrl.contains("instagram.com") || cleanUrl.contains("facebook.com") ||
+                    cleanUrl.contains("tiktok.com") || cleanUrl.contains("twitter.com") ||
+                    cleanUrl.contains("x.com") || cleanUrl.contains("vimeo.com")
+            if (isVideoLink) {
+                viewModel.openGrabberDialog(cleanUrl)
+            } else {
+                viewModel.openAddDialog(cleanUrl)
+            }
         }
     }
 }

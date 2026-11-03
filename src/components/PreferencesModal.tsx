@@ -66,7 +66,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
       setTools((prev) =>
         prev.map((t) => (t.name === name ? { ...t, isUpdating: true } : t))
       );
-      await invoke("update_tool", { name });
+      await invoke("update_tool", { tool_name: name, name });
       await loadToolsInfo();
     } catch (err) {
       console.error("Update error:", err);
@@ -317,20 +317,23 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                           Installed: {tool.installedVersion || "Bundled"} &bull; Latest: {tool.latestVersion || "Up to date"}
                         </div>
                       </div>
-                      {tool.hasUpdate ? (
+                      <div className="flex items-center space-x-2">
+                        {tool.hasUpdate ? (
+                          <span className="text-amber-500 text-[11.5px] font-semibold">Update Available</span>
+                        ) : (
+                          <span className="text-emerald-600 dark:text-emerald-400 text-[11.5px] font-semibold flex items-center space-x-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Active</span>
+                          </span>
+                        )}
                         <button
                           onClick={() => handleUpdateTool(tool.name)}
                           disabled={tool.isUpdating}
-                          className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[12px]"
+                          className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-[12px] transition-colors"
                         >
                           {tool.isUpdating ? "Updating..." : "Update"}
                         </button>
-                      ) : (
-                        <span className="text-emerald-700 dark:text-emerald-400 text-[12px] font-semibold flex items-center space-x-1">
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>Latest</span>
-                        </span>
-                      )}
+                      </div>
                     </div>
                   ))}
                 </div>

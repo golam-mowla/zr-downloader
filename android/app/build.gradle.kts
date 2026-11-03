@@ -15,12 +15,24 @@ android {
         applicationId = "com.golammowla.zrdownloader"
         minSdk = 24
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.2.5"
+        versionCode = 10
+        versionName = "1.2.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("release.keystore")
+            storePassword = "zrdownloader123"
+            keyAlias = "zrdownloader"
+            keyPassword = "zrdownloader123"
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
         }
     }
 
@@ -31,7 +43,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             applicationIdSuffix = ".debug"

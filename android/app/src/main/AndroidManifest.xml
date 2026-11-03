@@ -133,25 +133,6 @@
                 <data android:scheme="gmdownloader" />
             </intent-filter>
 
-            <!-- Direct Video & Social Media Intent Handler -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" />
-                <data android:scheme="https" />
-                <data android:host="*youtube.com" />
-                <data android:host="youtu.be" />
-                <data android:host="*instagram.com" />
-                <data android:host="*kick.com" />
-                <data android:host="*tiktok.com" />
-                <data android:host="*twitter.com" />
-                <data android:host="*x.com" />
-                <data android:host="*facebook.com" />
-                <data android:host="*fb.watch" />
-                <data android:host="*vimeo.com" />
-                <data android:host="*reddit.com" />
-            </intent-filter>
         </activity>
 
         <!-- Disable default WorkManagerInitializer for on-demand Hilt WorkManager -->

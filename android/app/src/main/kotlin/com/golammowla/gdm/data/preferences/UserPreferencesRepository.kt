@@ -22,7 +22,9 @@ data class UserPreferences(
     val defaultConnections: Int,
     val isDarkTheme: Boolean,
     val wifiOnly: Boolean,
-    val autoStart: Boolean
+    val autoStart: Boolean,
+    val ytdlpVersion: String = "2025.02.19",
+    val ffmpegVersion: String = "7.1"
 )
 
 @Singleton
@@ -35,6 +37,8 @@ class UserPreferencesRepository @Inject constructor(
         val DARK_THEME = booleanPreferencesKey("dark_theme")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only")
         val AUTO_START = booleanPreferencesKey("auto_start")
+        val YTDLP_VERSION = stringPreferencesKey("ytdlp_version")
+        val FFMPEG_VERSION = stringPreferencesKey("ffmpeg_version")
     }
 
     val preferencesFlow: Flow<UserPreferences> = context.dataStore.data.map { prefs ->
@@ -46,7 +50,9 @@ class UserPreferencesRepository @Inject constructor(
             defaultConnections = prefs[Keys.DEFAULT_CONNECTIONS] ?: 8,
             isDarkTheme = prefs[Keys.DARK_THEME] ?: true,
             wifiOnly = prefs[Keys.WIFI_ONLY] ?: false,
-            autoStart = prefs[Keys.AUTO_START] ?: true
+            autoStart = prefs[Keys.AUTO_START] ?: true,
+            ytdlpVersion = prefs[Keys.YTDLP_VERSION] ?: "2025.02.19",
+            ffmpegVersion = prefs[Keys.FFMPEG_VERSION] ?: "7.1"
         )
     }
 
@@ -68,5 +74,13 @@ class UserPreferencesRepository @Inject constructor(
 
     suspend fun updateAutoStart(enabled: Boolean) {
         context.dataStore.edit { it[Keys.AUTO_START] = enabled }
+    }
+
+    suspend fun updateYtdlpVersion(version: String) {
+        context.dataStore.edit { it[Keys.YTDLP_VERSION] = version }
+    }
+
+    suspend fun updateFfmpegVersion(version: String) {
+        context.dataStore.edit { it[Keys.FFMPEG_VERSION] = version }
     }
 }
