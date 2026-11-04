@@ -739,7 +739,8 @@
     }
     dropdown.style.top = `${top}px`;
 
-    document.body.appendChild(dropdown);
+    const container = document.fullscreenElement || document.webkitFullscreenElement || document.body;
+    container.appendChild(dropdown);
     activeDropdown = dropdown;
   }
 
@@ -781,8 +782,9 @@
     btn.innerHTML = `
       <div style="display:flex;align-items:center;gap:5px;padding:0 2px;">
         <span style="display:inline-flex;align-items:center;color:#64748b;cursor:grab;font-size:12px;padding:0 2px;user-select:none;" title="Drag to move" id="gdm-drag-handle">⠿</span>
-        <span style="display:inline-block;color:#16a34a;font-size:12px;font-weight:900;text-shadow:0 1px 1px rgba(0,0,0,0.25);">▶</span>
-        <span style="font-size:12px;font-weight:800;letter-spacing:0.2px;font-family:Arial,Tahoma,sans-serif;color:#dc2626;text-shadow:0 1px 0 #ffffff;white-space:nowrap;">Download this video</span>
+        <span style="display:inline-block;color:#16a34a;font-size:12px;font-weight:900;text-shadow:0 1px 1px rgba(0,0,0,0.25);" id="gdm-play-icon">▶</span>
+        <span style="font-size:12px;font-weight:800;letter-spacing:0.2px;font-family:Arial,Tahoma,sans-serif;color:#dc2626;text-shadow:0 1px 0 #ffffff;white-space:nowrap;cursor:pointer;" id="gdm-download-text">Download this video</span>
+        <span style="font-size:10px;padding:0 4px;cursor:pointer;color:#334155;border-left:1px solid #cbd5e1;" title="Choose quality & format" id="gdm-arrow-btn">▼</span>
         <span style="font-size:11px;color:#475569;font-weight:bold;margin-left:4px;padding:0 4px;border-left:1px solid #94a3b8;cursor:pointer;" title="ZR Downloader" id="gdm-help-btn">?</span>
         <span style="font-size:11px;color:#475569;font-weight:bold;padding:0 2px;cursor:pointer;" title="Hide overlay" id="gdm-close-btn">✕</span>
       </div>
@@ -826,7 +828,7 @@
     // Drag support
     btn.addEventListener("mousedown", (e) => {
       if (e.button !== 0) return;
-      if (e.target && (e.target.id === "gdm-close-btn" || e.target.id === "gdm-help-btn")) return;
+      if (e.target && (e.target.id === "gdm-close-btn" || e.target.id === "gdm-help-btn" || e.target.id === "gdm-arrow-btn")) return;
       isDraggingGrabber = true;
       hasDragged = false;
       dragStartX = e.clientX;
@@ -873,6 +875,30 @@
       const mediaTarget = extractMediaTarget(
         currentTargetVideo || currentTargetContainer
       );
+
+      // If user clicked the dropdown arrow, open the format selector menu
+      if (target && target.id === "gdm-arrow-btn") {
+        showFormatDropdown(btn, mediaTarget);
+        return;
+      }
+
+      // If user clicked anywhere on the button, start best quality download directly!
+      showToast(
+        "ZR Downloader 🚀",
+        `Starting download: ${mediaTarget.title || "Video"}...`,
+        "success"
+      );
+      chrome.runtime.sendMessage({
+        action: "SEND_TO_GDM",
+        url: stripRangeParams(mediaTarget.url || window.location.href),
+        filename: mediaTarget.title,
+        quality: "Best",
+        autoStart: true,
+        container: "MP4",
+        referrer: window.location.href,
+      });
+
+      // Also toggle dropdown if user wants to see other resolutions
       showFormatDropdown(btn, mediaTarget);
     });
 

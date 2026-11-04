@@ -15,8 +15,8 @@
         "title": "ZR Downloader",
         "width": 1180,
         "height": 840,
-        "minWidth": 800,
-        "minHeight": 600,
+        "minWidth": 640,
+        "minHeight": 480,
         "center": true,
         "resizable": true
       }

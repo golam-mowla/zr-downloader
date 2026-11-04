@@ -50,6 +50,24 @@ export const App: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState<StatusFilterType>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  const [windowWidth, setWindowWidth] = useState<number>(
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
+
+  useEffect(() => {
+    const handleResize = () => {
+      const w = window.innerWidth;
+      setWindowWidth(w);
+      if (w < 700) {
+        setViewMode("cards");
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    if (typeof window !== "undefined" && window.innerWidth < 700) {
+      setViewMode("cards");
+    }
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [modalInitialUrl, setModalInitialUrl] = useState("");
   const [modalInitialFilename, setModalInitialFilename] = useState("");
@@ -1195,6 +1213,7 @@ export const App: React.FC = () => {
               onOpenFile={handleOpenFile}
               onOpenFolder={handleOpenFolder}
               theme={theme}
+              windowWidth={windowWidth}
             />
           ) : (
             /* Card View */

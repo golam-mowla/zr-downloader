@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Play,
   Pause,
@@ -15,7 +15,6 @@ import {
   Layers,
   Zap,
   Radio,
-  Info,
 } from "lucide-react";
 import {
   DownloadTask,
@@ -39,6 +38,7 @@ interface DownloadTableViewProps {
   onOpenFile: (path: string) => void;
   onOpenFolder: (path: string) => void;
   theme?: "dark" | "light";
+  windowWidth?: number;
 }
 
 export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
@@ -50,25 +50,57 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
   onDelete,
   onOpenFile,
   onOpenFolder,
+  windowWidth,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [internalWidth, setInternalWidth] = useState<number>(
+    typeof window !== "undefined" ? window.innerWidth : 1200
+  );
+
+  useEffect(() => {
+    const handleResize = () => setInternalWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const width = windowWidth ?? internalWidth;
+
+  // Responsive Breakpoints matching exact user requirements:
+  // below ~1000px: hide TIME LEFT
+  // below ~900px: hide SPEED
+  // below ~800px: hide the "# " column and show Size under the file name
+  // below ~700px: automatically switch to card view (handled in App.tsx)
+  const showTimeLeft = width >= 1000;
+  const showSpeed = width >= 900;
+  const showIndex = width >= 800;
+  const showSizeColumn = width >= 800;
+
+  const totalVisibleCols =
+    (showIndex ? 1 : 0) +
+    1 + // File Name
+    (showSizeColumn ? 1 : 0) +
+    1 + // Progress
+    1 + // Status
+    (showSpeed ? 1 : 0) +
+    (showTimeLeft ? 1 : 0) +
+    1; // Actions
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
       case "video":
-        return <Video className="w-[18px] h-[18px] text-purple-600 dark:text-purple-400 shrink-0" />;
+        return <Video className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />;
       case "audio":
-        return <Music className="w-[18px] h-[18px] text-pink-600 dark:text-pink-400 shrink-0" />;
+        return <Music className="w-4 h-4 text-pink-600 dark:text-pink-400 shrink-0" />;
       case "docs":
-        return <FileText className="w-[18px] h-[18px] text-emerald-600 dark:text-emerald-400 shrink-0" />;
+        return <FileText className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />;
       case "compressed":
-        return <Archive className="w-[18px] h-[18px] text-amber-600 dark:text-amber-400 shrink-0" />;
+        return <Archive className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />;
       case "programs":
-        return <Binary className="w-[18px] h-[18px] text-teal-600 dark:text-teal-400 shrink-0" />;
+        return <Binary className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0" />;
       case "torrents":
-        return <Radio className="w-[18px] h-[18px] text-cyan-600 dark:text-cyan-400 shrink-0" />;
+        return <Radio className="w-4 h-4 text-cyan-600 dark:text-cyan-400 shrink-0" />;
       default:
-        return <Layers className="w-[18px] h-[18px] text-blue-600 dark:text-blue-400 shrink-0" />;
+        return <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />;
     }
   };
 
@@ -91,21 +123,45 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
   return (
     <div className="w-full bg-gdm-surface border border-gdm rounded-xl overflow-hidden shadow-xs">
-      <div className="overflow-x-auto scrollbar-thin">
-        <table className="w-full text-left border-collapse table-auto">
+      {/* Container: Vertical scroll only, zero horizontal scrollbar */}
+      <div className="w-full overflow-x-hidden overflow-y-auto">
+        <table className="w-full table-fixed border-separate border-spacing-0 text-left">
+          {/* Explicit column width allocations */}
+          <colgroup>
+            {showIndex && <col className="w-10" />}
+            <col /> {/* File Name takes remaining 1fr */}
+            {showSizeColumn && <col className="w-32" />}
+            <col className="w-36 sm:w-44" /> {/* Progress */}
+            <col className="w-24 sm:w-28" /> {/* Status */}
+            {showSpeed && <col className="w-28" />}
+            {showTimeLeft && <col className="w-24" />}
+            <col className="w-[120px]" /> {/* Actions */}
+          </colgroup>
+
           <thead>
-            <tr className="border-b border-gdm bg-gdm-tableHead text-gdm-secondary text-[12px] font-semibold uppercase tracking-wide select-none">
-              <th className="py-3 px-2 sm:px-3 w-8 sm:w-10 text-center whitespace-nowrap">#</th>
-              <th className="py-3 px-2 sm:px-3 whitespace-nowrap min-w-[140px]">File Name</th>
-              <th className="py-3 px-2 sm:px-3 w-28 sm:w-32 whitespace-nowrap">Size</th>
-              <th className="py-3 px-2 sm:px-3 w-36 sm:w-48 whitespace-nowrap">Progress</th>
-              <th className="py-3 px-2 sm:px-3 w-24 sm:w-28 whitespace-nowrap">Status</th>
-              <th className="py-3 px-3 w-28 whitespace-nowrap hidden lg:table-cell">Speed</th>
-              <th className="py-3 px-3 w-24 whitespace-nowrap hidden xl:table-cell">Time Left</th>
-              <th className="py-3 px-2 sm:px-3 w-28 sm:w-36 whitespace-nowrap text-right shrink-0 sticky right-0 bg-gdm-tableHead/95 backdrop-blur-xs z-10">Actions</th>
+            <tr className="bg-gdm-tableHead text-gdm-secondary text-[12px] font-semibold uppercase tracking-wide select-none">
+              {showIndex && (
+                <th className="py-3 px-2 text-center whitespace-nowrap border-b border-gdm">#</th>
+              )}
+              <th className="py-3 px-3 whitespace-nowrap truncate border-b border-gdm">File Name</th>
+              {showSizeColumn && (
+                <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Size</th>
+              )}
+              <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Progress</th>
+              <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Status</th>
+              {showSpeed && (
+                <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Speed</th>
+              )}
+              {showTimeLeft && (
+                <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Time Left</th>
+              )}
+              <th className="py-3 px-3 w-[120px] min-w-[120px] max-w-[120px] text-right whitespace-nowrap sticky right-0 z-20 bg-gdm-tableHead/95 backdrop-blur-md border-b border-gdm">
+                Actions
+              </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gdm">
+
+          <tbody>
             {tasks.map((task, idx) => {
               const isSelected = selectedTaskId === task.id;
               const isExpanded = expandedId === task.id;
@@ -118,74 +174,93 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                 <React.Fragment key={task.id}>
                   <tr
                     onClick={() => onSelectTask(task.id)}
-                    className={`min-h-[56px] py-3 cursor-pointer transition-colors ${
+                    className={`group min-h-[56px] cursor-pointer transition-colors ${
                       isSelected
-                        ? "bg-blue-50 dark:bg-blue-950/40"
-                        : "hover:bg-slate-50 dark:hover:bg-slate-800/40"
+                        ? "bg-blue-50/80 dark:bg-blue-950/40"
+                        : "hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
                     }`}
                   >
                     {/* Index */}
-                    <td className="py-3 px-2 sm:px-3 text-center text-gdm-muted text-[12px] sm:text-[13px] tabular-nums font-sans">
-                      {idx + 1}
-                    </td>
+                    {showIndex && (
+                      <td className="py-2.5 px-2 text-center text-gdm-muted text-[12px] tabular-nums font-sans border-b border-gdm">
+                        {idx + 1}
+                      </td>
+                    )}
 
-                    {/* File Name */}
-                    <td className="py-3 px-2 sm:px-3 min-w-0 max-w-[180px] sm:max-w-xs md:max-w-md">
-                      <div className="flex items-center space-x-2">
+                    {/* File Name (flexible 1fr, shrinks with ellipsis) + Size when below 800px */}
+                    <td className="py-2.5 px-3 min-w-0 max-w-0 truncate border-b border-gdm">
+                      <div className="flex items-center space-x-2 min-w-0">
                         {getCategoryIcon(task.category)}
-                        <span
-                          className="truncate text-[13px] sm:text-[14px] font-semibold text-gdm-primary hover:underline block"
-                          title={task.filename}
-                          onDoubleClick={() => {
-                            if (!isCompleted) return;
-                            const folder = task.save_path || task.savePath || "";
-                            const fn = task.filename || "";
-                            const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
-                            onOpenFile(full);
-                          }}
-                        >
-                          {task.filename}
-                        </span>
-                      </div>
-                    </td>
+                        <div className="min-w-0 flex-1 truncate">
+                          <span
+                            className="truncate text-[13px] font-semibold text-gdm-primary hover:underline block"
+                            title={task.filename}
+                            onDoubleClick={() => {
+                              if (!isCompleted) return;
+                              const folder = task.save_path || task.savePath || "";
+                              const fn = task.filename || "";
+                              const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
+                              onOpenFile(full);
+                            }}
+                          >
+                            {task.filename}
+                          </span>
 
-                    {/* Size & Resume Capability / Torrent Swarm */}
-                    <td className="py-3 px-2 sm:px-3 text-[12px] sm:text-[13px] tabular-nums font-sans text-gdm-primary whitespace-nowrap">
-                      <div>
-                        {formatBytes(getDownloadedBytes(task))} /{" "}
-                        {getTotalBytes(task) > 0 ? formatBytes(getTotalBytes(task)) : "Unknown"}
-                      </div>
-                      {task.category === "torrents" ? (
-                        <div className="flex items-center space-x-1.5 mt-0.5">
-                          <span className="text-[11px] sm:text-[12px] text-gdm-secondary">Seeds:</span>
-                          <span className="text-[11px] sm:text-[12px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            {task.seeders || 0}
-                          </span>
-                          <span className="text-[11px] sm:text-[12px] text-gdm-secondary">| Peers:</span>
-                          <span className="text-[11px] sm:text-[12px] font-semibold text-blue-600 dark:text-blue-400">
-                            {task.peers || 0}
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center space-x-1.5 mt-0.5">
-                          <span className="text-[11px] sm:text-[12px] text-gdm-secondary">Resume:</span>
-                          {getIsResumable(task) ? (
-                            <span className="text-[11px] sm:text-[12px] font-semibold text-emerald-700 dark:text-emerald-400">
-                              Yes
-                            </span>
-                          ) : (
-                            <span className="text-[11px] sm:text-[12px] font-semibold text-red-700 dark:text-red-400">
-                              No
-                            </span>
+                          {/* When Size column is hidden (<800px), display Size cleanly under file name */}
+                          {!showSizeColumn && (
+                            <div className="text-[11px] text-gdm-secondary tabular-nums truncate pt-0.5">
+                              {formatBytes(getDownloadedBytes(task))} /{" "}
+                              {getTotalBytes(task) > 0 ? formatBytes(getTotalBytes(task)) : "Unknown"}
+                              {task.category === "torrents"
+                                ? ` • S:${task.seeders || 0} P:${task.peers || 0}`
+                                : getIsResumable(task)
+                                ? " • Resume"
+                                : ""}
+                            </div>
                           )}
                         </div>
-                      )}
+                      </div>
                     </td>
 
+                    {/* Dedicated Size Column (visible >= 800px) */}
+                    {showSizeColumn && (
+                      <td className="py-2.5 px-3 text-[12px] tabular-nums font-sans text-gdm-primary whitespace-nowrap border-b border-gdm">
+                        <div>
+                          {formatBytes(getDownloadedBytes(task))} /{" "}
+                          {getTotalBytes(task) > 0 ? formatBytes(getTotalBytes(task)) : "Unknown"}
+                        </div>
+                        {task.category === "torrents" ? (
+                          <div className="flex items-center space-x-1.5 mt-0.5 text-[11px] text-gdm-secondary">
+                            <span>Seeds:</span>
+                            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                              {task.seeders || 0}
+                            </span>
+                            <span>| Peers:</span>
+                            <span className="font-semibold text-blue-600 dark:text-blue-400">
+                              {task.peers || 0}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center space-x-1.5 mt-0.5 text-[11px] text-gdm-secondary">
+                            <span>Resume:</span>
+                            {getIsResumable(task) ? (
+                              <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                                Yes
+                              </span>
+                            ) : (
+                              <span className="font-semibold text-red-700 dark:text-red-400">
+                                No
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                    )}
+
                     {/* Progress Bar & Percent */}
-                    <td className="py-3 px-2 sm:px-3">
+                    <td className="py-2.5 px-3 border-b border-gdm">
                       <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[12px] sm:text-[13px] font-semibold tabular-nums">
+                        <div className="flex justify-between items-center text-[12px] font-semibold tabular-nums">
                           <span className="text-gdm-primary">{task.percent.toFixed(1)}%</span>
                           {getChunkCount(task) > 1 && (
                             <span className="text-gdm-accent text-[11px] font-medium hidden sm:inline">
@@ -208,18 +283,20 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                             style={{ width: `${Math.min(100, Math.max(0, task.percent))}%` }}
                           />
                         </div>
-                        {/* Inline speed and ETA on narrower screens where individual columns are hidden */}
-                        <div className="lg:hidden flex items-center justify-between text-[11px] tabular-nums text-gdm-secondary pt-0.5">
-                          <span>{isDownloading ? getSpeedFormatted(task) : ""}</span>
-                          {isDownloading && <span>{getEtaFormatted(task)}</span>}
-                        </div>
+                        {/* Responsive inline speed and ETA when columns are hidden (<900px or <1000px) */}
+                        {(!showSpeed || !showTimeLeft) && (
+                          <div className="flex items-center justify-between text-[11px] tabular-nums text-gdm-secondary pt-0.5 truncate">
+                            <span>{!showSpeed && isDownloading ? getSpeedFormatted(task) : ""}</span>
+                            <span>{!showTimeLeft && isDownloading ? getEtaFormatted(task) : ""}</span>
+                          </div>
+                        )}
                       </div>
                     </td>
 
                     {/* Status Badge */}
-                    <td className="py-3 px-2 sm:px-3 whitespace-nowrap">
+                    <td className="py-2.5 px-3 whitespace-nowrap border-b border-gdm">
                       <span
-                        className={`inline-block text-[11px] sm:text-[12px] font-semibold uppercase tracking-wide px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md ${getStatusBadgeClass(
+                        className={`inline-block text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md ${getStatusBadgeClass(
                           task.status
                         )}`}
                       >
@@ -227,52 +304,62 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                       </span>
                     </td>
 
-                    {/* Speed: Transfer rate */}
-                    <td className="py-3 px-3 text-[13px] font-semibold tabular-nums text-amber-800 dark:text-amber-400 whitespace-nowrap hidden lg:table-cell">
-                      {isDownloading || task.status === "downloading" || task.status === "seeding" ? (
-                        <div>
-                          <div>{getSpeedFormatted(task)}</div>
-                          {task.up_speed_formatted && task.up_speed_formatted !== "0 B/s" && (
-                            <div className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-                              ↑ {task.up_speed_formatted}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        "--"
-                      )}
-                    </td>
+                    {/* Speed: Transfer rate (visible >= 900px) */}
+                    {showSpeed && (
+                      <td className="py-2.5 px-3 text-[12px] font-semibold tabular-nums text-amber-800 dark:text-amber-400 whitespace-nowrap border-b border-gdm">
+                        {isDownloading || task.status === "downloading" || task.status === "seeding" ? (
+                          <div>
+                            <div>{getSpeedFormatted(task)}</div>
+                            {task.up_speed_formatted && task.up_speed_formatted !== "0 B/s" && (
+                              <div className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                                ↑ {task.up_speed_formatted}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          "--"
+                        )}
+                      </td>
+                    )}
 
-                    {/* Time Left (ETA) */}
-                    <td className="py-3 px-3 text-[13px] tabular-nums font-sans text-gdm-secondary whitespace-nowrap hidden xl:table-cell">
-                      {isDownloading ? getEtaFormatted(task) : "--"}
-                    </td>
+                    {/* Time Left (visible >= 1000px) */}
+                    {showTimeLeft && (
+                      <td className="py-2.5 px-3 text-[12px] tabular-nums font-sans text-gdm-secondary whitespace-nowrap border-b border-gdm">
+                        {isDownloading ? getEtaFormatted(task) : "--"}
+                      </td>
+                    )}
 
-                    {/* Action Buttons: 32px hit area, 18px icons, text-secondary */}
-                    <td className="py-3 px-2 sm:px-3 text-right whitespace-nowrap shrink-0 sticky right-0 bg-gdm-surface/95 backdrop-blur-xs z-10">
+                    {/* Action Buttons: ALWAYS fully visible, sticky on right, fixed 120px, icon-only, no wrap */}
+                    <td
+                      className={`py-2.5 px-3 w-[120px] min-w-[120px] max-w-[120px] text-right whitespace-nowrap sticky right-0 z-10 border-b border-gdm backdrop-blur-md transition-colors ${
+                        isSelected
+                          ? "bg-blue-50/95 dark:bg-blue-950/85"
+                          : "bg-gdm-surface/95 dark:bg-[#0f172a]/95 group-hover:bg-slate-100/95 dark:group-hover:bg-slate-800/90"
+                      }`}
+                    >
                       <div
-                        className="flex items-center justify-end space-x-1 shrink-0"
+                        className="flex items-center justify-end space-x-1 w-full shrink-0 flex-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isDownloading && (
                           <button
                             onClick={() => onPause(task.id)}
-                            className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-amber-800 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-amber-800 dark:hover:text-amber-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title="Pause"
                             aria-label="Pause"
                           >
-                            <Pause className="w-[18px] h-[18px]" />
+                            <Pause className="w-4 h-4" />
                           </button>
                         )}
 
                         {(isPaused || isError) && (
                           <button
                             onClick={() => onResume(task.id)}
-                            className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title={isError ? "Retry Download" : "Resume Download"}
                             aria-label={isError ? "Retry" : "Resume"}
                           >
-                            <Play className="w-[18px] h-[18px] fill-current" />
+                            <Play className="w-4 h-4 fill-current" />
                           </button>
                         )}
 
@@ -284,57 +371,44 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                               const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
                               onOpenFile(full);
                             }}
-                            className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title="Open File"
                             aria-label="Open File"
                           >
-                            <FileCheck className="w-[18px] h-[18px]" />
+                            <FileCheck className="w-4 h-4" />
                           </button>
                         )}
 
-                        {/* Open Download Details Dialog */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onSelectTask(task.id);
-                          }}
-                          className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-gdm-primary hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="View Download Details"
-                          aria-label="Open Download Dialog"
-                        >
-                          <Info className="w-[18px] h-[18px]" />
-                        </button>
-
                         <button
                           onClick={() => onOpenFolder(task.save_path || task.savePath || "")}
-                          className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-gdm-primary hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                           title="Open Folder"
                           aria-label="Open Folder"
                         >
-                          <FolderOpen className="w-[18px] h-[18px]" />
+                          <FolderOpen className="w-4 h-4" />
                         </button>
 
                         <button
                           onClick={() => onDelete(task.id)}
-                          className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                           title="Delete"
                           aria-label="Delete"
                         >
-                          <Trash2 className="w-[18px] h-[18px]" />
+                          <Trash2 className="w-4 h-4" />
                         </button>
 
                         {/* Expand Chunk Drawer */}
                         {task.chunks && task.chunks.length > 0 && (
                           <button
                             onClick={() => setExpandedId(isExpanded ? null : task.id)}
-                            className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-gdm-primary hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title="Toggle Chunks Drawer"
                             aria-label="Toggle Chunks"
                           >
                             {isExpanded ? (
-                              <ChevronUp className="w-[18px] h-[18px]" />
+                              <ChevronUp className="w-4 h-4" />
                             ) : (
-                              <ChevronDown className="w-[18px] h-[18px]" />
+                              <ChevronDown className="w-4 h-4" />
                             )}
                           </button>
                         )}
@@ -344,8 +418,8 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                   {/* IDM 16-Chunk Drawer */}
                   {isExpanded && task.chunks && task.chunks.length > 0 && (
-                    <tr className="bg-slate-50 dark:bg-slate-900/60 border-b border-gdm">
-                      <td colSpan={8} className="p-4">
+                    <tr className="bg-slate-50 dark:bg-slate-900/60">
+                      <td colSpan={totalVisibleCols} className="p-4 border-b border-gdm">
                         <div className="space-y-3">
                           <div className="flex items-center justify-between text-[12px] text-gdm-secondary">
                             <span className="font-semibold flex items-center space-x-1.5 text-gdm-primary">

@@ -382,7 +382,11 @@ pub async fn execute_multithreaded_download(
         }
     }
 
-    let temp_dir = std::env::temp_dir().join(format!("gdm_chunks_{}", task_id));
+    let target_parent = PathBuf::from(&save_path)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::env::temp_dir());
+    let temp_dir = target_parent.join(format!(".gdm_tmp_{}", task_id));
     fs::create_dir_all(&temp_dir).await.map_err(|e| e.to_string())?;
 
     // Create cancel broadcast channel
@@ -725,6 +729,8 @@ pub async fn execute_multithreaded_download(
         let mut tasks = state.tasks.write().await;
         if let Some(t) = tasks.get_mut(&task_id) {
             t.status = "assembling".to_string();
+            t.speed_formatted = "Assembling chunks...".to_string();
+            t.eta_formatted = "Finishing...".to_string();
             let _ = app.emit("download-progress", t.clone());
             let _ = app.emit("gdm://progress", t.clone());
         }
@@ -764,6 +770,17 @@ pub async fn execute_multithreaded_download(
         let mut merge_buf = vec![0u8; 8 * 1024 * 1024]; // 8 MB buffer for lightning-fast disk I/O
 
         for i in start_idx..chunk_count {
+            // Live progress update for each chunk merged
+            {
+                let mut tasks = state.tasks.write().await;
+                if let Some(t) = tasks.get_mut(&task_id) {
+                    t.status = "assembling".to_string();
+                    t.speed_formatted = format!("Merging chunk {}/{}", i + 1, chunk_count);
+                    let _ = app.emit("download-progress", t.clone());
+                    let _ = app.emit("gdm://progress", t.clone());
+                }
+            }
+
             let part_file_path = temp_dir.join(format!("chunk_{}.part", i));
             if let Ok(mut part_file) = File::open(&part_file_path).await {
                 loop {
@@ -771,6 +788,8 @@ pub async fn execute_multithreaded_download(
                     if n == 0 { break; }
                     dest_file.write_all(&merge_buf[..n]).await.map_err(|e| e.to_string())?;
                 }
+                // Free disk space immediately after merging each chunk
+                let _ = fs::remove_file(&part_file_path).await;
             }
         }
         dest_file.flush().await.map_err(|e| e.to_string())?;
