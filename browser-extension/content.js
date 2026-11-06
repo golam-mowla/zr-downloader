@@ -113,6 +113,13 @@
     return clean.startsWith("http://") || clean.startsWith("https://");
   }
 
+  function getShortTitle(str, maxLen = 28) {
+    if (!str) return "Video";
+    const clean = str.replace(/\s+/g, " ").trim();
+    if (clean.length <= maxLen) return clean;
+    return clean.slice(0, maxLen).trim() + "...";
+  }
+
   function formatBytes(bytes) {
     if (!bytes || bytes <= 0) return "";
     const mb = bytes / (1024 * 1024);
@@ -589,10 +596,15 @@
       }
 
       // Add ONLY qualities that actually exist for this video
+      const shortTitle = getShortTitle(title, 28);
       availableQualities.forEach((q) => {
+        const qTag = q.toLowerCase().includes("hd") || parseInt(q, 10) < 720 ? q : `${q} HD`;
         options.push({
-          label: `${title}, MP4 file, ${durStr}quality ${q}`,
-          quality: q,
+          label: `${shortTitle}, MP4 file, quality ${qTag}`,
+          fullLabel: `${title}, MP4 file, ${durStr}quality ${qTag}`,
+          shortTitle: shortTitle,
+          formatDisplay: `${qTag} • MP4`,
+          quality: qTag,
           url: mediaTarget.url || window.location.href,
           container: "MP4",
         });
@@ -600,7 +612,10 @@
 
       // MP3 Audio
       options.push({
-        label: `${title}, MP3 Audio, ${durStr}Highest Quality`,
+        label: `${shortTitle}, MP3 Audio, Highest Quality`,
+        fullLabel: `${title}, MP3 Audio, ${durStr}Highest Quality`,
+        shortTitle: shortTitle,
+        formatDisplay: "MP3 Audio (320k)",
         quality: "Audio",
         url: mediaTarget.url || window.location.href,
         container: "MP3",
@@ -614,7 +629,10 @@
           : "");
       if (thumbUrl) {
         options.push({
-          label: `${title}, Thumbnail (High Quality JPG Image)`,
+          label: `${shortTitle}, Thumbnail (High Quality JPG Image)`,
+          fullLabel: `${title}, Thumbnail (High Quality JPG Image)`,
+          shortTitle: shortTitle,
+          formatDisplay: "Thumbnail JPG",
           quality: "Thumbnail",
           url: thumbUrl,
           container: "JPG",
@@ -627,7 +645,10 @@
       if (ytData && Array.isArray(ytData.subtitles) && ytData.subtitles.length > 0) {
         ytData.subtitles.forEach((sub) => {
           options.push({
-            label: `${title}, Subtitle - ${sub.name} [${sub.languageCode.toUpperCase()}] (.vtt)`,
+            label: `${shortTitle}, Subtitle - ${sub.name} [${sub.languageCode.toUpperCase()}] (.vtt)`,
+            fullLabel: `${title}, Subtitle - ${sub.name} [${sub.languageCode.toUpperCase()}] (.vtt)`,
+            shortTitle: shortTitle,
+            formatDisplay: `Sub [${sub.languageCode.toUpperCase()}]`,
             quality: "Subtitle",
             url: sub.baseUrl.includes("fmt=")
               ? sub.baseUrl
@@ -641,6 +662,7 @@
     } else if (hostname.includes("instagram.com")) {
       // 2. Instagram (Reels & Feed)
       const cleanTitle = title.length > 55 ? title.slice(0, 55) + "..." : title;
+      const shortTitle = getShortTitle(cleanTitle, 28);
       const targetInstagramUrl =
         mediaTarget.postUrl || mediaTarget.url || window.location.href;
 
@@ -655,7 +677,10 @@
       else if (maxDim > 0) detectedQuality = `${Math.min(vW, vH)}p`;
 
       options.push({
-        label: `${cleanTitle}, MP4 file, ${durStr}quality ${detectedQuality} (Original HD Quality, with Sound)`,
+        label: `${shortTitle}, MP4 file, quality ${detectedQuality}`,
+        fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality ${detectedQuality} (Original HD Quality, with Sound)`,
+        shortTitle: shortTitle,
+        formatDisplay: `${detectedQuality} • MP4`,
         quality: detectedQuality,
         url: targetInstagramUrl,
         container: "MP4",
@@ -663,7 +688,10 @@
 
       if (detectedQuality === "1080p HD") {
         options.push({
-          label: `${cleanTitle}, MP4 file, ${durStr}quality 720p HD (with Sound)`,
+          label: `${shortTitle}, MP4 file, quality 720p HD`,
+          fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality 720p HD (with Sound)`,
+          shortTitle: shortTitle,
+          formatDisplay: "720p HD • MP4",
           quality: "720p HD",
           url: targetInstagramUrl,
           container: "MP4",
@@ -671,7 +699,10 @@
       }
       if (detectedQuality === "1080p HD" || detectedQuality === "720p HD") {
         options.push({
-          label: `${cleanTitle}, MP4 file, ${durStr}quality 480p (with Sound)`,
+          label: `${shortTitle}, MP4 file, quality 480p`,
+          fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality 480p (with Sound)`,
+          shortTitle: shortTitle,
+          formatDisplay: "480p • MP4",
           quality: "480p",
           url: targetInstagramUrl,
           container: "MP4",
@@ -679,7 +710,10 @@
       }
 
       options.push({
-        label: `${cleanTitle}, MP3 Audio, ${durStr}Highest Quality (Extracted Audio)`,
+        label: `${shortTitle}, MP3 Audio, Highest Quality`,
+        fullLabel: `${cleanTitle}, MP3 Audio, ${durStr}Highest Quality (Extracted Audio)`,
+        shortTitle: shortTitle,
+        formatDisplay: "MP3 Audio",
         quality: "Audio",
         url: targetInstagramUrl,
         container: "MP3",
@@ -688,7 +722,10 @@
       const poster = mediaTarget.thumbnail || (vid && vid.poster);
       if (poster && isValidDownloadUrl(poster)) {
         options.push({
-          label: `${cleanTitle}, Thumbnail / Cover Image (High Quality JPG)`,
+          label: `${shortTitle}, Thumbnail / Cover Image (High Quality JPG)`,
+          fullLabel: `${cleanTitle}, Thumbnail / Cover Image (High Quality JPG)`,
+          shortTitle: shortTitle,
+          formatDisplay: "Cover JPG",
           quality: "Thumbnail",
           url: poster,
           container: "JPG",
@@ -815,8 +852,8 @@
       border: "1px solid #717171",
       boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
       borderRadius: "2px",
-      minWidth: "340px",
-      maxWidth: "560px",
+      minWidth: "380px",
+      maxWidth: "640px",
       fontFamily: 'Tahoma, "Segoe UI", Arial, sans-serif',
       fontSize: "12px",
       color: "#0f172a",
@@ -872,27 +909,57 @@
 
     options.forEach((opt, idx) => {
       const item = document.createElement("div");
-      item.innerText = `${idx + 1}. ${opt.label}`;
-      item.title = opt.label;
+      item.title = opt.fullLabel || opt.label;
       Object.assign(item.style, {
-        padding: "5px 12px",
-        fontSize: "11.5px",
+        padding: "6px 14px",
+        fontSize: "12px",
         color: "#0f172a",
         cursor: "pointer",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "10px",
         borderBottom: "1px solid #f1f5f9",
         transition: "background 0.08s ease, color 0.08s ease",
       });
 
+      const titleSpan = document.createElement("span");
+      titleSpan.innerText = `${idx + 1}. ${opt.shortTitle || getShortTitle(mediaTarget.title, 26)}`;
+      Object.assign(titleSpan.style, {
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        flex: "1",
+        minWidth: "0",
+      });
+
+      const formatSpan = document.createElement("span");
+      formatSpan.innerText = opt.formatDisplay || opt.quality;
+      Object.assign(formatSpan.style, {
+        whiteSpace: "nowrap",
+        fontWeight: "700",
+        fontSize: "11px",
+        padding: "2px 8px",
+        borderRadius: "4px",
+        background: "rgba(37, 99, 235, 0.08)",
+        color: "#2563eb",
+        flexShrink: "0",
+      });
+
+      item.appendChild(titleSpan);
+      item.appendChild(formatSpan);
+
       item.addEventListener("mouseenter", () => {
         item.style.background = "#2563eb";
         item.style.color = "#ffffff";
+        formatSpan.style.background = "rgba(255, 255, 255, 0.25)";
+        formatSpan.style.color = "#ffffff";
       });
       item.addEventListener("mouseleave", () => {
         item.style.background = "transparent";
         item.style.color = "#0f172a";
+        formatSpan.style.background = "rgba(37, 99, 235, 0.08)";
+        formatSpan.style.color = "#2563eb";
       });
 
       item.addEventListener("click", (e) => {
