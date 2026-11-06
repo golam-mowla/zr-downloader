@@ -1,4 +1,4 @@
-﻿package com.golammowla.zrdownloader.data.repository
+package com.golammowla.zrdownloader.data.repository
 
 import android.content.Context
 import androidx.work.Constraints
@@ -16,6 +16,7 @@ import com.golammowla.zrdownloader.domain.model.DownloadCategory
 import com.golammowla.zrdownloader.domain.model.DownloadItem
 import com.golammowla.zrdownloader.domain.model.DownloadStatus
 import com.golammowla.zrdownloader.domain.repository.DownloadRepository
+import com.yausername.youtubedl_android.YoutubeDL
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -34,6 +35,16 @@ class DownloadRepositoryImpl @Inject constructor(
 ) : DownloadRepository {
 
     private val workManager by lazy { WorkManager.getInstance(context) }
+
+    private fun isMediaUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("youtube.com") || lower.contains("youtu.be") ||
+                lower.contains("googlevideo.com") || lower.contains("instagram.com") ||
+                lower.contains("facebook.com") || lower.contains("fb.watch") ||
+                lower.contains("tiktok.com") || lower.contains("kick.com") ||
+                lower.contains("twitch.tv") || lower.contains("twitter.com") ||
+                lower.contains("x.com") || lower.contains("vimeo.com")
+    }
 
     override fun getAllDownloads(): Flow<List<DownloadItem>> {
         return downloadDao.getAllFlow().map { list -> list.map { it.toDomain() } }
@@ -63,24 +74,40 @@ class DownloadRepositoryImpl @Inject constructor(
     ): String {
         val taskId = "zr_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(6)}"
         val prefs = preferencesRepository.preferencesFlow.first()
+        val isMedia = isMediaUrl(url)
 
-        val probe = downloadEngine.probeUrl(url)
-        val finalFilename = filename?.takeIf { it.isNotBlank() } ?: probe.suggestedFilename
+        val finalFilename = if (!filename.isNullOrBlank()) {
+            filename
+        } else if (isMedia) {
+            "Media_${System.currentTimeMillis()}.mp4"
+        } else {
+            downloadEngine.probeUrl(url).suggestedFilename
+        }
+
         val finalSavePath = savePath?.takeIf { it.isNotBlank() } ?: prefs.downloadPath
         val finalChunks = if (chunkCount in 1..32) chunkCount else prefs.defaultConnections
+
+        val isAudio = finalFilename.endsWith(".mp3", ignoreCase = true) || finalFilename.endsWith(".m4a", ignoreCase = true)
+        val category = when {
+            isAudio -> DownloadCategory.AUDIO
+            isMedia -> DownloadCategory.VIDEOS
+            else -> downloadEngine.probeUrl(url).category
+        }
+
+        val totalBytes = if (isMedia) -1L else downloadEngine.probeUrl(url).totalBytes
 
         val item = DownloadItem(
             id = taskId,
             url = url,
             filename = finalFilename,
             savePath = finalSavePath,
-            totalBytes = probe.totalBytes,
+            totalBytes = totalBytes,
             downloadedBytes = 0L,
             percent = 0f,
             status = DownloadStatus.DOWNLOADING,
-            category = probe.category,
+            category = category,
             chunkCount = finalChunks,
-            isResumable = probe.isResumable,
+            isResumable = true,
             createdAt = System.currentTimeMillis()
         )
 
@@ -91,6 +118,9 @@ class DownloadRepositoryImpl @Inject constructor(
     }
 
     override suspend fun pauseDownload(id: String) {
+        try {
+            YoutubeDL.getInstance().destroyProcessById(id)
+        } catch (_: Exception) {}
         downloadEngine.cancelTask(id)
         workManager.cancelUniqueWork(id)
         val current = downloadDao.getById(id)?.toDomain()
@@ -104,50 +134,38 @@ class DownloadRepositoryImpl @Inject constructor(
     }
 
     override suspend fun resumeDownload(id: String) {
+        val item = downloadDao.getById(id)?.toDomain() ?: return
         val prefs = preferencesRepository.preferencesFlow.first()
-        val current = downloadDao.getById(id)?.toDomain()
-        if (current != null) {
-            downloadDao.update(
-                DownloadEntity.fromDomain(
-                    current.copy(status = DownloadStatus.QUEUED, errorMessage = null)
-                )
-            )
-            enqueueWorker(id, prefs.wifiOnly)
-        }
-    }
 
-    override suspend fun cancelDownload(id: String) {
-        pauseDownload(id)
+        downloadDao.update(
+            DownloadEntity.fromDomain(
+                item.copy(status = DownloadStatus.DOWNLOADING, speedFormatted = "Resuming...", etaFormatted = "--")
+            )
+        )
+        enqueueWorker(id, prefs.wifiOnly)
     }
 
     override suspend fun deleteDownload(id: String, deleteFile: Boolean) {
         pauseDownload(id)
-        if (deleteFile) {
-            val item = downloadDao.getById(id)?.toDomain()
-            if (item != null) {
-                val f = File(item.savePath, item.filename)
-                if (f.exists()) f.delete()
+        val item = downloadDao.getById(id)?.toDomain()
+        downloadDao.deleteById(id)
+
+        if (deleteFile && item != null) {
+            try {
+                val file = File(item.savePath, item.filename)
+                if (file.exists()) file.delete()
+                val partDir = File(item.savePath, ".zr_tmp_$id")
+                if (partDir.exists()) partDir.deleteRecursively()
+            } catch (e: Exception) {
+                // Ignore file deletion errors
             }
         }
-        downloadDao.deleteById(id)
-    }
-
-    override suspend fun retryDownload(id: String) {
-        resumeDownload(id)
-    }
-
-    override suspend fun updateDownload(item: DownloadItem) {
-        downloadDao.update(DownloadEntity.fromDomain(item))
     }
 
     private fun enqueueWorker(taskId: String, wifiOnly: Boolean) {
-        val constraints = Constraints.Builder().apply {
-            if (wifiOnly) {
-                setRequiredNetworkType(NetworkType.UNMETERED)
-            } else {
-                setRequiredNetworkType(NetworkType.CONNECTED)
-            }
-        }.build()
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+            .build()
 
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setConstraints(constraints)
@@ -157,4 +175,3 @@ class DownloadRepositoryImpl @Inject constructor(
         workManager.enqueueUniqueWork(taskId, ExistingWorkPolicy.REPLACE, request)
     }
 }
-

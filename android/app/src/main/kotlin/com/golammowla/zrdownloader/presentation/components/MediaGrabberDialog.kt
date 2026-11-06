@@ -462,15 +462,15 @@ fun MediaGrabberDialog(
                             val sanitizedTitle = inspectedTitle
                                 ?.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
                                 ?.take(80)
+                            val qualityTag = if (selectedFormat.isAudio) "[Audio]" else "[${selectedFormat.id}]"
                             val targetFilename = if (!sanitizedTitle.isNullOrBlank()) {
-                                "$sanitizedTitle.${selectedFormat.ext}"
+                                "$sanitizedTitle $qualityTag.${selectedFormat.ext}"
                             } else {
-                                "Media_${System.currentTimeMillis()}.${selectedFormat.ext}"
+                                "Media_${System.currentTimeMillis()} $qualityTag.${selectedFormat.ext}"
                             }
 
-                            // Pass direct stream URL if available, else original URL
-                            val downloadUrl = selectedFormat.streamUrl ?: clean
-                            onStartDownload(downloadUrl, targetFilename, 16)
+                            // Pass original URL so native embedded yt-dlp & FFmpeg process it
+                            onStartDownload(clean, targetFilename, 16)
                             onDismiss()
                         }
                     },

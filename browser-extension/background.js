@@ -392,6 +392,17 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
   let cleanUrl = normalizeMediaUrl((mediaUrl || "").trim());
   if (!cleanUrl) return;
 
+  // Resolve active tab if not passed
+  let effectiveTabId = tabId;
+  if (!effectiveTabId) {
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab && activeTab.id) {
+        effectiveTabId = activeTab.id;
+      }
+    } catch {}
+  }
+
   // Resolve Instagram reel/post page URL if direct video-only CDN URL was intercepted
   if (
     cleanUrl.includes("cdninstagram.com") ||
@@ -408,17 +419,6 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
         }
       } catch {}
     }
-  }
-
-  // Resolve active tab if not passed
-  let effectiveTabId = tabId;
-  if (!effectiveTabId) {
-    try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (activeTab && activeTab.id) {
-        effectiveTabId = activeTab.id;
-      }
-    } catch {}
   }
 
   // Notify tab that request is in progress
@@ -440,7 +440,7 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
   // 1. Try sending to local bridge HTTP server (if app is running)
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 1400);
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
 
     const filenameParam = customFilename ? `&filename=${encodeURIComponent(customFilename)}` : "";
     const qualityParam = quality ? `&quality=${encodeURIComponent(quality)}` : "";
@@ -492,12 +492,15 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
       await chrome.scripting.executeScript({
         target: { tabId: effectiveTabId },
         func: (proto, raw) => {
-          navigator.clipboard.writeText(raw).catch(() => {});
-          const iframe = document.createElement("iframe");
-          iframe.style.display = "none";
-          iframe.src = proto;
-          document.body.appendChild(iframe);
-          setTimeout(() => iframe.remove(), 2500);
+          try {
+            navigator.clipboard.writeText(raw).catch(() => {});
+          } catch {}
+          const a = document.createElement("a");
+          a.href = proto;
+          a.style.display = "none";
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => a.remove(), 1500);
         },
         args: [protocolUrl, cleanUrl],
       });
@@ -512,12 +515,12 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
       return { success: true, method: "protocol" };
     } catch (e) {
       chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
-        setTimeout(() => chrome.tabs.remove(t.id), 2000);
+        setTimeout(() => chrome.tabs.remove(t.id), 2500);
       });
     }
   } else {
     chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
-      setTimeout(() => chrome.tabs.remove(t.id), 2000);
+      setTimeout(() => chrome.tabs.remove(t.id), 2500);
     });
   }
 
@@ -526,7 +529,7 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
 
 // Listen to messages from popup or content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "SEND_TO_ZR") {
+  if (request.action === "SEND_TO_ZR" || request.action === "SEND_TO_GDM") {
     const tabId = sender && sender.tab ? sender.tab.id : null;
     sendUrlToZr(
       request.url,
@@ -552,7 +555,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === "CHECK_ZR_STATUS") {
+  if (request.action === "CHECK_ZR_STATUS" || request.action === "CHECK_GDM_STATUS") {
     fetch(`${ZR_BRIDGE_URL}/ping`, { method: "GET" })
       .then((res) => res.json())
       .then((data) => sendResponse({ online: true, data }))

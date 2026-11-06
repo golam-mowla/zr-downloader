@@ -1,4 +1,4 @@
-﻿package com.golammowla.zrdownloader.data.worker
+package com.golammowla.zrdownloader.data.worker
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,6 +12,8 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.golammowla.zrdownloader.MainActivity
 import com.golammowla.zrdownloader.data.database.dao.DownloadDao
 import com.golammowla.zrdownloader.data.database.entity.DownloadEntity
@@ -49,41 +51,98 @@ class DownloadWorker @AssistedInject constructor(
             )
 
             val targetFile = File(domainItem.savePath, domainItem.filename)
+            val parentDir = targetFile.parentFile
+            if (parentDir != null && !parentDir.exists()) {
+                parentDir.mkdirs()
+            }
 
-            downloadEngine.download(
-                taskId = taskId,
-                url = domainItem.url,
-                targetFile = targetFile,
-                totalBytes = domainItem.totalBytes,
-                isResumable = domainItem.isResumable,
-                chunkCount = domainItem.chunkCount,
-                existingSegments = domainItem.segments,
-                onProgress = { update ->
+            if (isMediaUrl(domainItem.url)) {
+                val isAudio = domainItem.filename.endsWith(".mp3", ignoreCase = true) ||
+                        domainItem.filename.endsWith(".m4a", ignoreCase = true) ||
+                        domainItem.filename.contains("[Audio]", ignoreCase = true)
+
+                val request = YoutubeDLRequest(domainItem.url)
+                request.addOption("-o", targetFile.absolutePath)
+                request.addOption("--no-part")
+                request.addOption("--no-playlist")
+                request.addOption("-c")
+
+                if (isAudio) {
+                    request.addOption("-x")
+                    request.addOption("--audio-format", "mp3")
+                    request.addOption("-f", "ba/b")
+                } else {
+                    val fn = domainItem.filename
+                    val formatMatch = "\\[(\\d+p?)\\]".toRegex().find(fn)?.groupValues?.get(1)
+                    if (formatMatch != null) {
+                        val res = formatMatch.replace("p", "")
+                        request.addOption("-f", "bestvideo[height<=$res]+bestaudio/best[height<=$res]/best")
+                    } else {
+                        request.addOption("-f", "bestvideo+bestaudio/best")
+                    }
+                    request.addOption("--merge-output-format", "mp4")
+                }
+
+                YoutubeDL.getInstance().execute(request, taskId) { progress, etaInSeconds, line ->
+                    val pct = progress.coerceIn(0f, 100f)
+                    val etaStr = if (etaInSeconds > 0) "${etaInSeconds}s" else "--"
+                    val speedStr = if (!line.isNullOrBlank()) line.trim() else "Downloading..."
+
                     val updatedItem = domainItem.copy(
-                        downloadedBytes = update.downloadedBytes,
-                        totalBytes = update.totalBytes,
-                        percent = update.percent,
-                        speedBps = update.speedBps,
-                        speedFormatted = update.speedFormatted,
-                        etaFormatted = update.etaFormatted,
-                        status = if (update.percent >= 100f) DownloadStatus.COMPLETED else DownloadStatus.DOWNLOADING,
-                        segments = update.segments
+                        percent = pct,
+                        speedFormatted = speedStr,
+                        etaFormatted = etaStr,
+                        status = if (pct >= 100f) DownloadStatus.COMPLETED else DownloadStatus.DOWNLOADING
                     )
-
                     downloadDao.update(DownloadEntity.fromDomain(updatedItem))
 
-                    if (update.percent < 100f) {
+                    if (pct < 100f) {
                         notificationManager.notify(
                             notifId,
                             buildNotification(
                                 domainItem.filename,
-                                update.percent.toInt(),
-                                "${update.speedFormatted} • ETA ${update.etaFormatted}"
+                                pct.toInt(),
+                                "$speedStr • ETA $etaStr"
                             )
                         )
                     }
                 }
-            )
+            } else {
+                downloadEngine.download(
+                    taskId = taskId,
+                    url = domainItem.url,
+                    targetFile = targetFile,
+                    totalBytes = domainItem.totalBytes,
+                    isResumable = domainItem.isResumable,
+                    chunkCount = domainItem.chunkCount,
+                    existingSegments = domainItem.segments,
+                    onProgress = { update ->
+                        val updatedItem = domainItem.copy(
+                            downloadedBytes = update.downloadedBytes,
+                            totalBytes = update.totalBytes,
+                            percent = update.percent,
+                            speedBps = update.speedBps,
+                            speedFormatted = update.speedFormatted,
+                            etaFormatted = update.etaFormatted,
+                            status = if (update.percent >= 100f) DownloadStatus.COMPLETED else DownloadStatus.DOWNLOADING,
+                            segments = update.segments
+                        )
+
+                        downloadDao.update(DownloadEntity.fromDomain(updatedItem))
+
+                        if (update.percent < 100f) {
+                            notificationManager.notify(
+                                notifId,
+                                buildNotification(
+                                    domainItem.filename,
+                                    update.percent.toInt(),
+                                    "${update.speedFormatted} • ETA ${update.etaFormatted}"
+                                )
+                            )
+                        }
+                    }
+                )
+            }
 
             // Mark as completed in database
             val latest = downloadDao.getById(taskId)?.toDomain() ?: domainItem
@@ -102,6 +161,9 @@ class DownloadWorker @AssistedInject constructor(
             Result.success()
         } catch (e: CancellationException) {
             Timber.i("DownloadWorker paused or cancelled: $taskId")
+            try {
+                YoutubeDL.getInstance().destroyProcessById(taskId)
+            } catch (_: Exception) {}
             val current = downloadDao.getById(taskId)?.toDomain() ?: domainItem
             downloadDao.update(
                 DownloadEntity.fromDomain(
@@ -112,6 +174,9 @@ class DownloadWorker @AssistedInject constructor(
             Result.success()
         } catch (e: Exception) {
             Timber.e(e, "DownloadWorker failed for $taskId")
+            try {
+                YoutubeDL.getInstance().destroyProcessById(taskId)
+            } catch (_: Exception) {}
             val current = downloadDao.getById(taskId)?.toDomain() ?: domainItem
             downloadDao.update(
                 DownloadEntity.fromDomain(
@@ -126,6 +191,16 @@ class DownloadWorker @AssistedInject constructor(
             showErrorNotification(domainItem.filename, e.localizedMessage ?: "Download failed", notifId)
             Result.failure()
         }
+    }
+
+    private fun isMediaUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("youtube.com") || lower.contains("youtu.be") ||
+                lower.contains("googlevideo.com") || lower.contains("instagram.com") ||
+                lower.contains("facebook.com") || lower.contains("fb.watch") ||
+                lower.contains("tiktok.com") || lower.contains("kick.com") ||
+                lower.contains("twitch.tv") || lower.contains("twitter.com") ||
+                lower.contains("x.com") || lower.contains("vimeo.com")
     }
 
     private fun createForegroundInfo(filename: String, progress: Int, statusText: String, notifId: Int): ForegroundInfo {
