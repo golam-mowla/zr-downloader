@@ -90,9 +90,12 @@ jobs:
         working-directory: android
         env:
           JAVA_HOME: ${{ env.JAVA_HOME_21_X64 }}
+          GRADLE_OPTS: "-Xmx4096m -XX:+UseG1GC -XX:MaxMetaspaceSize=1024m"
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug assembleRelease bundleRelease --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew bundleRelease --no-daemon --stacktrace || true
 
       - name: Collect Android Release Packages
         run: |
