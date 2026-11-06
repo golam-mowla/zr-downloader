@@ -1,4 +1,4 @@
-﻿package com.golammowla.zrdownloader.presentation.screens
+package com.golammowla.zrdownloader.presentation.screens
 
 import android.widget.Toast
 import androidx.compose.foundation.Image
@@ -125,7 +125,7 @@ fun MainScreen(
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Red Goat Logo Tile (.logo: 36x36, radius 12dp)
+                    // Red ZR Logo Tile (.logo: 36x36, radius 12dp)
                     val logoShape = RoundedCornerShape(12.dp)
                     Box(
                         modifier = Modifier

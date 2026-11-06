@@ -231,7 +231,7 @@ fn get_augmented_path() -> String {
         extra_dirs.push(local.clone());
         extra_dirs.push(local.join("ZR Downloader").join("bin"));
         extra_dirs.push(local.join("ZR Downloader"));
-        extra_dirs.push(local.join("Goat Download Manager").join("bin"));
+        extra_dirs.push(local.join("ZR Downloader").join("bin"));
         extra_dirs.push(local.join("GM-Downloader").join("bin"));
         extra_dirs.push(local.join("Programs").join("yt-dlp"));
 
@@ -346,7 +346,7 @@ fn ensure_ffmpeg_available() -> Option<PathBuf> {
             let candidates = [
                 PathBuf::from(&local).join("ZR Downloader").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("ZR Downloader").join("ffmpeg.exe"),
-                PathBuf::from(&local).join("Goat Download Manager").join("bin").join("ffmpeg.exe"),
+                PathBuf::from(&local).join("ZR Downloader").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("GM-Downloader").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("ffmpeg.exe"),
             ];

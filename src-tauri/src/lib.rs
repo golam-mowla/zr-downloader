@@ -280,7 +280,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     }
 
                     if req_str.contains("/ping") {
-                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.5\"}\r\n";
+                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.7\"}\r\n";
                         let _ = stream.write_all(resp.as_bytes()).await;
                         return;
                     }
