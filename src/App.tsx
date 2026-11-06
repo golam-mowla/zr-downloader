@@ -82,7 +82,7 @@ export const App: React.FC = () => {
   const defaultDirRef = useRef(defaultDir);
   defaultDirRef.current = defaultDir;
   const handleAddMediaDownloadRef = useRef<(options: any) => Promise<void>>(() => Promise.resolve());
-  const handleAddDirectDownloadRef = useRef<(url: string, savePath: string, filename: string, connections: number) => Promise<void>>(() => Promise.resolve());
+  const handleAddDirectDownloadRef = useRef<(url: string, savePath: string, filename: string, connections: number, lowDiskSpace?: boolean) => Promise<void>>(() => Promise.resolve());
   const handleAddTorrentDownloadRef = useRef<(urlOrPath: string, savePath: string, sequential: boolean) => Promise<void>>(() => Promise.resolve());
 
   useEffect(() => {
@@ -340,7 +340,8 @@ export const App: React.FC = () => {
               clean,
               defaultDirRef.current,
               targetFilename,
-              16
+              16,
+              Boolean(raw.lowDiskSpace)
             );
           } else {
             const isAudio = targetQuality.toLowerCase().includes("audio");
@@ -777,9 +778,14 @@ export const App: React.FC = () => {
     url: string,
     savePath: string,
     filename: string,
-    connections: number
+    connections: number,
+    lowDiskSpace?: boolean
   ) => {
     try {
+      const isLowSpace = lowDiskSpace !== undefined
+        ? lowDiskSpace
+        : (localStorage.getItem("zr_low_disk_space") === "true");
+
       const androidBridge = (window as any).GMAndroidBridge;
       if (androidBridge?.startDownload) {
         const taskId = `direct-${Date.now()}`;
@@ -799,6 +805,8 @@ export const App: React.FC = () => {
           category: "compressed",
           chunk_count: connections || 8,
           is_resumable: true,
+          low_disk_space: isLowSpace,
+          lowDiskSpace: isLowSpace,
           chunks: [],
           speedHistory: [],
           errorMessage: undefined,
@@ -814,6 +822,7 @@ export const App: React.FC = () => {
         saveFolder: savePath || null,
         filename: filename || null,
         chunkCount: connections,
+        lowDiskSpace: isLowSpace,
       });
       const updated = await invoke<DownloadTask[]>("get_all_downloads");
       setTasks(updated);

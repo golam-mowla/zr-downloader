@@ -41,6 +41,7 @@ async fn start_http_download(
     filename: Option<String>,
     save_folder: Option<String>,
     chunk_count: Option<usize>,
+    low_disk_space: Option<bool>,
 ) -> Result<String, String> {
     let meta = downloader::probe_url(&state.client, &url).await.unwrap_or(UrlMetadata {
         url: url.clone(),
@@ -88,6 +89,7 @@ async fn start_http_download(
         category,
         chunk_count: chunks,
         is_resumable: meta.supports_ranges,
+        low_disk_space: low_disk_space.unwrap_or(false),
         chunks: Vec::new(),
         speed_history: Vec::new(),
         error_message: None,
@@ -291,6 +293,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     let mut is_torrent = false;
                     let mut auto_start = false;
                     let mut is_direct_file = false;
+                    let mut low_disk_space = false;
                     if let Some(idx) = req_str.find("/open?") {
                         let query_str = &req_str[idx + 6..];
                         let end_idx = query_str.find(|c: char| c == ' ' || c == '\r' || c == '\n').unwrap_or(query_str.len());
@@ -313,6 +316,8 @@ async fn start_local_bridge(app_handle: AppHandle) {
                                 target_container = Some(decode_percent_encoded(&part[10..]));
                             } else if part.starts_with("isDirectFile=") {
                                 is_direct_file = &part[13..] == "true" || &part[13..] == "1";
+                            } else if part.starts_with("lowDiskSpace=") {
+                                low_disk_space = &part[13..] == "true" || &part[13..] == "1";
                             }
                         }
                     }
@@ -332,7 +337,8 @@ async fn start_local_bridge(app_handle: AppHandle) {
                                 "isTorrent": is_detected_torrent,
                                 "referrer": target_referrer,
                                 "container": target_container,
-                                "isDirectFile": is_direct_file
+                                "isDirectFile": is_direct_file,
+                                "lowDiskSpace": low_disk_space
                             });
                             let _ = handle.emit("open-url", payload.clone());
                             let _ = handle.emit("zr://open-url", payload);

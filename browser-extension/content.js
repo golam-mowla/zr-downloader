@@ -851,12 +851,16 @@
         `Starting Best Quality download in ZR Downloader...`,
         "success"
       );
-      chrome.runtime.sendMessage({
-        action: "SEND_TO_ZR",
-        url: stripRangeParams(options[0]?.url || mediaTarget.url),
-        filename: mediaTarget.title,
-        quality: "Best",
-        autoStart: true,
+      chrome.storage.local.get(["lowDiskSpace"], (st) => {
+        const isLowSpace = Boolean(st && st.lowDiskSpace);
+        chrome.runtime.sendMessage({
+          action: "SEND_TO_ZR",
+          url: stripRangeParams(options[0]?.url || mediaTarget.url),
+          filename: mediaTarget.title,
+          quality: "Best",
+          autoStart: true,
+          lowDiskSpace: isLowSpace,
+        });
       });
     });
     dropdown.appendChild(header);
@@ -903,16 +907,20 @@
           `Starting ${opt.quality} download in ZR Downloader...`,
           "success"
         );
-        chrome.runtime.sendMessage({
-          action: "SEND_TO_ZR",
-          url: stripRangeParams(opt.url || mediaTarget.url),
-          filename: opt.filename || mediaTarget.title,
-          quality: opt.quality,
-          autoStart: true,
-          container:
-            opt.container || (opt.quality === "Audio" ? "MP3" : "MP4"),
-          referrer: window.location.href,
-          isDirectFile: Boolean(opt.isDirectFile),
+        chrome.storage.local.get(["lowDiskSpace"], (st) => {
+          const isLowSpace = Boolean(st && st.lowDiskSpace);
+          chrome.runtime.sendMessage({
+            action: "SEND_TO_ZR",
+            url: stripRangeParams(opt.url || mediaTarget.url),
+            filename: opt.filename || mediaTarget.title,
+            quality: opt.quality,
+            autoStart: true,
+            container:
+              opt.container || (opt.quality === "Audio" ? "MP3" : "MP4"),
+            referrer: window.location.href,
+            isDirectFile: Boolean(opt.isDirectFile),
+            lowDiskSpace: isLowSpace,
+          });
         });
       });
 

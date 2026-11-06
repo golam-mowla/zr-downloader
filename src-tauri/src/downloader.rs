@@ -49,6 +49,8 @@ pub struct DownloadTask {
     pub category: String, // "all" | "video" | "audio" | "docs" | "compressed" | "programs"
     pub chunk_count: usize,
     pub is_resumable: bool,
+    #[serde(default)]
+    pub low_disk_space: bool,
     pub chunks: Vec<ChunkProgress>,
     pub speed_history: Vec<u64>,
     pub error_message: Option<String>,
@@ -357,7 +359,7 @@ pub async fn execute_multithreaded_download(
     state: EngineState,
     task_id: String,
 ) -> Result<(), String> {
-    let (url, _filename, save_path, total_bytes, mut chunk_count, is_resumable) = {
+    let (url, _filename, save_path, total_bytes, mut chunk_count, is_resumable, low_disk_space) = {
         let tasks = state.tasks.read().await;
         let task = tasks.get(&task_id).ok_or("Task not found")?;
         (
@@ -367,6 +369,7 @@ pub async fn execute_multithreaded_download(
             task.total_bytes,
             task.chunk_count,
             task.is_resumable,
+            task.low_disk_space,
         )
     };
 
@@ -382,12 +385,31 @@ pub async fn execute_multithreaded_download(
         }
     }
 
-    let target_parent = PathBuf::from(&save_path)
+    let target_dest = PathBuf::from(&save_path);
+    let target_parent = target_dest
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::temp_dir());
+    let _ = fs::create_dir_all(&target_parent).await;
+
     let temp_dir = target_parent.join(format!(".zr_tmp_{}", task_id));
-    fs::create_dir_all(&temp_dir).await.map_err(|e| e.to_string())?;
+    let state_file_path = target_parent.join(format!(".zr_sparse_meta_{}.json", task_id));
+
+    if !low_disk_space {
+        fs::create_dir_all(&temp_dir).await.map_err(|e| e.to_string())?;
+    } else {
+        // Zero-Temp Low Disk Space Mode: Pre-allocate target destination file directly
+        let dest_file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&target_dest)
+            .await
+            .map_err(|e| e.to_string())?;
+        if total_bytes > 0 {
+            let _ = dest_file.set_len(total_bytes).await;
+        }
+        drop(dest_file);
+    }
 
     // Create cancel broadcast channel
     let (cancel_tx, _cancel_rx) = broadcast::channel::<()>(4);
@@ -427,12 +449,26 @@ pub async fn execute_multithreaded_download(
         }
     }
 
-    let mut initial_downloaded = 0u64;
-    for (index, _, _) in &chunk_ranges {
-        let part_file_path = temp_dir.join(format!("chunk_{}.part", index));
-        if let Ok(meta) = fs::metadata(&part_file_path).await {
-            initial_downloaded += meta.len();
+    let mut sparse_saved: HashMap<usize, u64> = HashMap::new();
+    if low_disk_space && state_file_path.exists() {
+        if let Ok(content) = fs::read_to_string(&state_file_path).await {
+            if let Ok(map) = serde_json::from_str::<HashMap<usize, u64>>(&content) {
+                sparse_saved = map;
+            }
         }
+    }
+
+    let mut initial_downloaded = 0u64;
+    let mut chunk_trackers: Vec<Arc<AtomicU64>> = Vec::new();
+    for (index, _, _) in &chunk_ranges {
+        let c_down = if low_disk_space {
+            *sparse_saved.get(index).unwrap_or(&0u64)
+        } else {
+            let part_file_path = temp_dir.join(format!("chunk_{}.part", index));
+            fs::metadata(&part_file_path).await.map(|m| m.len()).unwrap_or(0)
+        };
+        initial_downloaded += c_down;
+        chunk_trackers.push(Arc::new(AtomicU64::new(c_down)));
     }
 
     let shared_downloaded = Arc::new(AtomicU64::new(initial_downloaded));
@@ -446,8 +482,10 @@ pub async fn execute_multithreaded_download(
         let client = state.client.clone();
         let url = url.clone();
         let part_file_path = temp_dir.join(format!("chunk_{}.part", index));
+        let dest_file_path = target_dest.clone();
         let mut chunk_cancel = cancel_tx.subscribe();
         let shared_downloaded = shared_downloaded.clone();
+        let chunk_tracker = chunk_trackers[index].clone();
         let app_c = app_handle_for_chunks.clone();
         let state_c = state_for_chunks.clone();
         let tid_c = task_id_for_chunks.clone();
@@ -462,30 +500,50 @@ pub async fn execute_multithreaded_download(
             const MAX_RETRIES: usize = 12;
 
             loop {
-                let mut file = OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .read(true)
-                    .open(&part_file_path)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let current_len = if low_disk_space {
+                    chunk_tracker.load(Ordering::Relaxed)
+                } else {
+                    let file = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .read(true)
+                        .open(&part_file_path)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    file.metadata().await.map(|m| m.len()).unwrap_or(0)
+                };
 
-                let current_len = file.metadata().await.map(|m| m.len()).unwrap_or(0);
                 // Note: if end is 0 (unknown size), target_chunk_len is 0 (read until EOF)
                 let target_chunk_len = if end > 0 && end >= start { end - start + 1 } else { 0 };
 
                 if target_chunk_len > 0 && current_len >= target_chunk_len {
-                    let _ = file.flush().await;
                     return Ok::<(), String>(());
                 }
 
                 let chunk_start = start + current_len;
                 if end > 0 && chunk_start > end {
-                    let _ = file.flush().await;
                     return Ok::<(), String>(());
                 }
 
-                file.seek(SeekFrom::End(0)).await.map_err(|e| e.to_string())?;
+                let mut file = if low_disk_space {
+                    let mut f = OpenOptions::new()
+                        .write(true)
+                        .open(&dest_file_path)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    f.seek(SeekFrom::Start(chunk_start)).await.map_err(|e| e.to_string())?;
+                    f
+                } else {
+                    let mut f = OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .read(true)
+                        .open(&part_file_path)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    f.seek(SeekFrom::End(0)).await.map_err(|e| e.to_string())?;
+                    f
+                };
 
                 let mut req = client.get(&url)
                     .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -579,6 +637,7 @@ pub async fn execute_multithreaded_download(
                                     }
                                     let b_len = bytes.len() as u64;
                                     shared_downloaded.fetch_add(b_len, Ordering::Relaxed);
+                                    chunk_tracker.fetch_add(b_len, Ordering::Relaxed);
                                     retries = 0;
                                 }
                                 Ok(None) => {
@@ -619,11 +678,14 @@ pub async fn execute_multithreaded_download(
     let monitor_state = state.clone();
     let monitor_downloaded = shared_downloaded.clone();
     let mut monitor_cancel = cancel_tx.subscribe();
+    let monitor_trackers = chunk_trackers.clone();
+    let monitor_state_path = state_file_path.clone();
 
     tauri::async_runtime::spawn(async move {
         let mut last_downloaded = monitor_downloaded.load(Ordering::Relaxed);
         let mut last_instant = Instant::now();
         let mut speed_window: Vec<u64> = Vec::new();
+        let mut ticks = 0u32;
 
         loop {
             tokio::select! {
@@ -631,6 +693,17 @@ pub async fn execute_multithreaded_download(
                     break;
                 }
                 _ = tokio::time::sleep(Duration::from_millis(300)) => {
+                    ticks += 1;
+                    if low_disk_space && ticks % 4 == 0 {
+                        let mut map: HashMap<usize, u64> = HashMap::new();
+                        for (idx, trk) in monitor_trackers.iter().enumerate() {
+                            map.insert(idx, trk.load(Ordering::Relaxed));
+                        }
+                        if let Ok(json_str) = serde_json::to_string(&map) {
+                            let _ = fs::write(&monitor_state_path, json_str).await;
+                        }
+                    }
+
                     let current_downloaded = monitor_downloaded.load(Ordering::Relaxed);
                     let now = Instant::now();
                     let elapsed = now.duration_since(last_instant).as_secs_f64();
@@ -724,80 +797,86 @@ pub async fn execute_multithreaded_download(
         return Err(err_msg);
     }
 
-    // --- IDM-Style High-Performance Assembly Phase ---
-    {
-        let mut tasks = state.tasks.write().await;
-        if let Some(t) = tasks.get_mut(&task_id) {
-            t.status = "assembling".to_string();
-            t.speed_formatted = "Assembling chunks...".to_string();
-            t.eta_formatted = "Finishing...".to_string();
-            let _ = app.emit("download-progress", t.clone());
-            let _ = app.emit("zr://progress", t.clone());
-        }
-    }
-
-    let target_dest = PathBuf::from(&save_path);
-    if let Some(parent) = target_dest.parent() {
-        let _ = fs::create_dir_all(parent).await;
-    }
-
-    // Optimization: If single chunk, rename/move immediately (instantaneous 0.001s!)
-    if chunk_count <= 1 {
-        let single_part = temp_dir.join("chunk_0.part");
-        if single_part.exists() {
-            let _ = fs::remove_file(&target_dest).await;
-            if fs::rename(&single_part, &target_dest).await.is_err() {
-                let _ = fs::copy(&single_part, &target_dest).await;
-                let _ = fs::remove_file(&single_part).await;
-            }
-        }
+    if low_disk_space {
+        // --- Zero-Temp Direct In-Place: Destination file already complete! ---
+        // 0 extra temporary disk space used! 20 GB file takes strictly 20 GB!
+        let _ = fs::remove_file(&state_file_path).await;
     } else {
-        // Multi-chunk: move chunk 0 as base file, then append chunk 1..N using 8 MB buffer
-        let first_part = temp_dir.join("chunk_0.part");
-        let _ = fs::remove_file(&target_dest).await;
-        let mut start_idx = 0;
-        if fs::rename(&first_part, &target_dest).await.is_ok() {
-            start_idx = 1;
-        }
-
-        let mut dest_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&target_dest)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        let mut merge_buf = vec![0u8; 8 * 1024 * 1024]; // 8 MB buffer for lightning-fast disk I/O
-
-        for i in start_idx..chunk_count {
-            // Live progress update for each chunk merged
-            {
-                let mut tasks = state.tasks.write().await;
-                if let Some(t) = tasks.get_mut(&task_id) {
-                    t.status = "assembling".to_string();
-                    t.speed_formatted = format!("Merging chunk {}/{}", i + 1, chunk_count);
-                    let _ = app.emit("download-progress", t.clone());
-                    let _ = app.emit("zr://progress", t.clone());
-                }
-            }
-
-            let part_file_path = temp_dir.join(format!("chunk_{}.part", i));
-            if let Ok(mut part_file) = File::open(&part_file_path).await {
-                loop {
-                    let n = part_file.read(&mut merge_buf).await.map_err(|e| e.to_string())?;
-                    if n == 0 { break; }
-                    dest_file.write_all(&merge_buf[..n]).await.map_err(|e| e.to_string())?;
-                }
-                // Free disk space immediately after merging each chunk
-                let _ = fs::remove_file(&part_file_path).await;
+        // --- IDM-Style High-Performance Assembly Phase ---
+        {
+            let mut tasks = state.tasks.write().await;
+            if let Some(t) = tasks.get_mut(&task_id) {
+                t.status = "assembling".to_string();
+                t.speed_formatted = "Assembling chunks...".to_string();
+                t.eta_formatted = "Finishing...".to_string();
+                let _ = app.emit("download-progress", t.clone());
+                let _ = app.emit("zr://progress", t.clone());
             }
         }
-        dest_file.flush().await.map_err(|e| e.to_string())?;
-        drop(dest_file);
+
+        let target_dest = PathBuf::from(&save_path);
+        if let Some(parent) = target_dest.parent() {
+            let _ = fs::create_dir_all(parent).await;
+        }
+
+        // Optimization: If single chunk, rename/move immediately (instantaneous 0.001s!)
+        if chunk_count <= 1 {
+            let single_part = temp_dir.join("chunk_0.part");
+            if single_part.exists() {
+                let _ = fs::remove_file(&target_dest).await;
+                if fs::rename(&single_part, &target_dest).await.is_err() {
+                    let _ = fs::copy(&single_part, &target_dest).await;
+                    let _ = fs::remove_file(&single_part).await;
+                }
+            }
+        } else {
+            // Multi-chunk: move chunk 0 as base file, then append chunk 1..N using 8 MB buffer
+            let first_part = temp_dir.join("chunk_0.part");
+            let _ = fs::remove_file(&target_dest).await;
+            let mut start_idx = 0;
+            if fs::rename(&first_part, &target_dest).await.is_ok() {
+                start_idx = 1;
+            }
+
+            let mut dest_file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&target_dest)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let mut merge_buf = vec![0u8; 8 * 1024 * 1024]; // 8 MB buffer for lightning-fast disk I/O
+
+            for i in start_idx..chunk_count {
+                // Live progress update for each chunk merged
+                {
+                    let mut tasks = state.tasks.write().await;
+                    if let Some(t) = tasks.get_mut(&task_id) {
+                        t.status = "assembling".to_string();
+                        t.speed_formatted = format!("Merging chunk {}/{}", i + 1, chunk_count);
+                        let _ = app.emit("download-progress", t.clone());
+                        let _ = app.emit("zr://progress", t.clone());
+                    }
+                }
+
+                let part_file_path = temp_dir.join(format!("chunk_{}.part", i));
+                if let Ok(mut part_file) = File::open(&part_file_path).await {
+                    loop {
+                        let n = part_file.read(&mut merge_buf).await.map_err(|e| e.to_string())?;
+                        if n == 0 { break; }
+                        dest_file.write_all(&merge_buf[..n]).await.map_err(|e| e.to_string())?;
+                    }
+                    // Free disk space immediately after merging each chunk
+                    let _ = fs::remove_file(&part_file_path).await;
+                }
+            }
+            dest_file.flush().await.map_err(|e| e.to_string())?;
+            drop(dest_file);
+        }
+
+        // Clean up temporary segment directory
+        let _ = fs::remove_dir_all(&temp_dir).await;
     }
-
-    // Clean up temporary segment directory
-    let _ = fs::remove_dir_all(&temp_dir).await;
 
     // Mark completed
     {

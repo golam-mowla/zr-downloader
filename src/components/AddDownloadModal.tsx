@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   X,
   Zap,
@@ -11,6 +11,7 @@ import {
   Clipboard,
   Radio,
   FileCode,
+  HardDrive,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -25,7 +26,8 @@ interface AddDownloadModalProps {
     url: string,
     savePath: string,
     filename: string,
-    connections: number
+    connections: number,
+    lowDiskSpace?: boolean
   ) => Promise<void>;
   onAddMediaDownload: (options: any) => Promise<void>;
   onAddTorrentDownload?: (
@@ -52,6 +54,9 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   const [customFilename, setCustomFilename] = useState(defaultFilename);
   const [saveFolder, setSaveFolder] = useState("");
   const [connections, setConnections] = useState(16);
+  const [lowDiskSpace, setLowDiskSpace] = useState(() => {
+    return localStorage.getItem("zr_low_disk_space") === "true";
+  });
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -234,7 +239,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     try {
       setSubmitting(true);
       setErrorMessage(null);
-      await onAddDirectDownload(cleanUrl, saveFolder, customFilename.trim(), connections);
+      await onAddDirectDownload(cleanUrl, saveFolder, customFilename.trim(), connections, lowDiskSpace);
       onClose();
     } catch (err: any) {
       setErrorMessage(err?.message || err?.toString() || "Failed to start direct download");
@@ -586,6 +591,30 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
               <p className="text-[12px] text-zr-muted">
                 Splits file into concurrent HTTP Range slices for maximum bandwidth saturation.
               </p>
+
+              {/* Low Disk Space Optimization Switch */}
+              <div className="mt-3 p-3.5 rounded-xl border border-blue-500/25 bg-blue-500/5 dark:bg-blue-900/10 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <HardDrive className="w-4 h-4 text-blue-500" />
+                    <span className="font-semibold text-[13px] text-zr-primary">
+                      Low Disk Space Mode (Zero-Temp In-Place)
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={lowDiskSpace}
+                    onChange={(e) => {
+                      setLowDiskSpace(e.target.checked);
+                      localStorage.setItem("zr_low_disk_space", String(e.target.checked));
+                    }}
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </div>
+                <p className="text-[12px] text-zr-secondary leading-relaxed">
+                  Saves 50% SSD space on large downloads (e.g. 20 GB file uses strictly 20 GB instead of 40 GB). Chunks write directly into the final destination file without duplicate temporary segment files or assembly delay.
+                </p>
+              </div>
             </div>
           )}
 

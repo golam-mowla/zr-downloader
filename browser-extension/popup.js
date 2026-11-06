@@ -8,6 +8,7 @@ const btnDownloadCurrent = document.getElementById("btn-download-current");
 const customUrlInput = document.getElementById("custom-url-input");
 const btnDownloadCustom = document.getElementById("btn-download-custom");
 const toggleInterception = document.getElementById("toggle-interception");
+const toggleLowDiskSpace = document.getElementById("toggle-low-disk-space");
 
 let detectedUrl = "";
 
@@ -25,15 +26,24 @@ function checkStatus() {
 }
 
 // Check interception storage preference
-chrome.storage.local.get(["interceptDownloads"], (result) => {
+chrome.storage.local.get(["interceptDownloads", "lowDiskSpace"], (result) => {
   if (result.interceptDownloads !== undefined) {
     toggleInterception.checked = result.interceptDownloads;
+  }
+  if (result.lowDiskSpace !== undefined && toggleLowDiskSpace) {
+    toggleLowDiskSpace.checked = result.lowDiskSpace;
   }
 });
 
 toggleInterception.addEventListener("change", () => {
   chrome.storage.local.set({ interceptDownloads: toggleInterception.checked });
 });
+
+if (toggleLowDiskSpace) {
+  toggleLowDiskSpace.addEventListener("change", () => {
+    chrome.storage.local.set({ lowDiskSpace: toggleLowDiskSpace.checked });
+  });
+}
 
 // Detect current active tab URL & media
 chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
@@ -59,7 +69,8 @@ chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
 btnDownloadCurrent.addEventListener("click", () => {
   if (!detectedUrl || detectedUrl.startsWith("chrome://")) return;
   btnDownloadCurrent.textContent = "Sending to ZR Engine...";
-  chrome.runtime.sendMessage({ action: "SEND_TO_ZR", url: detectedUrl }, () => {
+  const isLowSpace = toggleLowDiskSpace ? toggleLowDiskSpace.checked : false;
+  chrome.runtime.sendMessage({ action: "SEND_TO_ZR", url: detectedUrl, lowDiskSpace: isLowSpace }, () => {
     btnDownloadCurrent.textContent = "✓ Sent to ZR Downloader!";
     setTimeout(() => {
       window.close();
@@ -72,7 +83,8 @@ btnDownloadCustom.addEventListener("click", () => {
   const url = (customUrlInput.value || "").trim();
   if (!url) return;
   btnDownloadCustom.textContent = "...";
-  chrome.runtime.sendMessage({ action: "SEND_TO_ZR", url }, () => {
+  const isLowSpace = toggleLowDiskSpace ? toggleLowDiskSpace.checked : false;
+  chrome.runtime.sendMessage({ action: "SEND_TO_ZR", url, lowDiskSpace: isLowSpace }, () => {
     btnDownloadCustom.textContent = "Sent!";
     setTimeout(() => {
       window.close();

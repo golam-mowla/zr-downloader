@@ -388,7 +388,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 // Send URL to ZR Downloader Desktop App
-async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "", isDirectFile = false) {
+async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "", isDirectFile = false, lowDiskSpace = false) {
   let cleanUrl = normalizeMediaUrl((mediaUrl || "").trim());
   if (!cleanUrl) return;
 
@@ -449,7 +449,8 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
     const referrerParam = referrer ? `&referrer=${encodeURIComponent(referrer)}` : "";
     const containerParam = container ? `&container=${encodeURIComponent(container)}` : "";
     const directParam = isDirectFile ? `&isDirectFile=true` : "";
-    const bridgeEndpoint = `${ZR_BRIDGE_URL}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}`;
+    const lowSpaceParam = lowDiskSpace ? `&lowDiskSpace=true` : "";
+    const bridgeEndpoint = `${ZR_BRIDGE_URL}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}`;
     const resp = await fetch(bridgeEndpoint, {
       method: "GET",
       signal: controller.signal,
@@ -483,7 +484,8 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
   const autoParam = autoStart ? `&autostart=true` : "";
   const torrentParam = isTorrent ? `&isTorrent=true` : "";
   const directParam = isDirectFile ? `&isDirectFile=true` : "";
-  const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}`;
+  const lowSpaceParam = lowDiskSpace ? `&lowDiskSpace=true` : "";
+  const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}${lowSpaceParam}`;
 
   if (effectiveTabId) {
     try {
@@ -535,7 +537,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       Boolean(request.isTorrent),
       request.referrer || "",
       request.container || "",
-      Boolean(request.isDirectFile)
+      Boolean(request.isDirectFile),
+      Boolean(request.lowDiskSpace)
     ).then((res) => sendResponse(res));
     return true;
   }

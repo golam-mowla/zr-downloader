@@ -52,6 +52,8 @@ export interface DownloadTask {
   isResumable?: boolean;
   supports_ranges?: boolean;
   supportsRanges?: boolean;
+  low_disk_space?: boolean;
+  lowDiskSpace?: boolean;
   error?: string | null;
   errorMessage?: string | null;
   created_at?: string | number;

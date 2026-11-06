@@ -34,6 +34,9 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   const [defaultConnections, setDefaultConnections] = useState(8);
   const [speedLimitEnabled, setSpeedLimitEnabled] = useState(false);
   const [speedLimitKb, setSpeedLimitKb] = useState(5120); // 5 MB/s
+  const [lowDiskSpace, setLowDiskSpace] = useState(() => {
+    return localStorage.getItem("zr_low_disk_space") === "true";
+  });
 
   // Core Tools Info
   const [tools, setTools] = useState<ToolVersionInfo[]>([]);
@@ -178,6 +181,30 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                     <span>Browse</span>
                   </button>
                 </div>
+              </div>
+
+              {/* Low Disk Space Optimization Mode */}
+              <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 dark:bg-blue-900/10 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <HardDrive className="w-4 h-4 text-blue-500" />
+                    <span className="font-semibold text-[13px] text-zr-primary">
+                      Low Disk Space Mode (Zero-Temp In-Place Direct Write)
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={lowDiskSpace}
+                    onChange={(e) => {
+                      setLowDiskSpace(e.target.checked);
+                      localStorage.setItem("zr_low_disk_space", String(e.target.checked));
+                    }}
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  />
+                </div>
+                <p className="text-zr-secondary text-[12px] leading-relaxed">
+                  Saves 50% SSD space on large downloads (e.g. 20 GB file takes strictly 20 GB instead of 40 GB). Chunks write directly into the final destination file without creating duplicate temporary segment files or assembly delay. Ideal for small SSDs (e.g. 220 GB SSD).
+                </p>
               </div>
 
               {/* Browser Integration Info */}
