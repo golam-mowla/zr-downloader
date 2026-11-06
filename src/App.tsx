@@ -258,6 +258,8 @@ export const App: React.FC = () => {
     });
 
     // 4. URL received from browser extension (via bridge / protocol)
+    let lastHandledTime = 0;
+    let lastHandledUrl = "";
     const handleOpenUrl = (event: { payload: any }) => {
       const raw = event.payload;
       let targetUrl = "";
@@ -283,6 +285,13 @@ export const App: React.FC = () => {
         }
       }
       if (targetUrl && targetUrl.trim()) {
+        const now = Date.now();
+        if (targetUrl.trim() === lastHandledUrl && now - lastHandledTime < 800) {
+          return; // Ignore immediate duplicate event from dual emission
+        }
+        lastHandledUrl = targetUrl.trim();
+        lastHandledTime = now;
+
         let clean = cleanDownloadUrl(targetUrl.trim());
         if (clean.startsWith("@[") && clean.endsWith("]")) {
           clean = clean.slice(2, -1).trim();
@@ -838,16 +847,7 @@ export const App: React.FC = () => {
   const handleAddMediaDownload = async (options: any) => {
     try {
       const androidBridge = (window as any).GMAndroidBridge;
-      let taskId = "";
-      if (androidBridge?.startDownload) {
-        taskId = `media-${Date.now()}`;
-      } else {
-        try {
-          taskId = await invoke<string>("ytdlp_download", { options });
-        } catch {
-          taskId = await invoke<string>("start_download", { options });
-        }
-      }
+      const taskId = options.taskId || `media-${Date.now()}`;
 
       const isAudio =
         options.downloadMode === "audio" ||
@@ -859,7 +859,7 @@ export const App: React.FC = () => {
       }
 
       const newMediaTask: DownloadTask = {
-        id: taskId || `ytdlp-${Date.now()}`,
+        id: taskId,
         url: options.url,
         filename: finalFilename,
         save_path: options.saveFolder || defaultDir || "Downloads",
@@ -897,6 +897,13 @@ export const App: React.FC = () => {
           options.saveFolder || "",
           finalFilename
         );
+      } else {
+        const invokeOptions = { ...options, taskId };
+        try {
+          await invoke<string>("ytdlp_download", { options: invokeOptions });
+        } catch {
+          await invoke<string>("start_download", { options: invokeOptions });
+        }
       }
     } catch (e) {
       console.error("Media download failed to start:", e);

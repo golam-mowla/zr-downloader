@@ -10,6 +10,24 @@
   let currentTargetContainer = null;
   let hideTimer = null;
   let isPermanentlyDismissed = false;
+  let cachedLowDiskSpace = false;
+
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(["lowDiskSpace"], (st) => {
+        if (st && st.lowDiskSpace !== undefined) {
+          cachedLowDiskSpace = Boolean(st.lowDiskSpace);
+        }
+      });
+      if (chrome.storage.onChanged) {
+        chrome.storage.onChanged.addListener((changes, area) => {
+          if (area === "local" && changes && changes.lowDiskSpace) {
+            cachedLowDiskSpace = Boolean(changes.lowDiskSpace.newValue);
+          }
+        });
+      }
+    }
+  } catch (e) {}
 
   // Cached YouTube data from MAIN world helper (yt-main-world.js)
   let lastYouTubeData = null;
@@ -888,17 +906,26 @@
         `Starting Best Quality download in ZR Downloader...`,
         "success"
       );
-      chrome.storage.local.get(["lowDiskSpace"], (st) => {
-        const isLowSpace = Boolean(st && st.lowDiskSpace);
-        chrome.runtime.sendMessage({
-          action: "SEND_TO_ZR",
-          url: stripRangeParams(options[0]?.url || mediaTarget.url),
-          filename: mediaTarget.title,
-          quality: "Best",
-          autoStart: true,
-          lowDiskSpace: isLowSpace,
+      const isLowSpace = Boolean(cachedLowDiskSpace);
+      const payload = {
+        action: "SEND_TO_ZR",
+        url: stripRangeParams(options[0]?.url || mediaTarget.url),
+        filename: mediaTarget.title,
+        quality: "Best",
+        autoStart: true,
+        lowDiskSpace: isLowSpace,
+      };
+      try {
+        chrome.runtime.sendMessage(payload, () => {
+          if (chrome.runtime.lastError) {
+            chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+          }
         });
-      });
+      } catch (err) {
+        try {
+          chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+        } catch {}
+      }
     });
     dropdown.appendChild(header);
 
@@ -974,21 +1001,30 @@
           `Starting ${opt.quality} download in ZR Downloader...`,
           "success"
         );
-        chrome.storage.local.get(["lowDiskSpace"], (st) => {
-          const isLowSpace = Boolean(st && st.lowDiskSpace);
-          chrome.runtime.sendMessage({
-            action: "SEND_TO_ZR",
-            url: stripRangeParams(opt.url || mediaTarget.url),
-            filename: opt.filename || mediaTarget.title,
-            quality: opt.quality,
-            autoStart: true,
-            container:
-              opt.container || (opt.quality === "Audio" ? "MP3" : "MP4"),
-            referrer: window.location.href,
-            isDirectFile: Boolean(opt.isDirectFile),
-            lowDiskSpace: isLowSpace,
+        const isLowSpace = Boolean(cachedLowDiskSpace);
+        const payload = {
+          action: "SEND_TO_ZR",
+          url: stripRangeParams(opt.url || mediaTarget.url),
+          filename: opt.filename || mediaTarget.title,
+          quality: opt.quality,
+          autoStart: true,
+          container:
+            opt.container || (opt.quality === "Audio" ? "MP3" : "MP4"),
+          referrer: window.location.href,
+          isDirectFile: Boolean(opt.isDirectFile),
+          lowDiskSpace: isLowSpace,
+        };
+        try {
+          chrome.runtime.sendMessage(payload, () => {
+            if (chrome.runtime.lastError) {
+              chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+            }
           });
-        });
+        } catch (err) {
+          try {
+            chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+          } catch {}
+        }
       });
 
       list.appendChild(item);

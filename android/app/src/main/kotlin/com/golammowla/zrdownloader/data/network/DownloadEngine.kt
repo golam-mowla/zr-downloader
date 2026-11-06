@@ -1,4 +1,4 @@
-﻿package com.golammowla.zrdownloader.data.network
+package com.golammowla.zrdownloader.data.network
 
 import com.golammowla.zrdownloader.domain.model.DownloadCategory
 import com.golammowla.zrdownloader.domain.model.SegmentInfo
@@ -290,6 +290,8 @@ class DownloadEngine @Inject constructor(
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", USER_AGENT)
+            .header("Accept", "*/*")
+            .header("Accept-Encoding", "identity")
             .header("Range", "bytes=$currentStart-${segment.endByte}")
             .build()
 
@@ -327,6 +329,8 @@ class DownloadEngine @Inject constructor(
         val builder = Request.Builder()
             .url(url)
             .header("User-Agent", USER_AGENT)
+            .header("Accept", "*/*")
+            .header("Accept-Encoding", "identity")
 
         if (startOffset > 0) {
             builder.header("Range", "bytes=$startOffset-")

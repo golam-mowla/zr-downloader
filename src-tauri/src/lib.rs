@@ -280,7 +280,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     }
 
                     if req_str.contains("/ping") {
-                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.7\"}\r\n";
+                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.9\"}\r\n";
                         let _ = stream.write_all(resp.as_bytes()).await;
                         return;
                     }
@@ -343,9 +343,11 @@ async fn start_local_bridge(app_handle: AppHandle) {
                             let _ = handle.emit("open-url", payload.clone());
                             let _ = handle.emit("zr://open-url", payload);
                             if let Some(win) = handle.get_webview_window("main") {
-                                let _ = win.unminimize();
                                 let _ = win.show();
+                                let _ = win.unminimize();
+                                let _ = win.set_always_on_top(true);
                                 let _ = win.set_focus();
+                                let _ = win.set_always_on_top(false);
                             }
                         }
                         let body = "{\"status\":\"ok\",\"received\":true,\"app\":\"ZR Downloader\"}";
@@ -387,6 +389,20 @@ fn register_windows_protocols() {
             .status();
         let _ = Command::new("reg")
             .args(["add", "HKCU\\Software\\Classes\\zr\\shell\\open\\command", "/ve", "/d", &cmd, "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+
+        // Also register gdm:// for backward compatibility with older extensions/shortcuts
+        let _ = Command::new("reg")
+            .args(["add", "HKCU\\Software\\Classes\\gdm", "/ve", "/d", "URL:ZR Downloader Protocol", "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        let _ = Command::new("reg")
+            .args(["add", "HKCU\\Software\\Classes\\gdm", "/v", "URL Protocol", "/d", "", "/f"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+        let _ = Command::new("reg")
+            .args(["add", "HKCU\\Software\\Classes\\gdm\\shell\\open\\command", "/ve", "/d", &cmd, "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .status();
 
@@ -472,9 +488,11 @@ pub fn run() {
             if trimmed.starts_with("@[") && trimmed.ends_with(']') && trimmed.len() >= 3 {
                 trimmed = &trimmed[2..trimmed.len() - 1].trim();
             }
-            if trimmed.starts_with("zr://") || trimmed.starts_with("parrot://") || trimmed.starts_with("gmdownloader://") {
+            if trimmed.starts_with("zr://") || trimmed.starts_with("gdm://") || trimmed.starts_with("parrot://") || trimmed.starts_with("gmdownloader://") {
                 let without_proto = if trimmed.starts_with("zr://") {
                     &trimmed["zr://".len()..]
+                } else if trimmed.starts_with("gdm://") {
+                    &trimmed["gdm://".len()..]
                 } else if trimmed.starts_with("parrot://") {
                     &trimmed["parrot://".len()..]
                 } else {
