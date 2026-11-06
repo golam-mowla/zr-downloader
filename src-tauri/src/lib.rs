@@ -257,7 +257,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
     let listener = match listener {
         Some(l) => l,
         None => {
-            eprintln!("GDM: Could not bind local bridge port 9666 after retries");
+            eprintln!("ZR Downloader: Could not bind local bridge port 9666 after retries");
             return;
         }
     };
@@ -290,6 +290,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     let mut target_container = None;
                     let mut is_torrent = false;
                     let mut auto_start = false;
+                    let mut is_direct_file = false;
                     if let Some(idx) = req_str.find("/open?") {
                         let query_str = &req_str[idx + 6..];
                         let end_idx = query_str.find(|c: char| c == ' ' || c == '\r' || c == '\n').unwrap_or(query_str.len());
@@ -310,6 +311,8 @@ async fn start_local_bridge(app_handle: AppHandle) {
                                 target_referrer = Some(decode_percent_encoded(&part[9..]));
                             } else if part.starts_with("container=") {
                                 target_container = Some(decode_percent_encoded(&part[10..]));
+                            } else if part.starts_with("isDirectFile=") {
+                                is_direct_file = &part[13..] == "true" || &part[13..] == "1";
                             }
                         }
                     }
@@ -328,10 +331,11 @@ async fn start_local_bridge(app_handle: AppHandle) {
                                 "autoStart": auto_start,
                                 "isTorrent": is_detected_torrent,
                                 "referrer": target_referrer,
-                                "container": target_container
+                                "container": target_container,
+                                "isDirectFile": is_direct_file
                             });
                             let _ = handle.emit("open-url", payload.clone());
-                            let _ = handle.emit("gdm://open-url", payload);
+                            let _ = handle.emit("zr://open-url", payload);
                             if let Some(win) = handle.get_webview_window("main") {
                                 let _ = win.unminimize();
                                 let _ = win.show();
@@ -366,20 +370,7 @@ fn register_windows_protocols() {
         let exe_str = exe_path.to_string_lossy();
         let cmd = format!("\"{}\" \"%1\"", exe_str);
 
-        // Register gdm:// and zr:// protocols
-        let _ = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Classes\\gdm", "/ve", "/d", "URL:ZR Downloader Protocol", "/f"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-        let _ = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Classes\\gdm", "/v", "URL Protocol", "/d", "", "/f"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-        let _ = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Classes\\gdm\\shell\\open\\command", "/ve", "/d", &cmd, "/f"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
-
+        // Register zr:// protocol
         let _ = Command::new("reg")
             .args(["add", "HKCU\\Software\\Classes\\zr", "/ve", "/d", "URL:ZR Downloader Protocol", "/f"])
             .creation_flags(CREATE_NO_WINDOW)
@@ -423,15 +414,15 @@ fn register_windows_protocols() {
 
         // Register .torrent file association
         let _ = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Classes\\.torrent", "/ve", "/d", "GDM.Torrent", "/f"])
+            .args(["add", "HKCU\\Software\\Classes\\.torrent", "/ve", "/d", "ZRDownloader.Torrent", "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .status();
         let _ = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Classes\\GDM.Torrent", "/ve", "/d", "Torrent File", "/f"])
+            .args(["add", "HKCU\\Software\\Classes\\ZRDownloader.Torrent", "/ve", "/d", "Torrent File", "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .status();
         let _ = Command::new("reg")
-            .args(["add", "HKCU\\Software\\Classes\\GDM.Torrent\\shell\\open\\command", "/ve", "/d", &cmd, "/f"])
+            .args(["add", "HKCU\\Software\\Classes\\ZRDownloader.Torrent\\shell\\open\\command", "/ve", "/d", &cmd, "/f"])
             .creation_flags(CREATE_NO_WINDOW)
             .status();
     }
@@ -475,9 +466,9 @@ pub fn run() {
             if trimmed.starts_with("@[") && trimmed.ends_with(']') && trimmed.len() >= 3 {
                 trimmed = &trimmed[2..trimmed.len() - 1].trim();
             }
-            if trimmed.starts_with("gdm://") || trimmed.starts_with("parrot://") || trimmed.starts_with("gmdownloader://") {
-                let without_proto = if trimmed.starts_with("gdm://") {
-                    &trimmed["gdm://".len()..]
+            if trimmed.starts_with("zr://") || trimmed.starts_with("parrot://") || trimmed.starts_with("gmdownloader://") {
+                let without_proto = if trimmed.starts_with("zr://") {
+                    &trimmed["zr://".len()..]
                 } else if trimmed.starts_with("parrot://") {
                     &trimmed["parrot://".len()..]
                 } else {

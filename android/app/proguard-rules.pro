@@ -1,4 +1,4 @@
-# Proguard rules for GDM Native Android
+# Proguard rules for ZR Downloader Native Android
 -keepattributes *Annotation*
 -keepclassmembers class * {
     @androidx.room.* <methods>;

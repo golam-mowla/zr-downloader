@@ -14,7 +14,7 @@ body {
 }
 
 /* Header */
-.gdm-header {
+.zr-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -48,7 +48,7 @@ body {
   gap: 6px;
 }
 
-.gdm-name {
+.zr-name {
   font-size: 16px;
   font-weight: 800;
   color: #ffffff;

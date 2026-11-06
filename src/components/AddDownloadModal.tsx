@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import {
   X,
   Zap,
@@ -386,25 +386,25 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-      <div className="w-full max-w-xl rounded-xl border border-gdm bg-gdm-surface shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 transition-colors">
+      <div className="w-full max-w-xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 transition-colors">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-gdm bg-gdm-tableHead transition-colors">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-zr bg-zr-tableHead transition-colors">
           <div className="flex items-center space-x-2.5">
             <div className="w-8 h-8 rounded-full overflow-hidden flex items-center justify-center bg-transparent shrink-0">
               <img src="/icon.png" alt="ZR Downloader" className="w-full h-full object-contain" />
             </div>
             <div>
-              <h2 className="font-semibold text-[14px] text-gdm-primary">
+              <h2 className="font-semibold text-[14px] text-zr-primary">
                 Add New Download
               </h2>
-              <p className="text-[12px] text-gdm-secondary">
+              <p className="text-[12px] text-zr-secondary">
                 Segmented HTTP Engine, Media Extractor & BitTorrent
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -412,13 +412,13 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         </div>
 
         {/* Tab Selection */}
-        <div className="flex border-b border-gdm bg-gdm-surface px-5 pt-2.5 space-x-5 transition-colors">
+        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-5 transition-colors">
           <button
             onClick={() => setTab("direct")}
             className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-2 border-b-2 transition-all ${
               tab === "direct"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
-                : "border-transparent text-gdm-secondary hover:text-gdm-primary"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Zap className="w-4 h-4 text-blue-600 dark:text-blue-400" />
@@ -429,7 +429,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-2 border-b-2 transition-all ${
               tab === "media"
                 ? "border-purple-600 dark:border-purple-400 text-purple-600 dark:text-purple-400"
-                : "border-transparent text-gdm-secondary hover:text-gdm-primary"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Film className="w-4 h-4 text-purple-600 dark:text-purple-400" />
@@ -440,7 +440,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-2 border-b-2 transition-all ${
               tab === "torrent"
                 ? "border-orange-500 text-orange-500"
-                : "border-transparent text-gdm-secondary hover:text-gdm-primary"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Radio className="w-4 h-4 text-orange-500" />
@@ -460,7 +460,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           {/* URL / Path Input with Actions */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="text-[13px] font-medium text-gdm-secondary">
+              <label className="text-[13px] font-medium text-zr-secondary">
                 {tab === "torrent" ? "Magnet Link or .torrent File Path" : "Target Download URL"}
               </label>
               <div className="flex items-center space-x-3">
@@ -477,7 +477,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 <button
                   type="button"
                   onClick={handlePasteClipboard}
-                  className="text-[12px] font-semibold text-gdm-accent hover:underline flex items-center space-x-1"
+                  className="text-[12px] font-semibold text-zr-accent hover:underline flex items-center space-x-1"
                 >
                   <Clipboard className="w-3.5 h-3.5" />
                   <span>Paste from Clipboard</span>
@@ -496,7 +496,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                     ? "Paste magnet:?xt=urn:btih:... or click Browse .torrent"
                     : "Paste YouTube, Kick, Facebook, Instagram, or TikTok link..."
                 }
-                className="flex-1 px-3 py-2 rounded-lg text-[13px] font-mono border border-gdm bg-gdm-surface text-gdm-primary placeholder:text-gdm-muted focus:border-gdm-accent focus:outline-hidden transition-colors"
+                className="flex-1 px-3 py-2 rounded-lg text-[13px] font-mono border border-zr bg-zr-surface text-zr-primary placeholder:text-zr-muted focus:border-zr-accent focus:outline-hidden transition-colors"
                 autoFocus
               />
               {tab === "media" && (
@@ -518,7 +518,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
           {/* Save Destination Folder */}
           <div className="space-y-1.5">
-            <label className="text-[13px] font-medium text-gdm-secondary">
+            <label className="text-[13px] font-medium text-zr-secondary">
               Save Destination
             </label>
             <div className="flex space-x-2">
@@ -526,16 +526,16 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 type="text"
                 value={saveFolder}
                 onChange={(e) => setSaveFolder(e.target.value)}
-                className="flex-1 px-3 py-2 rounded-lg text-[13px] font-mono border border-gdm bg-gdm-surface text-gdm-primary focus:border-gdm-accent focus:outline-hidden transition-colors"
+                className="flex-1 px-3 py-2 rounded-lg text-[13px] font-mono border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden transition-colors"
               />
               <button
                 type="button"
                 onClick={handleSelectFolder}
-                className="w-10 h-10 rounded-lg border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-gdm-secondary hover:text-gdm-primary flex items-center justify-center transition-colors shrink-0"
+                className="w-10 h-10 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary flex items-center justify-center transition-colors shrink-0"
                 title="Browse folder"
                 aria-label="Browse folder"
               >
-                <Folder className="w-4 h-4 text-gdm-accent" />
+                <Folder className="w-4 h-4 text-zr-accent" />
               </button>
             </div>
           </div>
@@ -543,27 +543,27 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           {/* Custom Filename (for Direct & Media) */}
           {tab !== "torrent" && (
             <div className="space-y-1.5">
-              <label className="text-[13px] font-medium text-gdm-secondary">
-                Custom Filename <span className="text-gdm-muted font-normal">(Optional)</span>
+              <label className="text-[13px] font-medium text-zr-secondary">
+                Custom Filename <span className="text-zr-muted font-normal">(Optional)</span>
               </label>
               <input
                 type="text"
                 value={customFilename}
                 onChange={(e) => setCustomFilename(e.target.value)}
                 placeholder="Leave empty to use server original name"
-                className="w-full px-3 py-2 rounded-lg text-[14px] font-semibold border border-gdm bg-gdm-surface text-gdm-primary placeholder:text-gdm-muted placeholder:font-normal focus:border-gdm-accent focus:outline-hidden transition-colors"
+                className="w-full px-3 py-2 rounded-lg text-[14px] font-semibold border border-zr bg-zr-surface text-zr-primary placeholder:text-zr-muted placeholder:font-normal focus:border-zr-accent focus:outline-hidden transition-colors"
               />
             </div>
           )}
 
           {/* Direct Mode Specifics: Simultaneous Segments */}
           {tab === "direct" && (
-            <div className="space-y-2 pt-2 border-t border-gdm">
+            <div className="space-y-2 pt-2 border-t border-zr">
               <div className="flex items-center justify-between text-[13px]">
-                <span className="font-medium text-gdm-secondary">
+                <span className="font-medium text-zr-secondary">
                   Simultaneous Download Segments (Threads)
                 </span>
-                <span className="font-semibold tabular-nums text-gdm-accent">
+                <span className="font-semibold tabular-nums text-zr-accent">
                   {connections} Parallel Connections
                 </span>
               </div>
@@ -576,14 +576,14 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                     className={`py-2 rounded-lg text-[13px] font-semibold border transition-colors ${
                       connections === num
                         ? "bg-blue-600 border-blue-600 text-white"
-                        : "bg-gdm-surface border-gdm text-gdm-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-gdm-primary"
+                        : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
                     }`}
                   >
                     {num} Threads
                   </button>
                 ))}
               </div>
-              <p className="text-[12px] text-gdm-muted">
+              <p className="text-[12px] text-zr-muted">
                 Splits file into concurrent HTTP Range slices for maximum bandwidth saturation.
               </p>
             </div>
@@ -591,15 +591,15 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
           {/* Torrent Mode Specifics */}
           {tab === "torrent" && (
-            <div className="space-y-3 pt-2 border-t border-gdm">
-              <div className="p-3 rounded-lg border border-gdm bg-orange-500/5 dark:bg-orange-500/10 space-y-2">
+            <div className="space-y-3 pt-2 border-t border-zr">
+              <div className="p-3 rounded-lg border border-zr bg-orange-500/5 dark:bg-orange-500/10 space-y-2">
                 <div className="flex items-center space-x-2">
                   <Radio className="w-4 h-4 text-orange-500" />
-                  <span className="font-semibold text-[13.5px] text-gdm-primary">
+                  <span className="font-semibold text-[13.5px] text-zr-primary">
                     BitTorrent Swarm Engine
                   </span>
                 </div>
-                <p className="text-[12px] text-gdm-secondary">
+                <p className="text-[12px] text-zr-secondary">
                   Connects to Mainline DHT, Peer Exchange (PEX), and UDP trackers to download multi-file torrents.
                 </p>
               </div>
@@ -610,9 +610,9 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                   id="seq-torrent"
                   checked={sequential}
                   onChange={(e) => setSequential(e.target.checked)}
-                  className="rounded border-gdm text-orange-500 focus:ring-orange-500"
+                  className="rounded border-zr text-orange-500 focus:ring-orange-500"
                 />
-                <label htmlFor="seq-torrent" className="text-[13px] font-medium text-gdm-primary cursor-pointer">
+                <label htmlFor="seq-torrent" className="text-[13px] font-medium text-zr-primary cursor-pointer">
                   Sequential download (prioritize first and last pieces for media preview)
                 </label>
               </div>
@@ -621,8 +621,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
           {/* Media Mode Specifics */}
           {tab === "media" && mediaInfo && (
-            <div className="space-y-3 pt-2 border-t border-gdm">
-              <div className="flex items-center space-x-3 p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40">
+            <div className="space-y-3 pt-2 border-t border-zr">
+              <div className="flex items-center space-x-3 p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40">
                 {mediaInfo.thumbnail && (
                   <img
                     src={mediaInfo.thumbnail}
@@ -631,10 +631,10 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                   />
                 )}
                 <div className="min-w-0 flex-1">
-                  <h4 className="text-[14px] font-semibold text-gdm-primary truncate">
+                  <h4 className="text-[14px] font-semibold text-zr-primary truncate">
                     {mediaInfo.title}
                   </h4>
-                  <p className="text-[12px] text-gdm-secondary truncate">
+                  <p className="text-[12px] text-zr-secondary truncate">
                     {mediaInfo.uploader}
                   </p>
                 </div>
@@ -643,13 +643,13 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
               {/* Stream Picker */}
               {mediaInfo.videoStreams.length > 0 && (
                 <div className="space-y-1.5">
-                  <label className="text-[13px] font-medium text-gdm-secondary">
+                  <label className="text-[13px] font-medium text-zr-secondary">
                     Video Quality
                   </label>
                   <select
                     value={selectedFormatId}
                     onChange={(e) => setSelectedFormatId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-[13px] font-semibold border border-gdm bg-gdm-surface text-gdm-primary focus:border-gdm-accent focus:outline-hidden transition-colors"
+                    className="w-full px-3 py-2 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden transition-colors"
                   >
                     {mediaInfo.videoStreams.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -662,13 +662,13 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
               {/* Container Format */}
               <div className="space-y-1.5">
-                <label className="text-[13px] font-medium text-gdm-secondary">
+                <label className="text-[13px] font-medium text-zr-secondary">
                   Format Container
                 </label>
                 <select
                   value={container}
                   onChange={(e) => setContainer(e.target.value as ContainerFormat)}
-                  className="w-full px-3 py-2 rounded-lg text-[13px] font-semibold border border-gdm bg-gdm-surface text-gdm-primary focus:border-gdm-accent focus:outline-hidden transition-colors"
+                  className="w-full px-3 py-2 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden transition-colors"
                 >
                   {ALL_CONTAINERS.map((c) => (
                     <option key={c} value={c}>
@@ -683,34 +683,34 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setEnableClip(!enableClip)}
-                  className="flex items-center space-x-1.5 text-[12.5px] font-semibold text-gdm-accent hover:underline"
+                  className="flex items-center space-x-1.5 text-[12.5px] font-semibold text-zr-accent hover:underline"
                 >
                   <Scissors className="w-3.5 h-3.5" />
                   <span>{enableClip ? "Disable Timeframe Clipper" : "Enable Timeframe Clipper"}</span>
                 </button>
 
                 {enableClip && (
-                  <div className="grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40">
+                  <div className="grid grid-cols-2 gap-3 mt-2 p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40">
                     <div>
-                      <span className="text-[12px] font-medium text-gdm-secondary">
+                      <span className="text-[12px] font-medium text-zr-secondary">
                         Start (HH:MM:SS)
                       </span>
                       <input
                         type="text"
                         value={startTime}
                         onChange={(e) => setStartTime(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-lg text-[13px] font-mono border border-gdm bg-gdm-surface text-gdm-primary focus:border-gdm-accent focus:outline-hidden transition-colors"
+                        className="w-full px-3 py-1.5 rounded-lg text-[13px] font-mono border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden transition-colors"
                       />
                     </div>
                     <div>
-                      <span className="text-[12px] font-medium text-gdm-secondary">
+                      <span className="text-[12px] font-medium text-zr-secondary">
                         End (HH:MM:SS)
                       </span>
                       <input
                         type="text"
                         value={endTime}
                         onChange={(e) => setEndTime(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-lg text-[13px] font-mono border border-gdm bg-gdm-surface text-gdm-primary focus:border-gdm-accent focus:outline-hidden transition-colors"
+                        className="w-full px-3 py-1.5 rounded-lg text-[13px] font-mono border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden transition-colors"
                       />
                     </div>
                   </div>
@@ -721,11 +721,11 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-end space-x-3 px-5 py-3 border-t border-gdm bg-gdm-tableHead transition-colors">
+        <div className="flex items-center justify-end space-x-3 px-5 py-3 border-t border-zr bg-zr-tableHead transition-colors">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-[13px] font-semibold text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+            className="px-4 py-2 rounded-lg text-[13px] font-semibold text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
           >
             Cancel
           </button>
@@ -778,3 +778,4 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     </div>
   );
 };
+

@@ -156,41 +156,41 @@ textarea:focus {
 }
 
 /* Utility classes for theme tokens */
-.bg-gdm-app {
+.bg-zr-app {
   background-color: transparent;
 }
 
-.bg-gdm-surface {
+.bg-zr-surface {
   background-color: var(--glass);
   backdrop-filter: blur(30px);
   -webkit-backdrop-filter: blur(30px);
 }
 
-.bg-gdm-table-head {
+.bg-zr-table-head {
   background-color: var(--bg-table-head);
 }
 
-.border-gdm {
+.border-zr {
   border-color: var(--stroke);
 }
 
-.text-gdm-primary {
+.text-zr-primary {
   color: var(--text-primary);
 }
 
-.text-gdm-secondary {
+.text-zr-secondary {
   color: var(--text-secondary);
 }
 
-.text-gdm-muted {
+.text-zr-muted {
   color: var(--text-muted);
 }
 
-.text-gdm-accent {
+.text-zr-accent {
   color: var(--color-accent);
 }
 
-.text-gdm-transfer {
+.text-zr-transfer {
   color: var(--transfer-rate);
 }
 

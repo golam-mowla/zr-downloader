@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import {
   Layers,
   Video,
@@ -63,7 +63,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-64 h-screen flex flex-col justify-between border-r border-gdm bg-gdm-surface text-gdm-primary p-4 z-20 select-none overflow-y-auto transition-colors">
+    <aside className="w-64 h-screen flex flex-col justify-between border-r border-zr bg-zr-surface text-zr-primary p-4 z-20 select-none overflow-y-auto transition-colors">
       {/* Top Section */}
       <div className="space-y-4">
         {/* ZR Downloader Branding */}
@@ -78,11 +78,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           <div className="flex flex-col">
             <div className="flex items-center space-x-1.5">
-              <span className="font-bold text-[15px] tracking-tight text-gdm-primary">
+              <span className="font-bold text-[15px] tracking-tight text-zr-primary">
                 ZR Downloader
               </span>
             </div>
-            <span className="text-[11.5px] font-medium text-gdm-secondary">
+            <span className="text-[11.5px] font-medium text-zr-secondary">
               Download Accelerator
             </span>
           </div>
@@ -104,7 +104,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Categories Section */}
         <div className="space-y-1">
-          <p className="text-[12px] font-semibold text-gdm-secondary uppercase tracking-wider px-2.5 mb-1.5">
+          <p className="text-[12px] font-semibold text-zr-secondary uppercase tracking-wider px-2.5 mb-1.5">
             Categories
           </p>
           {categories.map((cat) => {
@@ -120,7 +120,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium transition-colors ${
                   isSelected
                     ? "bg-[#2563EB] text-white shadow-xs"
-                    : "text-gdm-secondary hover:bg-gdm-tableHead hover:text-gdm-primary"
+                    : "text-zr-secondary hover:bg-zr-tableHead hover:text-zr-primary"
                 }`}
               >
                 <div className="flex items-center space-x-2.5">
@@ -144,8 +144,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Status Queue Section */}
-        <div className="space-y-1 pt-3 border-t border-gdm">
-          <p className="text-[12px] font-semibold text-gdm-secondary uppercase tracking-wider px-2.5 mb-1.5">
+        <div className="space-y-1 pt-3 border-t border-zr">
+          <p className="text-[12px] font-semibold text-zr-secondary uppercase tracking-wider px-2.5 mb-1.5">
             Status Queue
           </p>
           {statuses.map((st) => {
@@ -158,7 +158,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[13px] font-medium transition-colors ${
                   isSelected
                     ? "bg-[#2563EB] text-white shadow-xs"
-                    : "text-gdm-secondary hover:bg-gdm-tableHead hover:text-gdm-primary"
+                    : "text-zr-secondary hover:bg-zr-tableHead hover:text-zr-primary"
                 }`}
               >
                 <div className="flex items-center space-x-2.5">
@@ -185,18 +185,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Bottom Section */}
-      <div className="pt-3 border-t border-gdm space-y-2">
+      <div className="pt-3 border-t border-zr space-y-2">
         {/* Browser Extension Bridge Status */}
-        <div className="flex items-center justify-between px-3 py-2 rounded-lg border border-gdm bg-gdm-tableHead text-[12px]">
+        <div className="flex items-center justify-between px-3 py-2 rounded-lg border border-zr bg-zr-tableHead text-[12px]">
           <div className="flex items-center space-x-2">
             <span
               className={`w-2 h-2 rounded-full ${
                 bridgeOnline ? "bg-emerald-500 shadow-[0_0_6px_#10B981]" : "bg-red-500"
               }`}
             />
-            <span className="font-medium text-gdm-secondary">Browser Bridge</span>
+            <span className="font-medium text-zr-secondary">Browser Bridge</span>
           </div>
-          <span className="font-semibold text-gdm-secondary text-[12px]">
+          <span className="font-semibold text-zr-secondary text-[12px]">
             :9666
           </span>
         </div>
@@ -204,12 +204,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Options & Settings Button */}
         <button
           onClick={onOpenSettings}
-          className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors text-[13px] font-medium text-gdm-secondary hover:text-gdm-primary hover:bg-gdm-tableHead"
+          className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors text-[13px] font-medium text-zr-secondary hover:text-zr-primary hover:bg-zr-tableHead"
         >
-          <Settings className="w-[18px] h-[18px] text-gdm-secondary" />
+          <Settings className="w-[18px] h-[18px] text-zr-secondary" />
           <span>Options & Settings</span>
         </button>
       </div>
     </aside>
   );
 };
+

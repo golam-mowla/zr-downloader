@@ -21,7 +21,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error("GDM Uncaught Error:", error, errorInfo);
+    console.error("ZR Downloader Uncaught Error:", error, errorInfo);
   }
 
   public render() {
@@ -33,7 +33,7 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
           <h2 className="text-lg font-bold mb-2">Something went wrong</h2>
           <p className="text-xs text-slate-400 max-w-md text-center mb-4 font-mono">
-            {this.state.error?.message || "An unexpected error occurred in GDM."}
+            {this.state.error?.message || "An unexpected error occurred in ZR Downloader."}
           </p>
           <button
             onClick={() => {

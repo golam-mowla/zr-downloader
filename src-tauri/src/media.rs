@@ -374,10 +374,6 @@ fn ensure_ytdlp_available() -> Option<PathBuf> {
             if p_zr.exists() { return Some(p_zr); }
             let p_zr_root = PathBuf::from(&local).join("ZR Downloader").join("yt-dlp.exe");
             if p_zr_root.exists() { return Some(p_zr_root); }
-            let p_gdm = PathBuf::from(&local).join("Goat Download Manager").join("bin").join("yt-dlp.exe");
-            if p_gdm.exists() { return Some(p_gdm); }
-            let p_gdm_root = PathBuf::from(&local).join("Goat Download Manager").join("yt-dlp.exe");
-            if p_gdm_root.exists() { return Some(p_gdm_root); }
             let p_gm = PathBuf::from(&local).join("GM-Downloader").join("bin").join("yt-dlp.exe");
             if p_gm.exists() { return Some(p_gm); }
             let p_direct = PathBuf::from(&local).join("yt-dlp.exe");
@@ -977,7 +973,7 @@ pub async fn start_download(
             "--progress",
             "--no-playlist",
             "--progress-template",
-            "download:[GDM_PROG] %(progress._percent_str)s | %(progress.downloaded_bytes)s | %(progress.total_bytes)s | %(progress.total_bytes_estimate)s | %(progress._speed_str)s | %(progress._eta_str)s",
+            "download:[ZR_PROG] %(progress._percent_str)s | %(progress.downloaded_bytes)s | %(progress.total_bytes)s | %(progress.total_bytes_estimate)s | %(progress._speed_str)s | %(progress._eta_str)s",
         ]);
 
         // Ensure Node or Deno JS runtime
@@ -1443,9 +1439,9 @@ pub async fn start_download(
                 }
                 let _ = app.emit("download-log", trimmed.to_string());
 
-                // Parse structured GDM progress template: [GDM_PROG] 45.2% | 1234567 | 2345678 | NA | 3.80MiB/s | 01:30:00
-                if trimmed.starts_with("[GDM_PROG]") {
-                    let payload = trimmed.trim_start_matches("[GDM_PROG]").trim();
+                // Parse structured ZR progress template: [ZR_PROG] 45.2% | 1234567 | 2345678 | NA | 3.80MiB/s | 01:30:00
+                if trimmed.starts_with("[ZR_PROG]") {
+                    let payload = trimmed.trim_start_matches("[ZR_PROG]").trim();
                     let parts: Vec<&str> = payload.split('|').map(|s| s.trim()).collect();
                     if parts.len() >= 6 {
                         let pct_str = parts[0].trim_end_matches('%').trim();

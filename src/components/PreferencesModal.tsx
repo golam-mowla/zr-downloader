@@ -97,18 +97,18 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 select-none">
-      <div className="w-full max-w-xl rounded-xl border border-gdm bg-gdm-surface shadow-2xl overflow-hidden transition-colors">
+      <div className="w-full max-w-xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden transition-colors">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-gdm bg-gdm-tableHead transition-colors">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-zr bg-zr-tableHead transition-colors">
           <div className="flex items-center space-x-2.5">
             <Settings className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            <h2 className="font-semibold text-[14px] text-gdm-primary">
-              GDM Options & Configuration
+            <h2 className="font-semibold text-[14px] text-zr-primary">
+              ZR Downloader Options & Configuration
             </h2>
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -116,13 +116,13 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-gdm bg-gdm-surface px-5 pt-2.5 space-x-6 transition-colors">
+        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-6 transition-colors">
           <button
             onClick={() => setActiveTab("general")}
             className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-1.5 border-b-2 transition-all ${
               activeTab === "general"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
-                : "border-transparent text-gdm-secondary hover:text-gdm-primary"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <HardDrive className="w-4 h-4" />
@@ -134,7 +134,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
             className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-1.5 border-b-2 transition-all ${
               activeTab === "connection"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
-                : "border-transparent text-gdm-secondary hover:text-gdm-primary"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Cpu className="w-4 h-4" />
@@ -146,7 +146,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
             className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-1.5 border-b-2 transition-all ${
               activeTab === "tools"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
-                : "border-transparent text-gdm-secondary hover:text-gdm-primary"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Zap className="w-4 h-4" />
@@ -160,7 +160,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
             <div className="space-y-4">
               {/* Default Downloads Directory */}
               <div className="space-y-1.5">
-                <label className="text-[13px] font-medium text-gdm-secondary">
+                <label className="text-[13px] font-medium text-zr-secondary">
                   Default Download Directory
                 </label>
                 <div className="flex space-x-2">
@@ -168,26 +168,26 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                     type="text"
                     value={savePath}
                     readOnly
-                    className="flex-1 px-3 py-2 rounded-lg font-mono text-[13px] border border-gdm bg-gdm-surface text-gdm-primary"
+                    className="flex-1 px-3 py-2 rounded-lg font-mono text-[13px] border border-zr bg-zr-surface text-zr-primary"
                   />
                   <button
                     onClick={handleBrowseFolder}
-                    className="px-4 py-2 rounded-lg border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-gdm-secondary hover:text-gdm-primary font-semibold text-[13px] flex items-center space-x-1.5 transition-colors"
+                    className="px-4 py-2 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary font-semibold text-[13px] flex items-center space-x-1.5 transition-colors"
                   >
-                    <Folder className="w-4 h-4 text-gdm-accent" />
+                    <Folder className="w-4 h-4 text-zr-accent" />
                     <span>Browse</span>
                   </button>
                 </div>
               </div>
 
               {/* Browser Integration Info */}
-              <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-900/40 border border-gdm space-y-2">
-                <div className="flex items-center space-x-2 text-gdm-accent font-semibold text-[13px]">
+              <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-900/40 border border-zr space-y-2">
+                <div className="flex items-center space-x-2 text-zr-accent font-semibold text-[13px]">
                   <Globe className="w-4 h-4" />
                   <span>Browser Integration & Bridge</span>
                 </div>
-                <p className="text-gdm-secondary text-[12px] leading-relaxed">
-                  ZR Downloader listens on <b>http://127.0.0.1:9666</b> and handles the custom protocol <b>gdm://</b>.
+                <p className="text-zr-secondary text-[12px] leading-relaxed">
+                  ZR Downloader listens on <b>http://127.0.0.1:9666</b> and handles the custom protocol <b>zr://</b>.
                   Standard browser downloads (.zip, .exe, .iso, .pdf, .mp4) are caught automatically when using the ZR Downloader extension.
                 </p>
               </div>
@@ -199,10 +199,10 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
               {/* Connections / Threads per download */}
               <div className="space-y-1.5">
                 <div className="flex justify-between">
-                  <label className="text-[13px] font-medium text-gdm-secondary">
+                  <label className="text-[13px] font-medium text-zr-secondary">
                     Default Simultaneous Chunk Connections
                   </label>
-                  <span className="font-semibold tabular-nums text-gdm-accent text-[13px]">
+                  <span className="font-semibold tabular-nums text-zr-accent text-[13px]">
                     {defaultConnections} Threads
                   </span>
                 </div>
@@ -215,7 +215,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                       className={`py-2 rounded-lg font-semibold text-[13px] border transition-all ${
                         defaultConnections === num
                           ? "bg-blue-600 border-blue-600 text-white"
-                          : "bg-gdm-surface border-gdm text-gdm-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-gdm-primary"
+                          : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
                       }`}
                     >
                       {num} Chunks
@@ -225,12 +225,12 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
               </div>
 
               {/* Max Concurrent Downloads */}
-              <div className="space-y-1.5 pt-2 border-t border-gdm">
+              <div className="space-y-1.5 pt-2 border-t border-zr">
                 <div className="flex justify-between">
-                  <label className="text-[13px] font-medium text-gdm-secondary">
+                  <label className="text-[13px] font-medium text-zr-secondary">
                     Maximum Active Concurrent Tasks
                   </label>
-                  <span className="font-semibold tabular-nums text-gdm-accent text-[13px]">
+                  <span className="font-semibold tabular-nums text-zr-accent text-[13px]">
                     {maxConcurrent} Active
                   </span>
                 </div>
@@ -243,7 +243,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                       className={`py-2 rounded-lg font-semibold text-[13px] border transition-all ${
                         maxConcurrent === num
                           ? "bg-blue-600 border-blue-600 text-white"
-                          : "bg-gdm-surface border-gdm text-gdm-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-gdm-primary"
+                          : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
                       }`}
                     >
                       {num} Downloads
@@ -253,9 +253,9 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
               </div>
 
               {/* Speed Limiter */}
-              <div className="space-y-2 pt-2 border-t border-gdm">
+              <div className="space-y-2 pt-2 border-t border-zr">
                 <div className="flex items-center justify-between">
-                  <label className="text-[13px] font-medium text-gdm-secondary">
+                  <label className="text-[13px] font-medium text-zr-secondary">
                     Global Bandwidth Limiter
                   </label>
                   <input
@@ -271,9 +271,9 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                       type="number"
                       value={speedLimitKb}
                       onChange={(e) => setSpeedLimitKb(parseInt(e.target.value) || 0)}
-                      className="w-32 px-3 py-1.5 rounded-lg border border-gdm bg-gdm-surface text-gdm-primary text-[13px] font-mono"
+                      className="w-32 px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px] font-mono"
                     />
-                    <span className="text-gdm-secondary text-[13px]">
+                    <span className="text-zr-secondary text-[13px]">
                       KB/s ({(speedLimitKb / 1024).toFixed(1)} MB/s)
                     </span>
                   </div>
@@ -285,13 +285,13 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
           {activeTab === "tools" && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-medium text-gdm-secondary">
+                <span className="text-[13px] font-medium text-zr-secondary">
                   Core Media Engine Binaries
                 </span>
                 <button
                   onClick={loadToolsInfo}
                   disabled={checkingTools}
-                  className="flex items-center space-x-1.5 text-gdm-accent hover:underline text-[12px] font-semibold"
+                  className="flex items-center space-x-1.5 text-zr-accent hover:underline text-[12px] font-semibold"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${checkingTools ? "animate-spin" : ""}`} />
                   <span>Check Updates</span>
@@ -299,7 +299,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
               </div>
 
               {tools.length === 0 ? (
-                <div className="p-4 text-gdm-muted text-[13px] text-center">
+                <div className="p-4 text-zr-muted text-[13px] text-center">
                   Checking installed tools...
                 </div>
               ) : (
@@ -307,13 +307,13 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                   {tools.map((tool) => (
                     <div
                       key={tool.name}
-                      className="p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40 flex items-center justify-between"
+                      className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 flex items-center justify-between"
                     >
                       <div>
-                        <div className="font-semibold text-[14px] text-gdm-primary">
+                        <div className="font-semibold text-[14px] text-zr-primary">
                           {tool.name}
                         </div>
-                        <div className="text-[12px] text-gdm-secondary font-mono">
+                        <div className="text-[12px] text-zr-secondary font-mono">
                           Installed: {tool.installedVersion || "Bundled"} &bull; Latest: {tool.latestVersion || "Up to date"}
                         </div>
                       </div>
@@ -343,7 +343,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end px-6 py-3.5 border-t border-gdm bg-gdm-tableHead">
+        <div className="flex items-center justify-end px-6 py-3.5 border-t border-zr bg-zr-tableHead">
           <button
             onClick={onClose}
             className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[13px] shadow-xs transition-colors"
@@ -355,3 +355,4 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
     </div>
   );
 };
+

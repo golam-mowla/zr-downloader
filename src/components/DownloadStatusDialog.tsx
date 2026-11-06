@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import {
   X,
   Minus,
@@ -73,12 +73,12 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 select-none">
-      <div className="w-full max-w-lg rounded-xl shadow-2xl border border-gdm bg-gdm-surface overflow-hidden transition-colors">
+      <div className="w-full max-w-lg rounded-xl shadow-2xl border border-zr bg-zr-surface overflow-hidden transition-colors">
         {/* Titlebar */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-gdm bg-gdm-tableHead select-none">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-zr bg-zr-tableHead select-none">
           <div className="flex items-center space-x-2 min-w-0">
             <span className="text-base">🐐</span>
-            <span className="font-semibold text-[13px] text-gdm-primary truncate">
+            <span className="font-semibold text-[13px] text-zr-primary truncate">
               {isCompleted
                 ? `Download Complete - ${task.filename}`
                 : isError
@@ -90,7 +90,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
           <div className="flex items-center space-x-1">
             <button
               onClick={onClose}
-              className="w-7 h-7 rounded-md flex items-center justify-center text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              className="w-7 h-7 rounded-md flex items-center justify-center text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
               title="Minimize to main window"
               aria-label="Minimize"
             >
@@ -98,7 +98,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
             </button>
             <button
               onClick={onClose}
-              className="w-7 h-7 rounded-md flex items-center justify-center text-gdm-secondary hover:text-white hover:bg-red-600 transition-colors"
+              className="w-7 h-7 rounded-md flex items-center justify-center text-zr-secondary hover:text-white hover:bg-red-600 transition-colors"
               title="Close dialog"
               aria-label="Close dialog"
             >
@@ -110,21 +110,21 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
         {/* Content Body */}
         <div className="p-4 space-y-4">
           {/* File Name & URL */}
-          <div className="p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40 space-y-2">
+          <div className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2">
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-[13px] font-medium text-gdm-secondary shrink-0">
+              <span className="text-[13px] font-medium text-zr-secondary shrink-0">
                 File Name:
               </span>
-              <span className="text-[14px] font-semibold text-gdm-primary truncate text-right flex-1" title={task.filename}>
+              <span className="text-[14px] font-semibold text-zr-primary truncate text-right flex-1" title={task.filename}>
                 {task.filename}
               </span>
             </div>
             <div className="flex items-baseline justify-between gap-3">
-              <span className="text-[13px] font-medium text-gdm-secondary shrink-0">
+              <span className="text-[13px] font-medium text-zr-secondary shrink-0">
                 URL:
               </span>
               <span
-                className="truncate font-mono text-[13px] text-gdm-accent text-right flex-1"
+                className="truncate font-mono text-[13px] text-zr-accent text-right flex-1"
                 title={task.url}
               >
                 {task.url}
@@ -133,7 +133,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
           </div>
 
           {/* Metrics Grid */}
-          <div className="grid grid-cols-2 gap-2.5 p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40">
+          <div className="grid grid-cols-2 gap-2.5 p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40">
             {/* Error Message Banner */}
             {isError && (task.errorMessage || (task as any).error) && (
               <div className="col-span-2 p-2.5 rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50">
@@ -146,7 +146,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
             {/* Status */}
             <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-gdm-secondary">
+              <span className="text-[13px] font-medium text-zr-secondary">
                 Status:
               </span>
               <span
@@ -160,7 +160,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
             {/* Resume Capability */}
             <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-gdm-secondary">
+              <span className="text-[13px] font-medium text-zr-secondary">
                 Resume capability:
               </span>
               <span
@@ -176,17 +176,17 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
             {/* File Size */}
             <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-gdm-secondary">
+              <span className="text-[13px] font-medium text-zr-secondary">
                 File size:
               </span>
-              <span className="font-semibold tabular-nums text-gdm-primary text-[13px]">
+              <span className="font-semibold tabular-nums text-zr-primary text-[13px]">
                 {total > 0 ? formatBytes(total) : "Unknown"}
               </span>
             </div>
 
             {/* Downloaded */}
             <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-gdm-secondary">
+              <span className="text-[13px] font-medium text-zr-secondary">
                 Downloaded:
               </span>
               <span className="font-semibold tabular-nums text-emerald-700 dark:text-emerald-400 text-[13px]">
@@ -196,7 +196,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
             {/* Transfer Rate */}
             <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-gdm-secondary">
+              <span className="text-[13px] font-medium text-zr-secondary">
                 Transfer rate:
               </span>
               <span className="font-semibold tabular-nums text-amber-800 dark:text-amber-400 text-[13px] flex items-center space-x-1">
@@ -211,10 +211,10 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
             {/* Time Left */}
             <div className="flex items-center justify-between">
-              <span className="text-[13px] font-medium text-gdm-secondary">
+              <span className="text-[13px] font-medium text-zr-secondary">
                 Time left:
               </span>
-              <span className="font-semibold tabular-nums text-gdm-secondary text-[13px]">
+              <span className="font-semibold tabular-nums text-zr-secondary text-[13px]">
                 {isDownloading
                   ? task.eta_formatted || "Calculating..."
                   : isCompleted
@@ -227,8 +227,8 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
           {/* Main Progress Bar: 8px high, visible track, solid accent fill */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-[13px] font-semibold tabular-nums">
-              <span className="text-gdm-primary">{clampedPercent.toFixed(1)}%</span>
-              <span className="text-gdm-secondary">
+              <span className="text-zr-primary">{clampedPercent.toFixed(1)}%</span>
+              <span className="text-zr-secondary">
                 {formatBytes(downloaded)} of {total > 0 ? formatBytes(total) : "Unknown"}
               </span>
             </div>
@@ -250,9 +250,9 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
           {/* Segmented Thread Visualizer */}
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between text-[12px] font-semibold text-gdm-secondary">
+            <div className="flex items-center justify-between text-[12px] font-semibold text-zr-secondary">
               <span>Segmented Connection:</span>
-              <span className="text-gdm-accent">
+              <span className="text-zr-accent">
                 {chunkCount} Parallel Streams
               </span>
             </div>
@@ -284,7 +284,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
           </div>
 
           {/* Action Buttons Row */}
-          <div className="flex items-center justify-between pt-3 border-t border-gdm">
+          <div className="flex items-center justify-between pt-3 border-t border-zr">
             <div className="flex items-center space-x-2">
               {isDownloading && (
                 <button
@@ -322,7 +322,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
                   </button>
                   <button
                     onClick={() => onOpenFolder(task.save_path || task.savePath || "")}
-                    className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-gdm-secondary hover:text-gdm-primary font-semibold text-[13px] transition-colors shadow-xs"
+                    className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary font-semibold text-[13px] transition-colors shadow-xs"
                   >
                     <FolderOpen className="w-4 h-4" />
                     <span>Open Folder</span>
@@ -340,7 +340,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
             <button
               onClick={onClose}
-              className="px-3.5 py-1.5 rounded-lg border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-gdm-secondary hover:text-gdm-primary font-semibold text-[13px] transition-colors"
+              className="px-3.5 py-1.5 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary font-semibold text-[13px] transition-colors"
             >
               Hide / Background
             </button>
@@ -354,3 +354,4 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 // Backwards compatibility alias
 export const IdmDownloadDialog = DownloadStatusDialog;
 export type IdmDownloadDialogProps = DownloadStatusDialogProps;
+

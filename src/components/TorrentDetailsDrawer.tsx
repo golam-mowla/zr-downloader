@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import {
   X,
   HardDrive,
@@ -159,16 +159,16 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
   if (!isOpen || !torrentId) return null;
 
   return (
-    <div className="border-t border-gdm bg-gdm-surface text-gdm-primary transition-colors flex flex-col h-72 shadow-lg z-30">
+    <div className="border-t border-zr bg-zr-surface text-zr-primary transition-colors flex flex-col h-72 shadow-lg z-30">
       {/* Header & Tabs */}
-      <div className="flex items-center justify-between border-b border-gdm bg-gdm-tableHead px-4 py-2">
+      <div className="flex items-center justify-between border-b border-zr bg-zr-tableHead px-4 py-2">
         <div className="flex items-center space-x-1">
           <button
             onClick={() => setActiveTab("general")}
             className={`px-3 py-1.5 rounded-md text-[13px] font-semibold flex items-center space-x-1.5 transition-colors ${
               activeTab === "general"
                 ? "bg-blue-600 text-white shadow-xs"
-                : "text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
+                : "text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
             }`}
           >
             <Info className="w-3.5 h-3.5" />
@@ -179,7 +179,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
             className={`px-3 py-1.5 rounded-md text-[13px] font-semibold flex items-center space-x-1.5 transition-colors ${
               activeTab === "trackers"
                 ? "bg-blue-600 text-white shadow-xs"
-                : "text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
+                : "text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
             }`}
           >
             <Radio className="w-3.5 h-3.5" />
@@ -190,7 +190,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
             className={`px-3 py-1.5 rounded-md text-[13px] font-semibold flex items-center space-x-1.5 transition-colors ${
               activeTab === "peers"
                 ? "bg-blue-600 text-white shadow-xs"
-                : "text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
+                : "text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
             }`}
           >
             <Users className="w-3.5 h-3.5" />
@@ -201,7 +201,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
             className={`px-3 py-1.5 rounded-md text-[13px] font-semibold flex items-center space-x-1.5 transition-colors ${
               activeTab === "content"
                 ? "bg-blue-600 text-white shadow-xs"
-                : "text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
+                : "text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
             }`}
           >
             <FileCode className="w-3.5 h-3.5" />
@@ -212,7 +212,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
             className={`px-3 py-1.5 rounded-md text-[13px] font-semibold flex items-center space-x-1.5 transition-colors ${
               activeTab === "pieces"
                 ? "bg-blue-600 text-white shadow-xs"
-                : "text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
+                : "text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700/60"
             }`}
           >
             <Grid className="w-3.5 h-3.5" />
@@ -222,7 +222,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
 
         <button
           onClick={onClose}
-          className="p-1 rounded-md text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+          className="p-1 rounded-md text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
           title="Close details"
         >
           <X className="w-4 h-4" />
@@ -233,74 +233,74 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
       <div className="flex-1 overflow-y-auto p-4 text-[13px]">
         {activeTab === "general" && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="space-y-2 p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40">
-              <span className="text-[12px] font-medium text-gdm-secondary uppercase tracking-wider block">Transfer</span>
+            <div className="space-y-2 p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40">
+              <span className="text-[12px] font-medium text-zr-secondary uppercase tracking-wider block">Transfer</span>
               <div className="space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Download Speed:</span>
+                  <span className="text-zr-secondary">Download Speed:</span>
                   <span className="font-semibold text-emerald-600 dark:text-emerald-400 flex items-center space-x-1">
                     <ArrowDown className="w-3 h-3" />
                     <span>{details?.download_speed || "0 B/s"}</span>
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Upload Speed:</span>
+                  <span className="text-zr-secondary">Upload Speed:</span>
                   <span className="font-semibold text-blue-600 dark:text-blue-400 flex items-center space-x-1">
                     <ArrowUp className="w-3 h-3" />
                     <span>{details?.upload_speed || "0 B/s"}</span>
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Share Ratio:</span>
-                  <span className="font-semibold text-gdm-primary">{(details?.ratio || 0).toFixed(2)}</span>
+                  <span className="text-zr-secondary">Share Ratio:</span>
+                  <span className="font-semibold text-zr-primary">{(details?.ratio || 0).toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">ETA:</span>
-                  <span className="font-semibold text-gdm-primary">{details?.eta || "--"}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2 p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40">
-              <span className="text-[12px] font-medium text-gdm-secondary uppercase tracking-wider block">Swarm</span>
-              <div className="space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Connected Peers:</span>
-                  <span className="font-semibold text-gdm-primary">{details?.peers_connected || 0}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Connected Seeds:</span>
-                  <span className="font-semibold text-gdm-primary">{details?.seeds_connected || 0}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Pieces:</span>
-                  <span className="font-semibold text-gdm-primary">{details?.pieces_downloaded} / {details?.num_pieces}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Piece Size:</span>
-                  <span className="font-semibold text-gdm-primary">{formatBytes(details?.piece_length || 0)}</span>
+                  <span className="text-zr-secondary">ETA:</span>
+                  <span className="font-semibold text-zr-primary">{details?.eta || "--"}</span>
                 </div>
               </div>
             </div>
 
-            <div className="col-span-2 space-y-2 p-3 rounded-lg border border-gdm bg-slate-50 dark:bg-slate-900/40">
-              <span className="text-[12px] font-medium text-gdm-secondary uppercase tracking-wider block">Information</span>
+            <div className="space-y-2 p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40">
+              <span className="text-[12px] font-medium text-zr-secondary uppercase tracking-wider block">Swarm</span>
               <div className="space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">InfoHash:</span>
-                  <span className="font-mono text-[12px] text-gdm-primary select-all truncate max-w-xs">{details?.info_hash || "--"}</span>
+                  <span className="text-zr-secondary">Connected Peers:</span>
+                  <span className="font-semibold text-zr-primary">{details?.peers_connected || 0}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Save Path:</span>
-                  <span className="font-mono text-[12px] text-gdm-primary truncate max-w-xs">{details?.save_path || "--"}</span>
+                  <span className="text-zr-secondary">Connected Seeds:</span>
+                  <span className="font-semibold text-zr-primary">{details?.seeds_connected || 0}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Total Size:</span>
-                  <span className="font-semibold text-gdm-primary">{formatBytes(details?.total_bytes || 0)}</span>
+                  <span className="text-zr-secondary">Pieces:</span>
+                  <span className="font-semibold text-zr-primary">{details?.pieces_downloaded} / {details?.num_pieces}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gdm-secondary">Status:</span>
-                  <span className="font-semibold capitalize text-gdm-accent">{details?.state || "Unknown"}</span>
+                  <span className="text-zr-secondary">Piece Size:</span>
+                  <span className="font-semibold text-zr-primary">{formatBytes(details?.piece_length || 0)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-span-2 space-y-2 p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40">
+              <span className="text-[12px] font-medium text-zr-secondary uppercase tracking-wider block">Information</span>
+              <div className="space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-zr-secondary">InfoHash:</span>
+                  <span className="font-mono text-[12px] text-zr-primary select-all truncate max-w-xs">{details?.info_hash || "--"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zr-secondary">Save Path:</span>
+                  <span className="font-mono text-[12px] text-zr-primary truncate max-w-xs">{details?.save_path || "--"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zr-secondary">Total Size:</span>
+                  <span className="font-semibold text-zr-primary">{formatBytes(details?.total_bytes || 0)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zr-secondary">Status:</span>
+                  <span className="font-semibold capitalize text-zr-accent">{details?.state || "Unknown"}</span>
                 </div>
               </div>
             </div>
@@ -311,25 +311,25 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-gdm text-[12px] text-gdm-secondary">
+                <tr className="border-b border-zr text-[12px] text-zr-secondary">
                   <th className="pb-2 font-medium">#</th>
                   <th className="pb-2 font-medium">Tracker URL</th>
                   <th className="pb-2 font-medium">Status</th>
                   <th className="pb-2 font-medium">Peers</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gdm/50 text-[12.5px]">
+              <tbody className="divide-y divide-zr/50 text-[12.5px]">
                 {(details?.trackers || []).map((tr, idx) => (
                   <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/40">
-                    <td className="py-2 text-gdm-secondary">{idx + 1}</td>
-                    <td className="py-2 font-mono text-[12px] text-gdm-primary">{tr.url}</td>
+                    <td className="py-2 text-zr-secondary">{idx + 1}</td>
+                    <td className="py-2 font-mono text-[12px] text-zr-primary">{tr.url}</td>
                     <td className="py-2 text-emerald-600 dark:text-emerald-400 font-semibold">{tr.status}</td>
-                    <td className="py-2 text-gdm-secondary">{tr.peers}</td>
+                    <td className="py-2 text-zr-secondary">{tr.peers}</td>
                   </tr>
                 ))}
                 {(!details?.trackers || details.trackers.length === 0) && (
                   <tr>
-                    <td colSpan={4} className="py-4 text-center text-gdm-muted">
+                    <td colSpan={4} className="py-4 text-center text-zr-muted">
                       DHT / PEX Swarm active (no manual trackers added)
                     </td>
                   </tr>
@@ -343,7 +343,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-gdm text-[12px] text-gdm-secondary">
+                <tr className="border-b border-zr text-[12px] text-zr-secondary">
                   <th className="pb-2 font-medium">IP : Port</th>
                   <th className="pb-2 font-medium">Client</th>
                   <th className="pb-2 font-medium">Flags</th>
@@ -352,18 +352,18 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
                   <th className="pb-2 font-medium">Up Speed</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gdm/50 text-[12.5px]">
+              <tbody className="divide-y divide-zr/50 text-[12.5px]">
                 {(details?.peers || []).map((peer, idx) => (
                   <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/40">
-                    <td className="py-2 font-mono text-[12px] text-gdm-primary">{peer.addr}</td>
-                    <td className="py-2 text-gdm-primary">{peer.client}</td>
-                    <td className="py-2 font-mono text-[11px] text-gdm-secondary">{peer.flags}</td>
+                    <td className="py-2 font-mono text-[12px] text-zr-primary">{peer.addr}</td>
+                    <td className="py-2 text-zr-primary">{peer.client}</td>
+                    <td className="py-2 font-mono text-[11px] text-zr-secondary">{peer.flags}</td>
                     <td className="py-2">
                       <div className="flex items-center space-x-2">
                         <div className="w-16 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                           <div className="h-full bg-blue-600 rounded-full" style={{ width: `${peer.progress}%` }} />
                         </div>
-                        <span className="text-[11px] text-gdm-secondary">{peer.progress}%</span>
+                        <span className="text-[11px] text-zr-secondary">{peer.progress}%</span>
                       </div>
                     </td>
                     <td className="py-2 text-emerald-600 dark:text-emerald-400 font-semibold">{peer.down_speed}</td>
@@ -372,7 +372,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
                 ))}
                 {(!details?.peers || details.peers.length === 0) && (
                   <tr>
-                    <td colSpan={6} className="py-4 text-center text-gdm-muted">
+                    <td colSpan={6} className="py-4 text-center text-zr-muted">
                       Searching for swarm peers via Mainline DHT and UDP trackers...
                     </td>
                   </tr>
@@ -386,19 +386,19 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="border-b border-gdm text-[12px] text-gdm-secondary">
+                <tr className="border-b border-zr text-[12px] text-zr-secondary">
                   <th className="pb-2 font-medium">#</th>
                   <th className="pb-2 font-medium">File Name</th>
                   <th className="pb-2 font-medium">Size</th>
                   <th className="pb-2 font-medium">Priority</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gdm/50 text-[12.5px]">
+              <tbody className="divide-y divide-zr/50 text-[12.5px]">
                 {(details?.files || []).map((file, idx) => (
                   <tr key={idx} className="hover:bg-slate-100 dark:hover:bg-slate-800/40">
-                    <td className="py-2 text-gdm-secondary">{idx + 1}</td>
-                    <td className="py-2 font-medium text-gdm-primary">{file.filename}</td>
-                    <td className="py-2 text-gdm-secondary">{file.length_formatted}</td>
+                    <td className="py-2 text-zr-secondary">{idx + 1}</td>
+                    <td className="py-2 font-medium text-zr-primary">{file.filename}</td>
+                    <td className="py-2 text-zr-secondary">{file.length_formatted}</td>
                     <td className="py-2">
                       <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800">
                         Normal
@@ -413,7 +413,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
 
         {activeTab === "pieces" && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between text-[12px] text-gdm-secondary">
+            <div className="flex items-center justify-between text-[12px] text-zr-secondary">
               <span>Downloaded: {details?.pieces_downloaded} of {details?.num_pieces} pieces ({(details?.progress || 0).toFixed(1)}%)</span>
               <div className="flex items-center space-x-3 text-[11.5px]">
                 <div className="flex items-center space-x-1">
@@ -427,7 +427,7 @@ export const TorrentDetailsDrawer: React.FC<TorrentDetailsDrawerProps> = ({
               </div>
             </div>
             {/* Visual Piece Block Grid */}
-            <div className="p-3 rounded-lg border border-gdm bg-slate-100 dark:bg-slate-900 flex flex-wrap gap-1 max-h-48 overflow-y-auto">
+            <div className="p-3 rounded-lg border border-zr bg-slate-100 dark:bg-slate-900 flex flex-wrap gap-1 max-h-48 overflow-y-auto">
               {Array.from({ length: Math.min(200, details?.num_pieces || 100) }).map((_, i) => {
                 const isDownloaded = details ? (i < (details.pieces_downloaded / details.num_pieces) * 200) : false;
                 return (
@@ -465,3 +465,4 @@ function formatEta(seconds: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
+

@@ -1,7 +1,7 @@
-# GDM BitTorrent Integration Plan (qBittorrent-Grade Torrent Engine)
+# ZR Downloader BitTorrent Integration Plan (qBittorrent-Grade Torrent Engine)
 
 ## Overview
-Integration of a high-performance, asynchronous BitTorrent client into Goat Download Manager (GDM) with full qBittorrent-level capabilities.
+Integration of a high-performance, asynchronous BitTorrent client into ZR Downloader with full qBittorrent-level capabilities.
 
 ## Engine Selection & Verdict
 - **libtorrent-rasterbar Rust bindings status:**
@@ -26,7 +26,7 @@ Integration of a high-performance, asynchronous BitTorrent client into Goat Down
   - `.torrent` file parsing (metainfo, file tree, piece length, infohash).
   - Native file picker for `.torrent` files via Tauri Dialog plugin.
   - Windows command-line args handler for `.torrent` files and `magnet:` links with percent-encoding.
-  - Windows registry integration: `magnet://` URL protocol handler & `.torrent` file association (`GDM.Torrent`).
+  - Windows registry integration: `magnet://` URL protocol handler & `.torrent` file association (`ZRDownloader.Torrent`).
   - Browser extension interception of `.torrent` file downloads and 1-click `magnet:` link triggers.
   - Native window Drag & Drop support for `.torrent` files.
   - Robust input sanitization: handles `@[path]`, surrounding quotes, brackets, and remote `.torrent` HTTP/HTTPS URLs.
@@ -45,16 +45,16 @@ Integration of a high-performance, asynchronous BitTorrent client into Goat Down
 
 ### Phase 1.5: Professional Brand Polish & Android Mobile Integration (Completed)
 - [x] **Brand Cleanliness**:
-  - Removed "PRO" tag from next to "GDM" in `src/components/Sidebar.tsx` and `browser-extension/popup.html`.
+  - Removed "PRO" tag from next to "ZR Downloader" in `src/components/Sidebar.tsx` and `browser-extension/popup.html`.
   - Replaced all user-facing "IDM" and legacy names across entire app with professional titles ("Multi-Threaded Turbo", "Parallel Connections", "Download Details Dialog", "Table View").
   - Refactored `IdmDownloadDialog.tsx` into clean, professional `DownloadStatusDialog.tsx`.
   - Retained all existing multi-threaded HTTP/HTTPS engines, Kick HLS segmented native resume, Instagram stream grabber, and BitTorrent settings.
 - [x] **Mobile App Universal Browser Interception (Android)**:
   - Added comprehensive `android.intent.action.VIEW` and `android.intent.action.SEND` intent filters in `AndroidManifest.xml` for all mobile browsers (Chrome, Samsung Internet, Firefox, Edge, Brave, Opera).
   - Registered handlers for magnet schemes (`magnet:*`), torrent MIME types (`application/x-bittorrent`), and file extension pathPatterns (`.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.iso`, `.apk`, `.exe`, `.msi`, `.bin`, `.pdf`, `.mp4`, `.mkv`, `.webm`, `.avi`, `.mov`, `.mp3`, `.m4a`, `.flac`, `.wav`, `.m3u8`, `.ts`, `.torrent`).
-  - Implemented comprehensive URI/URL extraction in `MainActivity.java` supporting direct VIEW clicks, browser share sheet SEND events, and custom protocols (`gdm://`).
+  - Implemented comprehensive URI/URL extraction in `MainActivity.java` supporting direct VIEW clicks, browser share sheet SEND events, and custom protocols (`zr://`).
   - Added Android JavaScript bridge callbacks (`onAndroidSharedUrl`, `onAndroidFolderSelected`, `onAndroidProgress`, `onAndroidComplete`, `fetchMediaInfo`) for real-time progress and folder selection.
-  - Added automated GitHub Actions CI workflow to build Android APK (`Goat-Download-Manager.apk`) on push and attach to releases.
+  - Added automated GitHub Actions CI workflow to build Android APK (`ZR-Downloader.apk`) on push and attach to releases.
 
 ### Phase 2: Speed, Network & Swarm Optimization
 - [ ] Swarm defaults: 200 global / 100 per-torrent connections, 4-8 upload slots, optimistic unchoke, rarest-first picker.
@@ -84,7 +84,7 @@ Integration of a high-performance, asynchronous BitTorrent client into Goat Down
 ### Phase 5: Web UI & Remote Integration
 - [ ] Embedded authenticated Web UI (localhost by default, CSRF protection, secure session tokens).
 - [ ] REST API for remote control.
-- [ ] Browser extension bridge integration: 1-click send magnet / .torrent from Chrome/Brave/Firefox to GDM.
+- [ ] Browser extension bridge integration: 1-click send magnet / .torrent from Chrome/Brave/Firefox to ZR Downloader.
 - [ ] All-time transfer statistics and share ratio tracking.
 
 ### Phase 6: Mobile / Android Adaptation

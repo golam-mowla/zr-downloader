@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "com.golammowla.gdm"
+    namespace = "com.golammowla.zrdownloader"
     compileSdk = 35
 
     defaultConfig {
@@ -136,3 +136,4 @@ dependencies {
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
 }
+

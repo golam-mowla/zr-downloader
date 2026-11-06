@@ -1,4 +1,4 @@
-// Goat Download Manager (GDM) - BitTorrent Engine
+// ZR Downloader - BitTorrent Engine
 // High-performance asynchronous BitTorrent client powered by librqbit Api facade
 // 100% clean-room Apache-2.0 implementation with qBittorrent-level features
 
@@ -173,7 +173,7 @@ pub async fn add_torrent(
         details.stats = Some(st);
     }
 
-    // Background live progress ticker emitting to GDM UI
+    // Background live progress ticker emitting to ZR Downloader UI
     let api_clone = api.clone();
     let app_clone = app.clone();
     let info_hash = details.info_hash.clone();

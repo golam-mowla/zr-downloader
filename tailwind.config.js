@@ -8,7 +8,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        gdm: {
+        zr: {
           app: "var(--bg-app)",
           surface: "var(--bg-surface)",
           tableHead: "var(--bg-table-head)",

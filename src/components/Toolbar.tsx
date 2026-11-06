@@ -1,4 +1,4 @@
-import React from "react";
+﻿import React from "react";
 import {
   Plus,
   Play,
@@ -42,7 +42,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   hasCompleted,
 }) => {
   return (
-    <div className="h-14 px-3 sm:px-4 border-b border-gdm bg-gdm-surface flex items-center justify-between gap-1.5 sm:gap-2 z-10 select-none overflow-x-auto transition-colors">
+    <div className="h-14 px-3 sm:px-4 border-b border-zr bg-zr-surface flex items-center justify-between gap-1.5 sm:gap-2 z-10 select-none overflow-x-auto transition-colors">
       {/* Primary Action Buttons */}
       <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
         {/* Add URL */}
@@ -59,7 +59,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <button
           onClick={onResumeSelected}
           disabled={!hasSelected}
-          className="flex items-center space-x-1 sm:space-x-1.5 min-h-[32px] px-2 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-400 disabled:opacity-60 disabled:pointer-events-none transition-colors"
+          className="flex items-center space-x-1 sm:space-x-1.5 min-h-[32px] px-2 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-emerald-700 dark:text-emerald-400 disabled:opacity-60 disabled:pointer-events-none transition-colors"
           title="Resume selected download"
         >
           <Play className="w-[18px] h-[18px] fill-current" />
@@ -70,7 +70,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <button
           onClick={onPauseSelected}
           disabled={!hasSelected}
-          className="flex items-center space-x-1 sm:space-x-1.5 min-h-[32px] px-2 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-amber-800 dark:text-amber-400 disabled:opacity-60 disabled:pointer-events-none transition-colors"
+          className="flex items-center space-x-1 sm:space-x-1.5 min-h-[32px] px-2 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-amber-800 dark:text-amber-400 disabled:opacity-60 disabled:pointer-events-none transition-colors"
           title="Pause selected download"
         >
           <Pause className="w-[18px] h-[18px]" />
@@ -92,7 +92,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <button
           onClick={onDeleteSelected}
           disabled={!hasSelected}
-          className="flex items-center space-x-1 sm:space-x-1.5 min-h-[32px] px-2 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-gdm bg-gdm-surface hover:bg-red-50 dark:hover:bg-red-950/30 text-gdm-secondary hover:text-red-600 dark:hover:text-red-400 disabled:opacity-60 disabled:pointer-events-none transition-colors"
+          className="flex items-center space-x-1 sm:space-x-1.5 min-h-[32px] px-2 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface hover:bg-red-50 dark:hover:bg-red-950/30 text-zr-secondary hover:text-red-600 dark:hover:text-red-400 disabled:opacity-60 disabled:pointer-events-none transition-colors"
           title="Delete selected download"
         >
           <Trash2 className="w-[18px] h-[18px]" />
@@ -103,7 +103,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <button
           onClick={onClearCompleted}
           disabled={!hasCompleted}
-          className="hidden sm:flex items-center space-x-1.5 min-h-[32px] px-2.5 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-gdm-secondary hover:text-gdm-primary disabled:opacity-60 disabled:pointer-events-none transition-colors"
+          className="hidden sm:flex items-center space-x-1.5 min-h-[32px] px-2.5 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary disabled:opacity-60 disabled:pointer-events-none transition-colors"
           title="Clear finished downloads from list"
         >
           <CheckCheck className="w-[18px] h-[18px]" />
@@ -126,7 +126,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Open Download Folder */}
         <button
           onClick={onOpenDefaultFolder}
-          className="w-8 h-8 rounded-lg flex items-center justify-center border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-gdm-secondary hover:text-gdm-primary transition-colors"
+          className="w-8 h-8 rounded-lg flex items-center justify-center border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary transition-colors"
           title="Open Downloads Folder"
           aria-label="Open Downloads Folder"
         >
@@ -136,7 +136,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         {/* Settings */}
         <button
           onClick={onOpenSettings}
-          className="w-8 h-8 rounded-lg flex items-center justify-center border border-gdm bg-gdm-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-gdm-secondary hover:text-gdm-primary transition-colors"
+          className="w-8 h-8 rounded-lg flex items-center justify-center border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary transition-colors"
           title="Preferences & Settings"
           aria-label="Preferences & Settings"
         >
@@ -146,3 +146,4 @@ export const Toolbar: React.FC<ToolbarProps> = ({
     </div>
   );
 };
+

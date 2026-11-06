@@ -11,9 +11,9 @@ const toggleInterception = document.getElementById("toggle-interception");
 
 let detectedUrl = "";
 
-// Check GDM Desktop App status on open
+// Check ZR Downloader Desktop App status on open
 function checkStatus() {
-  chrome.runtime.sendMessage({ action: "CHECK_GDM_STATUS" }, (response) => {
+  chrome.runtime.sendMessage({ action: "CHECK_ZR_STATUS" }, (response) => {
     if (response && response.online) {
       statusPill.className = "status-pill online";
       statusText.textContent = "Engine Online (:9666)";
@@ -58,9 +58,9 @@ chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
 // Download current media button
 btnDownloadCurrent.addEventListener("click", () => {
   if (!detectedUrl || detectedUrl.startsWith("chrome://")) return;
-  btnDownloadCurrent.textContent = "Sending to GDM Engine...";
-  chrome.runtime.sendMessage({ action: "SEND_TO_GDM", url: detectedUrl }, () => {
-    btnDownloadCurrent.textContent = "✓ Sent to GDM!";
+  btnDownloadCurrent.textContent = "Sending to ZR Engine...";
+  chrome.runtime.sendMessage({ action: "SEND_TO_ZR", url: detectedUrl }, () => {
+    btnDownloadCurrent.textContent = "✓ Sent to ZR Downloader!";
     setTimeout(() => {
       window.close();
     }, 800);
@@ -72,7 +72,7 @@ btnDownloadCustom.addEventListener("click", () => {
   const url = (customUrlInput.value || "").trim();
   if (!url) return;
   btnDownloadCustom.textContent = "...";
-  chrome.runtime.sendMessage({ action: "SEND_TO_GDM", url }, () => {
+  chrome.runtime.sendMessage({ action: "SEND_TO_ZR", url }, () => {
     btnDownloadCustom.textContent = "Sent!";
     setTimeout(() => {
       window.close();

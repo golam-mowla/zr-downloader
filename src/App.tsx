@@ -75,7 +75,7 @@ export const App: React.FC = () => {
   const [defaultDir, setDefaultDir] = useState("D:\\Downloads");
   const [bridgeOnline, setBridgeOnline] = useState(true);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
-    return (localStorage.getItem("gdm-theme") as "dark" | "light") || "dark";
+    return (localStorage.getItem("zr-theme") as "dark" | "light") || "dark";
   });
   const [activePopupTask, setActivePopupTask] = useState<DownloadTask | null>(null);
 
@@ -98,7 +98,7 @@ export const App: React.FC = () => {
   const handleToggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
-    localStorage.setItem("gdm-theme", next);
+    localStorage.setItem("zr-theme", next);
   };
 
   // Load existing tasks and default download folder on mount
@@ -127,7 +127,7 @@ export const App: React.FC = () => {
         }
       } catch {}
 
-      // Check if started with pending URL (e.g. via gdm:// protocol or Android Intent)
+      // Check if started with pending URL (e.g. via zr:// protocol or Android Intent)
       try {
         const androidBridge = (window as any).GMAndroidBridge;
         if (androidBridge?.getPendingSharedUrl) {
@@ -219,7 +219,7 @@ export const App: React.FC = () => {
 
     // 1. Download progress event
     const unlistenProgress = listen<any>("download-progress", handleProgress);
-    const unlistenGdmProgress = listen<any>("gdm://progress", handleProgress);
+    const unlistenZrProgress = listen<any>("zr://progress", handleProgress);
 
     // 2. Download complete event
     const handleComplete = (event: { payload: any }) => {
@@ -243,7 +243,7 @@ export const App: React.FC = () => {
       );
     };
     const unlistenComplete = listen<any>("download-complete", handleComplete);
-    const unlistenGdmComplete = listen<any>("gdm://completed", handleComplete);
+    const unlistenZrComplete = listen<any>("zr://completed", handleComplete);
 
     // 3. Download error event
     const unlistenError = listen<any>("download-error", (event) => {
@@ -313,7 +313,10 @@ export const App: React.FC = () => {
 
         if (autoStart) {
           const isDirectFile =
-            (lower.endsWith(".zip") ||
+            raw.isDirectFile ||
+            targetQuality?.toLowerCase() === "thumbnail" ||
+            targetQuality?.toLowerCase() === "subtitle" ||
+            ((lower.endsWith(".zip") ||
               lower.endsWith(".rar") ||
               lower.endsWith(".7z") ||
               lower.endsWith(".tar") ||
@@ -322,8 +325,15 @@ export const App: React.FC = () => {
               lower.endsWith(".exe") ||
               lower.endsWith(".msi") ||
               lower.endsWith(".pdf") ||
-              lower.endsWith(".dmg")) &&
-            !targetQuality;
+              lower.endsWith(".dmg") ||
+              lower.endsWith(".jpg") ||
+              lower.endsWith(".jpeg") ||
+              lower.endsWith(".png") ||
+              lower.endsWith(".webp") ||
+              lower.endsWith(".vtt") ||
+              lower.endsWith(".srt") ||
+              lower.includes("timedtext")) &&
+              !targetQuality);
 
           if (isDirectFile) {
             handleAddDirectDownloadRef.current(
@@ -400,7 +410,7 @@ export const App: React.FC = () => {
       }
     };
     const unlistenOpenUrl = listen<any>("open-url", handleOpenUrl);
-    const unlistenGdmOpenUrl = listen<any>("gdm://open-url", handleOpenUrl);
+    const unlistenZrOpenUrl = listen<any>("zr://open-url", handleOpenUrl);
 
     // Register Android Bridge Dynamic Callbacks
     (window as any).onAndroidSharedUrl = (url: string) => {
@@ -451,12 +461,12 @@ export const App: React.FC = () => {
 
     return () => {
       unlistenProgress.then((f) => f()).catch(() => {});
-      unlistenGdmProgress.then((f) => f()).catch(() => {});
+      unlistenZrProgress.then((f) => f()).catch(() => {});
       unlistenComplete.then((f) => f()).catch(() => {});
-      unlistenGdmComplete.then((f) => f()).catch(() => {});
+      unlistenZrComplete.then((f) => f()).catch(() => {});
       unlistenError.then((f) => f()).catch(() => {});
       unlistenOpenUrl.then((f) => f()).catch(() => {});
-      unlistenGdmOpenUrl.then((f) => f()).catch(() => {});
+      unlistenZrOpenUrl.then((f) => f()).catch(() => {});
       delete (window as any).onAndroidSharedUrl;
       delete (window as any).onAndroidFolderSelected;
       delete (window as any).onAndroidProgress;
@@ -1057,7 +1067,7 @@ export const App: React.FC = () => {
   const isDark = theme === "dark";
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden font-sans bg-gdm-app text-gdm-primary transition-colors duration-150">
+    <div className="flex h-screen w-screen overflow-hidden font-sans bg-zr-app text-zr-primary transition-colors duration-150">
       {/* Left Sidebar (IDM Category Tree + Status) */}
       <Sidebar
         selectedCategory={selectedCategory}
@@ -1104,7 +1114,7 @@ export const App: React.FC = () => {
         />
 
         {/* Top Search, Status & View Toggle Bar */}
-        <div className="px-5 py-2.5 border-b border-gdm bg-gdm-surface flex items-center justify-between gap-4 z-10 select-none transition-colors">
+        <div className="px-5 py-2.5 border-b border-zr bg-zr-surface flex items-center justify-between gap-4 z-10 select-none transition-colors">
           {/* Search Bar */}
           <div className="flex-1 max-w-md">
             <TopBar
@@ -1127,13 +1137,13 @@ export const App: React.FC = () => {
           </div>
 
           {/* View Mode Toggle (Table / Card) */}
-          <div className="flex items-center space-x-1 p-1 rounded-xl border border-gdm bg-gdm-surface transition-colors">
+          <div className="flex items-center space-x-1 p-1 rounded-xl border border-zr bg-zr-surface transition-colors">
             <button
               onClick={() => setViewMode("table")}
               className={`p-1.5 rounded-lg transition-all ${
                 viewMode === "table"
                   ? "bg-blue-600 text-white shadow-xs"
-                  : "text-gdm-secondary hover:text-gdm-primary"
+                  : "text-zr-secondary hover:text-zr-primary"
               }`}
               title="Table View"
               aria-label="Table View"
@@ -1145,7 +1155,7 @@ export const App: React.FC = () => {
               className={`p-1.5 rounded-lg transition-all ${
                 viewMode === "cards"
                   ? "bg-blue-600 text-white shadow-xs"
-                  : "text-gdm-secondary hover:text-gdm-primary"
+                  : "text-zr-secondary hover:text-zr-primary"
               }`}
               title="Modern Card View"
               aria-label="Card View"
@@ -1169,10 +1179,10 @@ export const App: React.FC = () => {
               </div>
 
               <div className="max-w-md space-y-2">
-                <h2 className="text-xl font-bold text-gdm-primary">
+                <h2 className="text-xl font-bold text-zr-primary">
                   ZR Downloader
                 </h2>
-                <p className="text-[13px] leading-relaxed text-gdm-secondary">
+                <p className="text-[13px] leading-relaxed text-zr-secondary">
                   Ultra-fast multi-threaded download acceleration, media stream grabber and BitTorrent client.
                   Paste any download link above or use the browser extension to intercept downloads.
                 </p>
@@ -1290,3 +1300,4 @@ export const App: React.FC = () => {
 };
 
 export default App;
+

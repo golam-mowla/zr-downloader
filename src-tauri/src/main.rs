@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    gdm_lib::run();
+    zr_downloader_lib::run();
 }

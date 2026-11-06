@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+﻿import React, { useState } from "react";
 import {
   Pause,
   Play,
@@ -95,19 +95,19 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
   const chunkCount = getChunkCount(task);
 
   return (
-    <div className="bg-gdm-surface rounded-xl p-4 border border-gdm shadow-xs transition-all relative overflow-hidden">
+    <div className="bg-zr-surface rounded-xl p-4 border border-zr shadow-xs transition-all relative overflow-hidden">
       {/* Main Row */}
       <div className="flex items-start justify-between gap-4">
         {/* Left: Icon & Title */}
         <div className="flex items-start space-x-3.5 flex-1 min-w-0">
-          <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-gdm shrink-0">
+          <div className="p-2.5 rounded-lg bg-slate-100 dark:bg-slate-800 border border-zr shrink-0">
             {getCategoryIcon()}
           </div>
 
           <div className="min-w-0 flex-1 space-y-1">
             <div className="flex items-center space-x-2">
               <h3
-                className="font-semibold text-[14px] text-gdm-primary truncate cursor-pointer hover:underline"
+                className="font-semibold text-[14px] text-zr-primary truncate cursor-pointer hover:underline"
                 title={task.filename}
                 onClick={() => {
                   if (!isCompleted) return;
@@ -127,11 +127,11 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
                 {task.status}
               </span>
               {chunkCount > 1 && (
-                <span className="text-[12px] font-semibold text-gdm-accent bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-900/60">
+                <span className="text-[12px] font-semibold text-zr-accent bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-900/60">
                   {chunkCount} Segments
                 </span>
               )}
-              <span className="text-[12px] text-gdm-secondary">
+              <span className="text-[12px] text-zr-secondary">
                 Resume:{" "}
                 <strong className={isResumable ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}>
                   {isResumable ? "Yes" : "No"}
@@ -140,7 +140,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
             </div>
 
             {/* Truncated Monospace URL */}
-            <p className="text-[13px] font-mono text-gdm-accent truncate max-w-xl">
+            <p className="text-[13px] font-mono text-zr-accent truncate max-w-xl">
               {task.url}
             </p>
           </div>
@@ -151,7 +151,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
           {isDownloading && (
             <button
               onClick={() => onPause(task.id)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-amber-800 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-amber-800 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title="Pause"
               aria-label="Pause"
             >
@@ -162,7 +162,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
           {(isPaused || isError) && (
             <button
               onClick={() => onResume(task.id)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title={isError ? "Retry" : "Resume"}
               aria-label={isError ? "Retry" : "Resume"}
             >
@@ -178,7 +178,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
                 const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
                 onOpenFile(full);
               }}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title="Open File"
               aria-label="Open File"
             >
@@ -188,7 +188,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
 
           <button
             onClick={() => onOpenFolder(task.save_path || task.savePath || "")}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-gdm-primary hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-zr-primary hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             title="Open Folder"
             aria-label="Open Folder"
           >
@@ -198,7 +198,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
           {!isCompleted && (
             <button
               onClick={() => onCancel(task.id)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title="Cancel"
               aria-label="Cancel"
             >
@@ -209,7 +209,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
           {isCompleted && (
             <button
               onClick={() => onDelete(task.id)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center text-gdm-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title="Delete from list"
               aria-label="Delete"
             >
@@ -238,8 +238,8 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
 
         {/* Progress Metrics Row: sans + tabular-nums 13px */}
         <div className="flex items-center justify-between text-[13px] tabular-nums font-sans">
-          <div className="flex items-center space-x-2 text-gdm-secondary">
-            <span className="font-semibold text-gdm-primary">{task.percent.toFixed(1)}%</span>
+          <div className="flex items-center space-x-2 text-zr-secondary">
+            <span className="font-semibold text-zr-primary">{task.percent.toFixed(1)}%</span>
             <span>&bull;</span>
             <span>
               {formatBytes(downloaded)} / {total > 0 ? formatBytes(total) : "Unknown"}
@@ -253,13 +253,13 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
                 <span>{getSpeedFormatted(task)}</span>
               </div>
             )}
-            <div className="text-gdm-secondary">
+            <div className="text-zr-secondary">
               {isDownloading ? getEtaFormatted(task) : isCompleted ? "Complete" : "--"}
             </div>
             {task.speedHistory && task.speedHistory.length > 0 && (
               <button
                 onClick={() => setShowSpeedChart(!showSpeedChart)}
-                className="text-[12px] font-semibold text-gdm-accent hover:underline cursor-pointer"
+                className="text-[12px] font-semibold text-zr-accent hover:underline cursor-pointer"
               >
                 {showSpeedChart ? "Hide Graph" : "Speed Graph"}
               </button>
@@ -267,7 +267,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
             {task.chunks && task.chunks.length > 0 && (
               <button
                 onClick={() => setShowChunks(!showChunks)}
-                className="text-[12px] font-semibold text-gdm-accent hover:underline flex items-center space-x-0.5 cursor-pointer"
+                className="text-[12px] font-semibold text-zr-accent hover:underline flex items-center space-x-0.5 cursor-pointer"
               >
                 <span>{showChunks ? "Hide Chunks" : "Chunks"}</span>
                 {showChunks ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -279,22 +279,22 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
 
       {/* Speed Chart */}
       {showSpeedChart && task.speedHistory && task.speedHistory.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-gdm">
+        <div className="mt-3 pt-3 border-t border-zr">
           <SpeedChart data={task.speedHistory} height={60} />
         </div>
       )}
 
       {/* Chunks Progress Drawer */}
       {showChunks && task.chunks && task.chunks.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-gdm space-y-2">
-          <div className="text-[12px] font-semibold text-gdm-secondary">
+        <div className="mt-3 pt-3 border-t border-zr space-y-2">
+          <div className="text-[12px] font-semibold text-zr-secondary">
             Segmented HTTP Range Connections ({task.chunks.length} Threads)
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-2">
             {task.chunks.map((chk, i) => (
-              <div key={i} className="bg-slate-50 dark:bg-slate-900/60 p-2 rounded-lg border border-gdm space-y-1">
-                <div className="flex justify-between text-[12px] tabular-nums text-gdm-secondary">
-                  <span className="font-semibold text-gdm-primary">#{i + 1}</span>
+              <div key={i} className="bg-slate-50 dark:bg-slate-900/60 p-2 rounded-lg border border-zr space-y-1">
+                <div className="flex justify-between text-[12px] tabular-nums text-zr-secondary">
+                  <span className="font-semibold text-zr-primary">#{i + 1}</span>
                   <span>{chk.percent.toFixed(0)}%</span>
                 </div>
                 <div className="h-2 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -311,3 +311,4 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
     </div>
   );
 };
+

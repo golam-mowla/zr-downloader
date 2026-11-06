@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import {
   Play,
   Pause,
@@ -122,7 +122,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
   };
 
   return (
-    <div className="w-full bg-gdm-surface border border-gdm rounded-xl overflow-hidden shadow-xs">
+    <div className="w-full bg-zr-surface border border-zr rounded-xl overflow-hidden shadow-xs">
       {/* Container: Vertical scroll only, zero horizontal scrollbar */}
       <div className="w-full overflow-x-hidden overflow-y-auto">
         <table className="w-full table-fixed border-separate border-spacing-0 text-left">
@@ -139,23 +139,23 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
           </colgroup>
 
           <thead>
-            <tr className="bg-gdm-tableHead text-gdm-secondary text-[12px] font-semibold uppercase tracking-wide select-none">
+            <tr className="bg-zr-tableHead text-zr-secondary text-[12px] font-semibold uppercase tracking-wide select-none">
               {showIndex && (
-                <th className="py-3 px-2 text-center whitespace-nowrap border-b border-gdm">#</th>
+                <th className="py-3 px-2 text-center whitespace-nowrap border-b border-zr">#</th>
               )}
-              <th className="py-3 px-3 whitespace-nowrap truncate border-b border-gdm">File Name</th>
+              <th className="py-3 px-3 whitespace-nowrap truncate border-b border-zr">File Name</th>
               {showSizeColumn && (
-                <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Size</th>
+                <th className="py-3 px-3 whitespace-nowrap border-b border-zr">Size</th>
               )}
-              <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Progress</th>
-              <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Status</th>
+              <th className="py-3 px-3 whitespace-nowrap border-b border-zr">Progress</th>
+              <th className="py-3 px-3 whitespace-nowrap border-b border-zr">Status</th>
               {showSpeed && (
-                <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Speed</th>
+                <th className="py-3 px-3 whitespace-nowrap border-b border-zr">Speed</th>
               )}
               {showTimeLeft && (
-                <th className="py-3 px-3 whitespace-nowrap border-b border-gdm">Time Left</th>
+                <th className="py-3 px-3 whitespace-nowrap border-b border-zr">Time Left</th>
               )}
-              <th className="py-3 px-3 w-[120px] min-w-[120px] max-w-[120px] text-right whitespace-nowrap sticky right-0 z-20 bg-gdm-tableHead/95 backdrop-blur-md border-b border-gdm">
+              <th className="py-3 px-3 w-[120px] min-w-[120px] max-w-[120px] text-right whitespace-nowrap sticky right-0 z-20 bg-zr-tableHead/95 backdrop-blur-md border-b border-zr">
                 Actions
               </th>
             </tr>
@@ -182,18 +182,18 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                   >
                     {/* Index */}
                     {showIndex && (
-                      <td className="py-2.5 px-2 text-center text-gdm-muted text-[12px] tabular-nums font-sans border-b border-gdm">
+                      <td className="py-2.5 px-2 text-center text-zr-muted text-[12px] tabular-nums font-sans border-b border-zr">
                         {idx + 1}
                       </td>
                     )}
 
                     {/* File Name (flexible 1fr, shrinks with ellipsis) + Size when below 800px */}
-                    <td className="py-2.5 px-3 min-w-0 max-w-0 truncate border-b border-gdm">
+                    <td className="py-2.5 px-3 min-w-0 max-w-0 truncate border-b border-zr">
                       <div className="flex items-center space-x-2 min-w-0">
                         {getCategoryIcon(task.category)}
                         <div className="min-w-0 flex-1 truncate">
                           <span
-                            className="truncate text-[13px] font-semibold text-gdm-primary hover:underline block"
+                            className="truncate text-[13px] font-semibold text-zr-primary hover:underline block"
                             title={task.filename}
                             onDoubleClick={() => {
                               if (!isCompleted) return;
@@ -208,7 +208,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                           {/* When Size column is hidden (<800px), display Size cleanly under file name */}
                           {!showSizeColumn && (
-                            <div className="text-[11px] text-gdm-secondary tabular-nums truncate pt-0.5">
+                            <div className="text-[11px] text-zr-secondary tabular-nums truncate pt-0.5">
                               {formatBytes(getDownloadedBytes(task))} /{" "}
                               {getTotalBytes(task) > 0 ? formatBytes(getTotalBytes(task)) : "Unknown"}
                               {task.category === "torrents"
@@ -224,13 +224,13 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                     {/* Dedicated Size Column (visible >= 800px) */}
                     {showSizeColumn && (
-                      <td className="py-2.5 px-3 text-[12px] tabular-nums font-sans text-gdm-primary whitespace-nowrap border-b border-gdm">
+                      <td className="py-2.5 px-3 text-[12px] tabular-nums font-sans text-zr-primary whitespace-nowrap border-b border-zr">
                         <div>
                           {formatBytes(getDownloadedBytes(task))} /{" "}
                           {getTotalBytes(task) > 0 ? formatBytes(getTotalBytes(task)) : "Unknown"}
                         </div>
                         {task.category === "torrents" ? (
-                          <div className="flex items-center space-x-1.5 mt-0.5 text-[11px] text-gdm-secondary">
+                          <div className="flex items-center space-x-1.5 mt-0.5 text-[11px] text-zr-secondary">
                             <span>Seeds:</span>
                             <span className="font-semibold text-emerald-600 dark:text-emerald-400">
                               {task.seeders || 0}
@@ -241,7 +241,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                             </span>
                           </div>
                         ) : (
-                          <div className="flex items-center space-x-1.5 mt-0.5 text-[11px] text-gdm-secondary">
+                          <div className="flex items-center space-x-1.5 mt-0.5 text-[11px] text-zr-secondary">
                             <span>Resume:</span>
                             {getIsResumable(task) ? (
                               <span className="font-semibold text-emerald-700 dark:text-emerald-400">
@@ -258,12 +258,12 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                     )}
 
                     {/* Progress Bar & Percent */}
-                    <td className="py-2.5 px-3 border-b border-gdm">
+                    <td className="py-2.5 px-3 border-b border-zr">
                       <div className="space-y-1">
                         <div className="flex justify-between items-center text-[12px] font-semibold tabular-nums">
-                          <span className="text-gdm-primary">{task.percent.toFixed(1)}%</span>
+                          <span className="text-zr-primary">{task.percent.toFixed(1)}%</span>
                           {getChunkCount(task) > 1 && (
-                            <span className="text-gdm-accent text-[11px] font-medium hidden sm:inline">
+                            <span className="text-zr-accent text-[11px] font-medium hidden sm:inline">
                               {getChunkCount(task)} Chunks
                             </span>
                           )}
@@ -285,7 +285,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                         </div>
                         {/* Responsive inline speed and ETA when columns are hidden (<900px or <1000px) */}
                         {(!showSpeed || !showTimeLeft) && (
-                          <div className="flex items-center justify-between text-[11px] tabular-nums text-gdm-secondary pt-0.5 truncate">
+                          <div className="flex items-center justify-between text-[11px] tabular-nums text-zr-secondary pt-0.5 truncate">
                             <span>{!showSpeed && isDownloading ? getSpeedFormatted(task) : ""}</span>
                             <span>{!showTimeLeft && isDownloading ? getEtaFormatted(task) : ""}</span>
                           </div>
@@ -294,7 +294,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                     </td>
 
                     {/* Status Badge */}
-                    <td className="py-2.5 px-3 whitespace-nowrap border-b border-gdm">
+                    <td className="py-2.5 px-3 whitespace-nowrap border-b border-zr">
                       <span
                         className={`inline-block text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md ${getStatusBadgeClass(
                           task.status
@@ -306,7 +306,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                     {/* Speed: Transfer rate (visible >= 900px) */}
                     {showSpeed && (
-                      <td className="py-2.5 px-3 text-[12px] font-semibold tabular-nums text-amber-800 dark:text-amber-400 whitespace-nowrap border-b border-gdm">
+                      <td className="py-2.5 px-3 text-[12px] font-semibold tabular-nums text-amber-800 dark:text-amber-400 whitespace-nowrap border-b border-zr">
                         {isDownloading || task.status === "downloading" || task.status === "seeding" ? (
                           <div>
                             <div>{getSpeedFormatted(task)}</div>
@@ -324,17 +324,17 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                     {/* Time Left (visible >= 1000px) */}
                     {showTimeLeft && (
-                      <td className="py-2.5 px-3 text-[12px] tabular-nums font-sans text-gdm-secondary whitespace-nowrap border-b border-gdm">
+                      <td className="py-2.5 px-3 text-[12px] tabular-nums font-sans text-zr-secondary whitespace-nowrap border-b border-zr">
                         {isDownloading ? getEtaFormatted(task) : "--"}
                       </td>
                     )}
 
                     {/* Action Buttons: ALWAYS fully visible, sticky on right, fixed 120px, icon-only, no wrap */}
                     <td
-                      className={`py-2.5 px-3 w-[120px] min-w-[120px] max-w-[120px] text-right whitespace-nowrap sticky right-0 z-10 border-b border-gdm backdrop-blur-md transition-colors ${
+                      className={`py-2.5 px-3 w-[120px] min-w-[120px] max-w-[120px] text-right whitespace-nowrap sticky right-0 z-10 border-b border-zr backdrop-blur-md transition-colors ${
                         isSelected
                           ? "bg-blue-50/95 dark:bg-blue-950/85"
-                          : "bg-gdm-surface/95 dark:bg-[#0f172a]/95 group-hover:bg-slate-100/95 dark:group-hover:bg-slate-800/90"
+                          : "bg-zr-surface/95 dark:bg-[#0f172a]/95 group-hover:bg-slate-100/95 dark:group-hover:bg-slate-800/90"
                       }`}
                     >
                       <div
@@ -344,7 +344,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                         {isDownloading && (
                           <button
                             onClick={() => onPause(task.id)}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-amber-800 dark:hover:text-amber-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-zr-secondary hover:text-amber-800 dark:hover:text-amber-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title="Pause"
                             aria-label="Pause"
                           >
@@ -355,7 +355,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                         {(isPaused || isError) && (
                           <button
                             onClick={() => onResume(task.id)}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-zr-secondary hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title={isError ? "Retry Download" : "Resume Download"}
                             aria-label={isError ? "Retry" : "Resume"}
                           >
@@ -371,7 +371,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                               const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
                               onOpenFile(full);
                             }}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-zr-secondary hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title="Open File"
                             aria-label="Open File"
                           >
@@ -381,7 +381,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                         <button
                           onClick={() => onOpenFolder(task.save_path || task.savePath || "")}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-zr-secondary hover:text-zr-primary hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                           title="Open Folder"
                           aria-label="Open Folder"
                         >
@@ -390,7 +390,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                         <button
                           onClick={() => onDelete(task.id)}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                          className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-zr-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                           title="Delete"
                           aria-label="Delete"
                         >
@@ -401,7 +401,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                         {task.chunks && task.chunks.length > 0 && (
                           <button
                             onClick={() => setExpandedId(isExpanded ? null : task.id)}
-                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-gdm-secondary hover:text-gdm-primary hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
+                            className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-zr-secondary hover:text-zr-primary hover:bg-slate-200/60 dark:hover:bg-slate-700/60 transition-colors"
                             title="Toggle Chunks Drawer"
                             aria-label="Toggle Chunks"
                           >
@@ -419,14 +419,14 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                   {/* IDM 16-Chunk Drawer */}
                   {isExpanded && task.chunks && task.chunks.length > 0 && (
                     <tr className="bg-slate-50 dark:bg-slate-900/60">
-                      <td colSpan={totalVisibleCols} className="p-4 border-b border-gdm">
+                      <td colSpan={totalVisibleCols} className="p-4 border-b border-zr">
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between text-[12px] text-gdm-secondary">
-                            <span className="font-semibold flex items-center space-x-1.5 text-gdm-primary">
+                          <div className="flex items-center justify-between text-[12px] text-zr-secondary">
+                            <span className="font-semibold flex items-center space-x-1.5 text-zr-primary">
                               <Zap className="w-4 h-4 text-amber-800 dark:text-amber-400" />
                               <span>Active Segments ({task.chunks.length} Threads)</span>
                             </span>
-                            <span className="text-gdm-muted text-[12px]">
+                            <span className="text-zr-muted text-[12px]">
                               Direct Stream Connections
                             </span>
                           </div>
@@ -436,10 +436,10 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                             {task.chunks.map((chk, i) => (
                               <div
                                 key={i}
-                                className="bg-gdm-surface p-2 rounded-lg border border-gdm space-y-1.5"
+                                className="bg-zr-surface p-2 rounded-lg border border-zr space-y-1.5"
                               >
-                                <div className="flex justify-between text-[12px] tabular-nums text-gdm-secondary">
-                                  <span className="font-semibold text-gdm-primary">T{i + 1}</span>
+                                <div className="flex justify-between text-[12px] tabular-nums text-zr-secondary">
+                                  <span className="font-semibold text-zr-primary">T{i + 1}</span>
                                   <span>{chk.percent.toFixed(0)}%</span>
                                 </div>
                                 <div className="h-2 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -471,3 +471,4 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
     </div>
   );
 };
+

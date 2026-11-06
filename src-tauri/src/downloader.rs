@@ -378,7 +378,7 @@ pub async fn execute_multithreaded_download(
         if let Some(t) = tasks.get_mut(&task_id) {
             t.chunk_count = 1;
             let _ = app.emit("download-progress", t.clone());
-            let _ = app.emit("gdm://progress", t.clone());
+            let _ = app.emit("zr://progress", t.clone());
         }
     }
 
@@ -386,7 +386,7 @@ pub async fn execute_multithreaded_download(
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::temp_dir());
-    let temp_dir = target_parent.join(format!(".gdm_tmp_{}", task_id));
+    let temp_dir = target_parent.join(format!(".zr_tmp_{}", task_id));
     fs::create_dir_all(&temp_dir).await.map_err(|e| e.to_string())?;
 
     // Create cancel broadcast channel
@@ -556,7 +556,7 @@ pub async fn execute_multithreaded_download(
                                     t.is_resumable = true;
                                 }
                                 let _ = app_c.emit("download-progress", t.clone());
-                                let _ = app_c.emit("gdm://progress", t.clone());
+                                let _ = app_c.emit("zr://progress", t.clone());
                             }
                         }
                     }
@@ -670,7 +670,7 @@ pub async fn execute_multithreaded_download(
                         };
 
                         let _ = monitor_app.emit("download-progress", t.clone());
-                        let _ = monitor_app.emit("gdm://progress", t.clone());
+                        let _ = monitor_app.emit("zr://progress", t.clone());
                     } else {
                         break;
                     }
@@ -704,7 +704,7 @@ pub async fn execute_multithreaded_download(
                 t.speed_formatted = "0 B/s".to_string();
                 t.eta_formatted = "--".to_string();
                 let _ = app.emit("download-progress", t.clone());
-                let _ = app.emit("gdm://progress", t.clone());
+                let _ = app.emit("zr://progress", t.clone());
             }
             return Ok(());
         }
@@ -719,7 +719,7 @@ pub async fn execute_multithreaded_download(
             t.error_message = Some(err_msg.clone());
             let _ = app.emit("download-error", serde_json::json!({ "id": task_id, "error": err_msg }));
             let _ = app.emit("download-progress", t.clone());
-            let _ = app.emit("gdm://progress", t.clone());
+            let _ = app.emit("zr://progress", t.clone());
         }
         return Err(err_msg);
     }
@@ -732,7 +732,7 @@ pub async fn execute_multithreaded_download(
             t.speed_formatted = "Assembling chunks...".to_string();
             t.eta_formatted = "Finishing...".to_string();
             let _ = app.emit("download-progress", t.clone());
-            let _ = app.emit("gdm://progress", t.clone());
+            let _ = app.emit("zr://progress", t.clone());
         }
     }
 
@@ -777,7 +777,7 @@ pub async fn execute_multithreaded_download(
                     t.status = "assembling".to_string();
                     t.speed_formatted = format!("Merging chunk {}/{}", i + 1, chunk_count);
                     let _ = app.emit("download-progress", t.clone());
-                    let _ = app.emit("gdm://progress", t.clone());
+                    let _ = app.emit("zr://progress", t.clone());
                 }
             }
 
@@ -810,8 +810,8 @@ pub async fn execute_multithreaded_download(
             t.eta_formatted = "0s".to_string();
             let _ = app.emit("download-complete", t.clone());
             let _ = app.emit("download-progress", t.clone());
-            let _ = app.emit("gdm://completed", t.clone());
-            let _ = app.emit("gdm://progress", t.clone());
+            let _ = app.emit("zr://completed", t.clone());
+            let _ = app.emit("zr://progress", t.clone());
         }
     }
 

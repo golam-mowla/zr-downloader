@@ -1,8 +1,8 @@
 // ZR Downloader - Background Service Worker (Manifest V3)
 // IDM-Style High-Speed Interception & Passive Media Stream Sniffer
 
-const GDM_BRIDGE_PORT = 9666;
-const GDM_BRIDGE_URL = `http://127.0.0.1:${GDM_BRIDGE_PORT}`;
+const ZR_BRIDGE_PORT = 9666;
+const ZR_BRIDGE_URL = `http://127.0.0.1:${ZR_BRIDGE_PORT}`;
 
 // Interceptable file extensions for IDM-style capture
 const INTERCEPT_EXTENSIONS = new Set([
@@ -225,7 +225,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
-      id: "download-with-gdm",
+      id: "download-with-zr",
       title: "Download with ZR Downloader 🚀",
       contexts: ["all"],
     });
@@ -307,10 +307,10 @@ async function handleDownloadInterception(downloadItem, suggest) {
         });
       }
 
-      // Forward to GDM Desktop Engine
+      // Forward to ZR Downloader Desktop Engine
       const cleanFilename = downloadItem.filename ? downloadItem.filename.replace(/^.*[\\\/]/, "") : "";
       const referrer = downloadItem.referrer || "";
-      await sendUrlToGdm(rawUrl, null, cleanFilename, null, false, isTorrent, referrer);
+      await sendUrlToZr(rawUrl, null, cleanFilename, null, false, isTorrent, referrer);
       return true;
     }
   } catch (err) {
@@ -338,7 +338,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
 // Handle Context Menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === "download-with-gdm") {
+  if (info.menuItemId === "download-with-zr") {
     let candidateUrl = "";
 
     // 1. Ask content script for detected element URL
@@ -383,12 +383,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
 
-    await sendUrlToGdm(candidateUrl, tab ? tab.id : null);
+    await sendUrlToZr(candidateUrl, tab ? tab.id : null);
   }
 });
 
-// Send URL to GDM Desktop App
-async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "") {
+// Send URL to ZR Downloader Desktop App
+async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "", isDirectFile = false) {
   let cleanUrl = normalizeMediaUrl((mediaUrl || "").trim());
   if (!cleanUrl) return;
 
@@ -428,10 +428,10 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
         action: "SHOW_TOAST",
         title: "ZR Downloader 🚀",
         message: isTorrent
-          ? "Adding torrent to GDM engine..."
+          ? "Adding torrent to ZR Downloader engine..."
           : quality
-          ? `Sending ${quality} stream to GDM Engine...`
-          : "Sending link to GDM engine...",
+          ? `Sending ${quality} stream to ZR Downloader Engine...`
+          : "Sending link to ZR Downloader engine...",
         status: "info",
       });
     } catch {}
@@ -448,7 +448,8 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
     const torrentParam = isTorrent ? `&isTorrent=true` : "";
     const referrerParam = referrer ? `&referrer=${encodeURIComponent(referrer)}` : "";
     const containerParam = container ? `&container=${encodeURIComponent(container)}` : "";
-    const bridgeEndpoint = `${GDM_BRIDGE_URL}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}`;
+    const directParam = isDirectFile ? `&isDirectFile=true` : "";
+    const bridgeEndpoint = `${ZR_BRIDGE_URL}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}`;
     const resp = await fetch(bridgeEndpoint, {
       method: "GET",
       signal: controller.signal,
@@ -462,10 +463,10 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
             action: "SHOW_TOAST",
             title: "ZR Downloader 🚀",
             message: isTorrent
-              ? "Torrent added in GDM!"
+              ? "Torrent added in ZR Downloader!"
               : quality
-              ? `${quality} Download started in GDM!`
-              : "Link sent to GDM! Download starting...",
+              ? `${quality} Download started in ZR Downloader!`
+              : "Link sent to ZR Downloader! Download starting...",
             status: "success",
           });
         } catch {}
@@ -476,12 +477,13 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
     // Local bridge not active (app might be closed or starting)
   }
 
-  // 2. Launch GDM via custom Windows protocol
+  // 2. Launch ZR Downloader via custom Windows protocol
   const filenameParam = customFilename ? `&filename=${encodeURIComponent(customFilename)}` : "";
   const qualityParam = quality ? `&quality=${encodeURIComponent(quality)}` : "";
   const autoParam = autoStart ? `&autostart=true` : "";
   const torrentParam = isTorrent ? `&isTorrent=true` : "";
-  const protocolUrl = `gdm://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}`;
+  const directParam = isDirectFile ? `&isDirectFile=true` : "";
+  const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}`;
 
   if (effectiveTabId) {
     try {
@@ -501,7 +503,7 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
       await chrome.tabs.sendMessage(effectiveTabId, {
         action: "SHOW_TOAST",
         title: "ZR Downloader 🚀",
-        message: "Opening GDM desktop app...",
+        message: "Opening ZR Downloader desktop app...",
         status: "info",
       });
 
@@ -522,9 +524,9 @@ async function sendUrlToGdm(mediaUrl, tabId, customFilename, quality, autoStart 
 
 // Listen to messages from popup or content script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "SEND_TO_GDM") {
+  if (request.action === "SEND_TO_ZR") {
     const tabId = sender && sender.tab ? sender.tab.id : null;
-    sendUrlToGdm(
+    sendUrlToZr(
       request.url,
       tabId,
       request.filename,
@@ -532,7 +534,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       Boolean(request.autoStart),
       Boolean(request.isTorrent),
       request.referrer || "",
-      request.container || ""
+      request.container || "",
+      Boolean(request.isDirectFile)
     ).then((res) => sendResponse(res));
     return true;
   }
@@ -546,8 +549,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === "CHECK_GDM_STATUS") {
-    fetch(`${GDM_BRIDGE_URL}/ping`, { method: "GET" })
+  if (request.action === "CHECK_ZR_STATUS") {
+    fetch(`${ZR_BRIDGE_URL}/ping`, { method: "GET" })
       .then((res) => res.json())
       .then((data) => sendResponse({ online: true, data }))
       .catch(() => sendResponse({ online: false }));
