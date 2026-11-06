@@ -136,7 +136,7 @@ fun MainScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Image(
-                            painter = painterResource(id = R.mipmap.ic_launcher),
+                            painter = painterResource(id = R.drawable.ic_zr_logo),
                             contentDescription = "ZR Downloader Logo",
                             modifier = Modifier.size(38.dp)
                         )

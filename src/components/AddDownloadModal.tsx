@@ -350,6 +350,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         enableClip,
         startTime: enableClip ? startTime : undefined,
         endTime: enableClip ? endTime : undefined,
+        lowDiskSpace,
       });
       onClose();
     } catch (err: any) {
@@ -561,6 +562,32 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             </div>
           )}
 
+          {/* Low Disk Space Optimization Switch (Direct & Media) */}
+          {tab !== "torrent" && (
+            <div className="p-3 rounded-xl border border-blue-500/25 bg-blue-500/5 dark:bg-blue-900/10 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <HardDrive className="w-4 h-4 text-blue-500" />
+                  <span className="font-semibold text-[13px] text-zr-primary">
+                    Low Disk Space Mode (Zero-Temp In-Place)
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={lowDiskSpace}
+                  onChange={(e) => {
+                    setLowDiskSpace(e.target.checked);
+                    localStorage.setItem("zr_low_disk_space", String(e.target.checked));
+                  }}
+                  className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                />
+              </div>
+              <p className="text-[12px] text-zr-secondary leading-relaxed">
+                Saves 50% SSD space on large downloads (e.g. 20 GB file uses strictly 20 GB instead of 40 GB). Data streams directly into the final destination file without duplicate temporary files or assembly delay.
+              </p>
+            </div>
+          )}
+
           {/* Direct Mode Specifics: Simultaneous Segments */}
           {tab === "direct" && (
             <div className="space-y-2 pt-2 border-t border-zr">
@@ -592,29 +619,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 Splits file into concurrent HTTP Range slices for maximum bandwidth saturation.
               </p>
 
-              {/* Low Disk Space Optimization Switch */}
-              <div className="mt-3 p-3.5 rounded-xl border border-blue-500/25 bg-blue-500/5 dark:bg-blue-900/10 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <HardDrive className="w-4 h-4 text-blue-500" />
-                    <span className="font-semibold text-[13px] text-zr-primary">
-                      Low Disk Space Mode (Zero-Temp In-Place)
-                    </span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={lowDiskSpace}
-                    onChange={(e) => {
-                      setLowDiskSpace(e.target.checked);
-                      localStorage.setItem("zr_low_disk_space", String(e.target.checked));
-                    }}
-                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
-                  />
-                </div>
-                <p className="text-[12px] text-zr-secondary leading-relaxed">
-                  Saves 50% SSD space on large downloads (e.g. 20 GB file uses strictly 20 GB instead of 40 GB). Chunks write directly into the final destination file without duplicate temporary segment files or assembly delay.
-                </p>
-              </div>
+              
             </div>
           )}
 
