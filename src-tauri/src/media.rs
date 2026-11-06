@@ -119,6 +119,8 @@ pub struct DownloadOptions {
     pub embed_subtitles_global: bool,
     pub ffmpeg_threads: u32,
     pub post_processor_args: String,
+    // Low Disk Space Zero-Temp Mode
+    pub low_disk_space: Option<bool>,
 }
 
 impl Default for DownloadOptions {
@@ -170,6 +172,7 @@ impl Default for DownloadOptions {
             embed_subtitles_global: false,
             ffmpeg_threads: 4,
             post_processor_args: String::new(),
+            low_disk_space: Some(false),
         }
     }
 }
@@ -1084,6 +1087,8 @@ pub async fn start_download(
             )
         };
         let is_youtube = options.url.contains("youtube.com") || options.url.contains("youtu.be");
+        let is_low_disk = options.low_disk_space.unwrap_or(false) || !options.use_part_files;
+        let part_flag = if is_low_disk { "--no-part" } else { "--part" };
         let is_hls = options.url.contains(".m3u8")
             || options.url.contains("kick.com")
             || options.url.contains("twitch.tv");
@@ -1098,7 +1103,7 @@ pub async fn start_download(
                 "--fragment-retries", "15",
                 "--file-access-retries", "5",
                 "-c",
-                "--part",
+                part_flag,
             ]);
             if is_hls {
                 cmd.arg("--skip-unavailable-fragments");
@@ -1114,7 +1119,7 @@ pub async fn start_download(
                 "--fragment-retries", "15",
                 "--file-access-retries", "5",
                 "-c",
-                "--part",
+                part_flag,
             ]);
         }
         if options.overwrite_files || is_clipping_active {

@@ -15,12 +15,15 @@ android {
         applicationId = "com.golammowla.zrdownloader"
         minSdk = 24
         targetSdk = 35
-        versionCode = 11
-        versionName = "1.2.7"
+        versionCode = 12
+        versionName = "1.2.8"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
     }
 
@@ -128,6 +131,10 @@ dependencies {
 
     // Logging (Timber)
     implementation(libs.timber)
+
+    // Native yt-dlp & FFmpeg embedded engines
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 
     // Unit & UI Tests
     testImplementation(libs.junit)
