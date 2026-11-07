@@ -22,6 +22,8 @@ import com.golammowla.zrdownloader.domain.model.DownloadStatus
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import timber.log.Timber
 import java.io.File
 
@@ -83,28 +85,35 @@ class DownloadWorker @AssistedInject constructor(
                     request.addOption("--merge-output-format", "mp4")
                 }
 
+                var lastProgressTime = 0L
                 YoutubeDL.getInstance().execute(request, taskId) { progress, etaInSeconds, line ->
                     val pct = progress.coerceIn(0f, 100f)
                     val etaStr = if (etaInSeconds > 0) "${etaInSeconds}s" else "--"
                     val speedStr = if (!line.isNullOrBlank()) line.trim() else "Downloading..."
 
-                    val updatedItem = domainItem.copy(
-                        percent = pct,
-                        speedFormatted = speedStr,
-                        etaFormatted = etaStr,
-                        status = if (pct >= 100f) DownloadStatus.COMPLETED else DownloadStatus.DOWNLOADING
-                    )
-                    downloadDao.update(DownloadEntity.fromDomain(updatedItem))
-
-                    if (pct < 100f) {
-                        notificationManager.notify(
-                            notifId,
-                            buildNotification(
-                                domainItem.filename,
-                                pct.toInt(),
-                                "$speedStr • ETA $etaStr"
-                            )
+                    val now = System.currentTimeMillis()
+                    if (now - lastProgressTime >= 400 || pct >= 100f) {
+                        lastProgressTime = now
+                        val updatedItem = domainItem.copy(
+                            percent = pct,
+                            speedFormatted = speedStr,
+                            etaFormatted = etaStr,
+                            status = if (pct >= 100f) DownloadStatus.COMPLETED else DownloadStatus.DOWNLOADING
                         )
+                        runBlocking(Dispatchers.IO) {
+                            downloadDao.update(DownloadEntity.fromDomain(updatedItem))
+                        }
+
+                        if (pct < 100f) {
+                            notificationManager.notify(
+                                notifId,
+                                buildNotification(
+                                    domainItem.filename,
+                                    pct.toInt(),
+                                    "$speedStr • ETA $etaStr"
+                                )
+                            )
+                        }
                     }
                 }
             } else {

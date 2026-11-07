@@ -162,6 +162,26 @@ class DownloadRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun cancelDownload(id: String) {
+        pauseDownload(id)
+        val current = downloadDao.getById(id)?.toDomain()
+        if (current != null) {
+            downloadDao.update(
+                DownloadEntity.fromDomain(
+                    current.copy(status = DownloadStatus.PAUSED, speedFormatted = "Cancelled", etaFormatted = "--")
+                )
+            )
+        }
+    }
+
+    override suspend fun retryDownload(id: String) {
+        resumeDownload(id)
+    }
+
+    override suspend fun updateDownload(item: DownloadItem) {
+        downloadDao.update(DownloadEntity.fromDomain(item))
+    }
+
     private fun enqueueWorker(taskId: String, wifiOnly: Boolean) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(if (wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
