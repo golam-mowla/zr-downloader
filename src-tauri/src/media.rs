@@ -120,6 +120,7 @@ pub struct DownloadOptions {
     pub ffmpeg_threads: u32,
     pub post_processor_args: String,
     // Low Disk Space Zero-Temp Mode
+    #[serde(alias = "low_disk_space", alias = "lowDiskSpace", alias = "low_disk")]
     pub low_disk_space: Option<bool>,
 }
 
@@ -1107,6 +1108,14 @@ pub async fn start_download(
             ]);
             if is_hls {
                 cmd.arg("--skip-unavailable-fragments");
+                if is_low_disk {
+                    // Zero-Temp In-Place for HLS: stream directly into destination file without duplicate .temp.mp4
+                    cmd.args([
+                        "--downloader", "m3u8:ffmpeg",
+                        "--downloader-args", "ffmpeg:-c copy",
+                        "--fixup", "never",
+                    ]);
+                }
             }
         } else {
             cmd.args([
@@ -1190,10 +1199,12 @@ pub async fn start_download(
             };
             cmd.args(["-f", &fmt_expr]);
 
-            // Video Containers: Video (Generic), MP4 (Video), WEBM (Video), MKV (Video), MOV (Video), AVI (Video)
+            // Video Containers: Video (Generic), MP4 (Video), WEBM (Video), MKV (Video), MOV (Video), AVI (Video), TS (Video)
             if !container_upper.starts_with("VIDEO (GENERIC)") && !container_upper.is_empty() {
                 if container_upper.starts_with("MP4") {
-                    cmd.args(["--merge-output-format", "mp4"]);
+                    if !is_low_disk || !is_hls {
+                        cmd.args(["--merge-output-format", "mp4"]);
+                    }
                 } else if container_upper.starts_with("WEBM") {
                     cmd.args(["--merge-output-format", "webm"]);
                 } else if container_upper.starts_with("MKV") {
@@ -1202,8 +1213,10 @@ pub async fn start_download(
                     cmd.args(["--remux-video", "mov"]);
                 } else if container_upper.starts_with("AVI") {
                     cmd.args(["--recode-video", "avi"]);
+                } else if container_upper.starts_with("TS") {
+                    cmd.args(["--merge-output-format", "ts"]);
                 }
-            } else {
+            } else if !is_hls {
                 cmd.args(["--merge-output-format", "mp4"]);
             }
         }
@@ -1672,6 +1685,8 @@ pub async fn start_download(
                 .or_else(|| errs.iter().rev().find(|l| !l.trim().is_empty()))
                 .cloned()
                 .unwrap_or_else(|| "Unknown yt-dlp error".to_string());
+            let hint_name = options.custom_filename.as_deref().unwrap_or("");
+            cleanup_temp_and_part_files(&options.save_folder, hint_name);
             let _ = app.emit("download-error", serde_json::json!({ "id": tid.clone(), "error": meaningful_err }));
             let _ = app.emit(
                 "download-progress",
@@ -1694,6 +1709,8 @@ pub async fn start_download(
             last_downloaded_bytes
         };
 
+        let hint_name = options.custom_filename.as_deref().unwrap_or("");
+        cleanup_temp_and_part_files(&options.save_folder, hint_name);
         let _ = app.emit(
             "download-progress",
             serde_json::json!({
