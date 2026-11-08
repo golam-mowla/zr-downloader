@@ -1,3 +1,22 @@
+
+pub fn dirs_or_default_downloads() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(user_profile) = env::var("USERPROFILE") {
+            let path = PathBuf::from(user_profile).join("Downloads");
+            if path.exists() {
+                return path.to_string_lossy().to_string();
+            }
+        }
+    }
+    if let Ok(home) = env::var("HOME") {
+        let path = PathBuf::from(home).join("Downloads");
+        if path.exists() {
+            return path.to_string_lossy().to_string();
+        }
+    }
+    "Downloads".to_string()
+}
 use crate::downloader::DownloadTask;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -352,9 +371,12 @@ fn ensure_ffmpeg_available() -> Option<PathBuf> {
             let candidates = [
                 PathBuf::from(&local).join("ZR Downloader").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("ZR Downloader").join("ffmpeg.exe"),
-                PathBuf::from(&local).join("ZR Downloader").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("GM-Downloader").join("bin").join("ffmpeg.exe"),
                 PathBuf::from(&local).join("ffmpeg.exe"),
+                PathBuf::from(r"D:\Subtitle Edit\ffmpeg\ffmpeg.exe"),
+                PathBuf::from(r"D:\Subtitle Edit\ffmpeg\bin\ffmpeg.exe"),
+                PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe"),
+                PathBuf::from(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
             ];
             for p in &candidates {
                 if p.exists() {
@@ -961,8 +983,18 @@ pub fn cleanup_temp_and_part_files(save_folder: &str, title_hint: &str) {
 pub async fn start_download(
     app: AppHandle,
     state: State<'_, DownloadState>,
-    options: DownloadOptions,
+    mut options: DownloadOptions,
 ) -> Result<String, String> {
+    let resolved_folder = if options.save_folder.trim().is_empty()
+        || options.save_folder.trim() == "Downloads"
+        || !Path::new(&options.save_folder).is_absolute()
+    {
+        dirs_or_default_downloads()
+    } else {
+        options.save_folder.clone()
+    };
+    options.save_folder = resolved_folder.clone();
+
     let task_id = options.task_id.clone().unwrap_or_else(|| {
         format!(
             "task_{}",
@@ -981,7 +1013,7 @@ pub async fn start_download(
         id: task_id.clone(),
         url: options.url.clone(),
         filename: options.custom_filename.clone().unwrap_or_else(|| "Online Media.mp4".to_string()),
-        save_path: options.save_folder.clone(),
+        save_path: resolved_folder.clone(),
         total_bytes: 0,
         downloaded_bytes: 0,
         percent: 1.0,
@@ -1506,8 +1538,10 @@ pub async fn start_download(
                 let _ = app.emit("download-log", trimmed.to_string());
 
                 // Parse structured ZR progress template: [ZR_PROG] 45.2% | 1234567 | 2345678 | NA | 3.80MiB/s | 01:30:00
-                if trimmed.starts_with("[ZR_PROG]") {
-                    let payload = trimmed.trim_start_matches("[ZR_PROG]").trim();
+                let is_zr_prog = trimmed.contains("[ZR_PROG]");
+                if is_zr_prog {
+                    let prog_idx = trimmed.find("[ZR_PROG]").unwrap_or(0);
+                    let payload = trimmed[prog_idx + 9..].trim();
                     let parts: Vec<&str> = payload.split('|').map(|s| s.trim()).collect();
                     if parts.len() >= 6 {
                         let pct_str = parts[0].trim_end_matches('%').trim();
@@ -1546,11 +1580,14 @@ pub async fn start_download(
                             parts[5].to_string()
                         };
 
+                        let speed_bps = parse_human_size_to_bytes(&speed_str);
+
                         if let Ok(mut tasks_lock) = media_tasks.lock() {
                             if let Some(t) = tasks_lock.get_mut(&tid) {
                                 t.percent = pct;
                                 t.downloaded_bytes = last_downloaded_bytes;
                                 t.total_bytes = last_total_bytes;
+                                t.speed_bps = speed_bps;
                                 t.speed_formatted = speed_str.clone();
                                 t.eta_formatted = eta_str.clone();
                                 t.status = "downloading".to_string();
@@ -1561,14 +1598,21 @@ pub async fn start_download(
                             "download-progress",
                             serde_json::json!({
                                 "id": tid.clone(),
+                                "taskId": tid.clone(),
                                 "percent": pct,
                                 "text": format!("{:.1}% of {} at {}", pct, format_bytes(last_total_bytes), speed_str),
                                 "speed": speed_str.clone(),
                                 "speed_formatted": speed_str.clone(),
+                                "speedFormatted": speed_str.clone(),
+                                "speed_bps": speed_bps,
+                                "speedBps": speed_bps,
                                 "eta": eta_str.clone(),
                                 "eta_formatted": eta_str.clone(),
+                                "etaFormatted": eta_str.clone(),
                                 "total_bytes": last_total_bytes,
+                                "totalBytes": last_total_bytes,
                                 "downloaded_bytes": last_downloaded_bytes,
+                                "downloadedBytes": last_downloaded_bytes,
                                 "status": "downloading".to_string(),
                             }),
                         );

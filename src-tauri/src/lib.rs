@@ -525,11 +525,33 @@ async fn open_download_window(
     download_state: State<'_, DownloadState>,
     task_id: String,
     title: String,
-    initial_task: Option<DownloadTask>,
+    initial_task: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    if let Some(t) = initial_task {
-        let mut tasks_lock = download_state.tasks.lock().unwrap();
-        tasks_lock.insert(task_id.clone(), t);
+    if let Some(val) = initial_task {
+        if let Ok(mut tasks_lock) = download_state.tasks.lock() {
+            let task = DownloadTask {
+                id: task_id.clone(),
+                url: val.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                filename: val.get("filename").and_then(|v| v.as_str()).unwrap_or("Download.mp4").to_string(),
+                save_path: val.get("save_path").or_else(|| val.get("savePath")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                total_bytes: val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+                downloaded_bytes: val.get("downloaded_bytes").or_else(|| val.get("downloadedBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+                percent: val.get("percent").and_then(|v| v.as_f64()).unwrap_or(1.0),
+                speed_bps: val.get("speed_bps").or_else(|| val.get("speedBps")).and_then(|v| v.as_u64()).unwrap_or(0),
+                speed_formatted: val.get("speed_formatted").or_else(|| val.get("speedFormatted")).and_then(|v| v.as_str()).unwrap_or("Connecting...").to_string(),
+                eta_formatted: val.get("eta_formatted").or_else(|| val.get("etaFormatted")).and_then(|v| v.as_str()).unwrap_or("--").to_string(),
+                status: val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string(),
+                category: val.get("category").and_then(|v| v.as_str()).unwrap_or("video").to_string(),
+                chunk_count: 1,
+                is_resumable: true,
+                low_disk_space: val.get("low_disk_space").or_else(|| val.get("lowDiskSpace")).and_then(|v| v.as_bool()).unwrap_or(false),
+                chunks: Vec::new(),
+                speed_history: Vec::new(),
+                error_message: None,
+                created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            };
+            tasks_lock.insert(task_id.clone(), task);
+        }
     }
     let clean_label = format!("dl_{}", task_id.replace(|c: char| !c.is_alphanumeric(), "_"));
     if let Some(w) = app.get_webview_window(&clean_label) {
@@ -539,25 +561,21 @@ async fn open_download_window(
     }
 
     let url_str = format!("index.html?popup=true&taskId={}", task_id);
-    let app_clone = app.clone();
-    let label_clone = clean_label.clone();
-    let title_clone = title.clone();
-
-    tokio::task::spawn_blocking(move || {
-        let _ = WebviewWindowBuilder::new(
-            &app_clone,
-            &label_clone,
-            WebviewUrl::App(url_str.into()),
-        )
-        .title(&title_clone)
-        .inner_size(540.0, 440.0)
-        .min_inner_size(480.0, 360.0)
-        .resizable(true)
-        .center()
-        .build();
-    })
-    .await
+    let win = WebviewWindowBuilder::new(
+        &app,
+        &clean_label,
+        WebviewUrl::App(url_str.into()),
+    )
+    .title(&title)
+    .inner_size(540.0, 440.0)
+    .min_inner_size(480.0, 360.0)
+    .resizable(true)
+    .center()
+    .build()
     .map_err(|e| format!("Window spawn error: {}", e))?;
+
+    let _ = win.show();
+    let _ = win.set_focus();
 
     Ok(())
 }
