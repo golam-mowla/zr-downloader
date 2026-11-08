@@ -43,6 +43,20 @@ jobs:
       - name: Install Frontend Dependencies
         run: npm ci
 
+      - name: Pre-populate NSIS Toolchain (Bypass CDN 504)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tauriNsis = "$env:LOCALAPPDATA\tauri\NSIS"
+          New-Item -ItemType Directory -Force -Path "$tauriNsis\Plugins\x86-unicode\additional"
+          gh release download nsis-3.13 --repo tauri-apps/binary-releases -p "*.zip" -D "$env:TEMP"
+          Expand-Archive -Path "$env:TEMP\nsis-3.13.zip" -DestinationPath "$env:TEMP\nsis_extracted" -Force
+          Copy-Item -Recurse -Force "$env:TEMP\nsis_extracted\nsis-3.13\*" "$tauriNsis"
+          gh release download nsis_tauri_utils-v0.5.3 --repo tauri-apps/nsis-tauri-utils -p "nsis_tauri_utils.dll" -D "$tauriNsis\Plugins\x86-unicode\additional"
+          echo "$tauriNsis" >> $env:GITHUB_PATH
+          Remove-Item -Recurse -Force "$env:TEMP\nsis_extracted", "$env:TEMP\nsis-3.13.zip" -ErrorAction SilentlyContinue
+
       - name: Build Tauri 2 App & Create Release
         uses: tauri-apps/tauri-action@v0
         env:
