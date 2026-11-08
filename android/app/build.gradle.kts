@@ -15,8 +15,8 @@ android {
         applicationId = "com.golammowla.zrdownloader"
         minSdk = 24
         targetSdk = 35
-        versionCode = 17
-        versionName = "1.2.14"
+        versionCode = 18
+        versionName = "1.2.16"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

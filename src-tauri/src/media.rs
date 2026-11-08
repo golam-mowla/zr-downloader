@@ -84,61 +84,104 @@ pub struct MediaInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DownloadOptions {
+    #[serde(alias = "task_id", alias = "taskId")]
     pub task_id: Option<String>,
     pub url: String,
+    #[serde(alias = "save_folder", alias = "saveFolder", alias = "save_path", alias = "savePath")]
     pub save_folder: String,
+    #[serde(alias = "custom_filename", alias = "customFilename", alias = "filename", alias = "title")]
     pub custom_filename: Option<String>,
-    pub download_mode: String, // "video" | "audio" | "subtitles"
-    pub container: String,     // "Video (Generic)", "MP4 (Video)", "WEBM (Video)", "MKV (Video)", "MOV (Video)", "AVI (Video)", "Audio (Generic)", "MP3 (Audio)", "M4A (Audio)", "OPUS (Audio)", "FLAC (Audio)", "WAV (Audio)", "OGG (Audio)"
+    #[serde(alias = "download_mode", alias = "downloadMode")]
+    pub download_mode: String,
+    pub container: String,
+    #[serde(alias = "video_stream_id", alias = "videoStreamId")]
     pub video_stream_id: String,
+    #[serde(alias = "audio_stream_id", alias = "audioStreamId")]
     pub audio_stream_id: String,
+    #[serde(alias = "audio_bitrate", alias = "audioBitrate")]
     pub audio_bitrate: String,
 
     // Subtitle Section
+    #[serde(alias = "enable_subtitles", alias = "enableSubtitles")]
     pub enable_subtitles: bool,
+    #[serde(alias = "subtitle_lang", alias = "subtitleLang")]
     pub subtitle_lang: String,
-    pub subtitle_format: String, // "srt" | "vtt" | "ass" | "lrc"
-    pub subtitle_save_mode: String, // "separate" | "embed" | "both"
+    #[serde(alias = "subtitle_format", alias = "subtitleFormat")]
+    pub subtitle_format: String,
+    #[serde(alias = "subtitle_save_mode", alias = "subtitleSaveMode")]
+    pub subtitle_save_mode: String,
 
     // Clip Section
+    #[serde(alias = "enable_clip", alias = "enableClip")]
     pub enable_clip: bool,
+    #[serde(alias = "start_time", alias = "startTime")]
     pub start_time: String,
+    #[serde(alias = "end_time", alias = "endTime")]
     pub end_time: String,
+    #[serde(alias = "precise_cut", alias = "preciseCut")]
     pub precise_cut: bool,
 
     // Parabolic Options - UI & Downloads
+    #[serde(alias = "max_active_downloads", alias = "maxActiveDownloads")]
     pub max_active_downloads: u32,
+    #[serde(alias = "overwrite_files", alias = "overwriteFiles")]
     pub overwrite_files: bool,
+    #[serde(alias = "include_media_id", alias = "includeMediaId")]
     pub include_media_id: bool,
+    #[serde(alias = "include_auto_subtitles", alias = "includeAutoSubtitles")]
     pub include_auto_subtitles: bool,
+    #[serde(alias = "include_super_res", alias = "includeSuperRes")]
     pub include_super_res: bool,
+    #[serde(alias = "preferred_video_codec", alias = "preferredVideoCodec")]
     pub preferred_video_codec: String,
+    #[serde(alias = "preferred_audio_codec", alias = "preferredAudioCodec")]
     pub preferred_audio_codec: String,
+    #[serde(alias = "preferred_subtitle_format", alias = "preferredSubtitleFormat")]
     pub preferred_subtitle_format: String,
+    #[serde(alias = "preferred_fps", alias = "preferredFps")]
     pub preferred_fps: String,
 
     // Parabolic Options - Downloader
+    #[serde(alias = "use_part_files", alias = "usePartFiles")]
     pub use_part_files: bool,
+    #[serde(alias = "sponsor_block", alias = "sponsorBlock")]
     pub sponsor_block: bool,
+    #[serde(alias = "limit_speed", alias = "limitSpeed")]
     pub limit_speed: bool,
+    #[serde(alias = "speed_limit_kb", alias = "speedLimitKb")]
     pub speed_limit_kb: u32,
     pub proxy: String,
+    #[serde(alias = "cookies_file", alias = "cookiesFile")]
     pub cookies_file: String,
+    #[serde(alias = "cookies_browser", alias = "cookiesBrowser")]
     pub cookies_browser: String,
+    #[serde(alias = "use_aria2c", alias = "useAria2c")]
     pub use_aria2c: bool,
+    #[serde(alias = "aria2_connections", alias = "aria2Connections")]
     pub aria2_connections: u32,
+    #[serde(alias = "ytdlp_discovery_args", alias = "ytdlpDiscoveryArgs")]
     pub ytdlp_discovery_args: String,
+    #[serde(alias = "ytdlp_download_args", alias = "ytdlpDownloadArgs")]
     pub ytdlp_download_args: String,
 
     // Parabolic Options - Converter
+    #[serde(alias = "translate_metadata", alias = "translateMetadata")]
     pub translate_metadata: bool,
+    #[serde(alias = "embed_metadata", alias = "embedMetadata")]
     pub embed_metadata: bool,
+    #[serde(alias = "embed_thumbnails", alias = "embedThumbnails")]
     pub embed_thumbnails: bool,
+    #[serde(alias = "crop_audio_thumbnails", alias = "cropAudioThumbnails")]
     pub crop_audio_thumbnails: bool,
+    #[serde(alias = "embed_chapters", alias = "embedChapters")]
     pub embed_chapters: bool,
+    #[serde(alias = "split_chapters", alias = "splitChapters")]
     pub split_chapters: bool,
+    #[serde(alias = "embed_subtitles_global", alias = "embedSubtitlesGlobal")]
     pub embed_subtitles_global: bool,
+    #[serde(alias = "ffmpeg_threads", alias = "ffmpegThreads")]
     pub ffmpeg_threads: u32,
+    #[serde(alias = "post_processor_args", alias = "postProcessorArgs")]
     pub post_processor_args: String,
     // Low Disk Space Zero-Temp Mode
     #[serde(alias = "low_disk_space", alias = "lowDiskSpace", alias = "low_disk")]

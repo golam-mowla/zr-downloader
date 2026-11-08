@@ -1,6 +1,6 @@
 [package]
 name = "zr-downloader"
-version = "1.2.15"
+version = "1.2.16"
 description = "ZR Downloader - High-performance multithreaded HTTP, media and torrent downloader"
 authors = ["Golam Mowla"]
 edition = "2021"
