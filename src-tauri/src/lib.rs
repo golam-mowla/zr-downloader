@@ -552,9 +552,17 @@ async fn open_download_window(
     state: State<'_, EngineState>,
     download_state: State<'_, DownloadState>,
     task_id: String,
-    title: String,
+    title: Option<String>,
     initial_task: Option<serde_json::Value>,
 ) -> Result<(), String> {
+    let resolved_title = title.clone().unwrap_or_else(|| {
+        initial_task
+            .as_ref()
+            .and_then(|v| v.get("filename"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("ZR Downloader")
+            .to_string()
+    });
     if let Some(ref val) = initial_task {
         let t = DownloadTask {
             id: task_id.clone(),
@@ -599,7 +607,7 @@ async fn open_download_window(
         &clean_label,
         WebviewUrl::App(url_str.into()),
     )
-    .title(&title)
+    .title(&resolved_title)
     .inner_size(520.0, 420.0)
     .min_inner_size(480.0, 360.0)
     .resizable(true)

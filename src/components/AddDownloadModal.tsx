@@ -249,7 +249,10 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   };
 
   const handleFetchMediaInfo = async () => {
-    const cleanUrl = url.trim();
+    let cleanUrl = url.trim();
+    if (cleanUrl.startsWith("@[") && cleanUrl.endsWith("]")) {
+      cleanUrl = cleanUrl.slice(2, -1).trim();
+    }
     if (!cleanUrl) return;
     try {
       setIsFetchingMedia(true);
@@ -335,22 +338,33 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   };
 
   const handleMediaSubmit = async () => {
-    const cleanUrl = url.trim();
+    let cleanUrl = url.trim();
+    if (cleanUrl.startsWith("@[") && cleanUrl.endsWith("]")) {
+      cleanUrl = cleanUrl.slice(2, -1).trim();
+    }
     if (!cleanUrl) return;
     try {
       setSubmitting(true);
       setErrorMessage(null);
+      const isAudio = container.toLowerCase().includes("audio");
       await onAddMediaDownload({
         url: cleanUrl,
-        saveFolder,
+        saveFolder: saveFolder || "",
         customFilename: customFilename.trim() || mediaInfo?.title || "",
-        videoStreamId: selectedFormatId || "best",
+        downloadMode: isAudio ? "audio" : "video",
+        videoStreamId: isAudio ? "" : (selectedFormatId || "best"),
         audioStreamId: selectedAudioId || "best",
-        container,
-        enableClip,
-        startTime: enableClip ? startTime : undefined,
-        endTime: enableClip ? endTime : undefined,
-        lowDiskSpace,
+        container: container || "MP4 (Video)",
+        enableClip: Boolean(enableClip),
+        startTime: enableClip ? (startTime || "00:00:00") : "00:00:00",
+        endTime: enableClip ? (endTime || "00:00:10") : "00:00:10",
+        lowDiskSpace: Boolean(lowDiskSpace),
+        proxy: "",
+        cookiesFile: "",
+        cookiesBrowser: "",
+        ytdlpDiscoveryArgs: "",
+        ytdlpDownloadArgs: "",
+        postProcessorArgs: "",
       });
       onClose();
     } catch (err: any) {

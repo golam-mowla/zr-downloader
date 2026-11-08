@@ -57,7 +57,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
 
     const fetchTask = async () => {
       try {
-        const directMatch = await invoke<DownloadTask | null>("get_download_task", { taskId });
+        const directMatch = await invoke<DownloadTask | null>("get_download_task", { taskId, task_id: taskId });
         if (directMatch && isMounted) {
           setTask(directMatch);
           return;

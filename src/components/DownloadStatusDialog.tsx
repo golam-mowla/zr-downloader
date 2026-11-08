@@ -391,7 +391,10 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
                 </>
               ) : (
                 <button
-                  onClick={() => onCancel(task.id)}
+                  onClick={() => {
+                    onCancel(task.id);
+                    onClose();
+                  }}
                   className="px-3.5 py-1.5 rounded-lg text-red-700 bg-white border border-red-300 hover:bg-red-50 dark:bg-red-950/30 dark:border-red-900/60 dark:text-red-400 dark:hover:bg-red-950/50 font-semibold text-[13px] transition-colors"
                 >
                   Cancel

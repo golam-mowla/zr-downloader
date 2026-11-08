@@ -79,8 +79,12 @@ export const App: React.FC = () => {
   });
   const [activePopupTaskIds, setActivePopupTaskIds] = useState<string[]>([]);
 
-  const openDownloadPopup = async (task: DownloadTask) => {
+    const openDownloadPopup = async (task: DownloadTask) => {
     try {
+      try {
+        localStorage.setItem(`zr_init_${task.id}`, JSON.stringify(task));
+        sessionStorage.setItem(`zr_init_${task.id}`, JSON.stringify(task));
+      } catch {}
       await invoke("open_download_window", {
         taskId: task.id,
         initialTask: {
@@ -210,6 +214,7 @@ export const App: React.FC = () => {
           updatedList[index] = {
             ...current,
             ...updated,
+            percent: (updated.percent !== undefined && updated.percent !== null) ? Number(updated.percent) : current.percent,
             downloaded_bytes: downloadedBytes || current.downloaded_bytes || 0,
             downloadedBytes: downloadedBytes || current.downloadedBytes || 0,
             total_bytes: totalBytes || current.total_bytes || current.totalBytes || 0,
@@ -862,10 +867,23 @@ export const App: React.FC = () => {
         androidBridge.startDownload(taskId, url, "best", "", false, "", "", false, "", savePath || "", finalFilename);
         return;
       }
+      let cleanDirectUrl = (url || "").trim();
+      if (cleanDirectUrl.startsWith("@[") && cleanDirectUrl.endsWith("]")) {
+        cleanDirectUrl = cleanDirectUrl.slice(2, -1).trim();
+      }
+      let cleanDirectFn = (filename || "").trim();
+      if (cleanDirectFn.startsWith("@[") && cleanDirectFn.endsWith("]")) {
+        cleanDirectFn = cleanDirectFn.slice(2, -1).trim();
+      }
+      if (cleanDirectFn && !/\.[a-zA-Z0-9]{2,5}$/.test(cleanDirectFn)) {
+        if (cleanDirectUrl.includes(".mp4") || cleanDirectUrl.includes("fbcdn.net") || cleanDirectUrl.includes("instagram")) {
+          cleanDirectFn = `${cleanDirectFn}.mp4`;
+        }
+      }
       const taskId = await invoke<string>("start_http_download", {
-        url,
+        url: cleanDirectUrl,
         saveFolder: savePath || null,
-        filename: filename || null,
+        filename: cleanDirectFn || null,
         chunkCount: connections,
         lowDiskSpace: isLowSpace,
       });
@@ -939,22 +957,130 @@ export const App: React.FC = () => {
           options.low_disk_space ||
           localStorage.getItem("zr_low_disk_space") === "true"
         );
+        let cleanMediaUrl = (options.url || "").trim();
+        if (cleanMediaUrl.startsWith("@[") && cleanMediaUrl.endsWith("]")) {
+          cleanMediaUrl = cleanMediaUrl.slice(2, -1).trim();
+        }
         const invokeOptions = {
-          ...options,
-          taskId,
-          task_id: taskId,
-          saveFolder: options.saveFolder || defaultDirRef.current,
-          save_folder: options.saveFolder || defaultDirRef.current,
+          url: cleanMediaUrl,
+          saveFolder: options.saveFolder || defaultDirRef.current || "",
+          save_folder: options.saveFolder || defaultDirRef.current || "",
           customFilename: finalFilename,
           custom_filename: finalFilename,
+          downloadMode: isAudio ? "audio" : "video",
+          download_mode: isAudio ? "audio" : "video",
+          container: options.container || (isAudio ? "MP3 (Audio)" : "MP4 (Video)"),
+          videoStreamId: options.videoStreamId || "best",
+          video_stream_id: options.videoStreamId || "best",
+          audioStreamId: options.audioStreamId || "best",
+          audio_stream_id: options.audioStreamId || "best",
+          audioBitrate: options.audioBitrate || "Best",
+          audio_bitrate: options.audioBitrate || "Best",
+          enableSubtitles: Boolean(options.enableSubtitles),
+          enable_subtitles: Boolean(options.enableSubtitles),
+          subtitleLang: options.subtitleLang || "en",
+          subtitle_lang: options.subtitleLang || "en",
+          subtitleFormat: options.subtitleFormat || "srt",
+          subtitle_format: options.subtitleFormat || "srt",
+          subtitleSaveMode: options.subtitleSaveMode || "separate",
+          subtitle_save_mode: options.subtitleSaveMode || "separate",
+          enableClip: Boolean(options.enableClip),
+          enable_clip: Boolean(options.enableClip),
+          startTime: options.startTime || "00:00:00",
+          start_time: options.startTime || "00:00:00",
+          endTime: options.endTime || "00:00:10",
+          end_time: options.endTime || "00:00:10",
+          preciseCut: Boolean(options.preciseCut),
+          precise_cut: Boolean(options.preciseCut),
+          maxActiveDownloads: 3,
+          max_active_downloads: 3,
+          overwriteFiles: Boolean(options.overwriteFiles),
+          overwrite_files: Boolean(options.overwriteFiles),
+          includeMediaId: false,
+          include_media_id: false,
+          includeAutoSubtitles: false,
+          include_auto_subtitles: false,
+          includeSuperRes: false,
+          include_super_res: false,
+          preferredVideoCodec: "default",
+          preferred_video_codec: "default",
+          preferredAudioCodec: "default",
+          preferred_audio_codec: "default",
+          preferredSubtitleFormat: "default",
+          preferred_subtitle_format: "default",
+          preferredFps: "default",
+          preferred_fps: "default",
+          usePartFiles: !isLowSpace,
+          use_part_files: !isLowSpace,
           lowDiskSpace: isLowSpace,
           low_disk_space: isLowSpace,
-          usePartFiles: !isLowSpace,
+          sponsorBlock: false,
+          sponsor_block: false,
+          limitSpeed: false,
+          limit_speed: false,
+          speedLimitKb: 0,
+          speed_limit_kb: 0,
+          proxy: "",
+          cookiesFile: "",
+          cookies_file: "",
+          cookiesBrowser: "",
+          cookies_browser: "",
+          useAria2c: false,
+          use_aria2c: false,
+          aria2Connections: 8,
+          aria2_connections: 8,
+          ytdlpDiscoveryArgs: "",
+          ytdlp_discovery_args: "",
+          ytdlpDownloadArgs: "",
+          ytdlp_download_args: "",
+          translateMetadata: false,
+          translate_metadata: false,
+          embedMetadata: true,
+          embed_metadata: true,
+          embedThumbnails: true,
+          embed_thumbnails: true,
+          cropAudioThumbnails: true,
+          crop_audio_thumbnails: true,
+          embedChapters: false,
+          embed_chapters: false,
+          splitChapters: false,
+          split_chapters: false,
+          embedSubtitlesGlobal: false,
+          embed_subtitles_global: false,
+          ffmpegThreads: 4,
+          ffmpeg_threads: 4,
+          postProcessorArgs: "",
+          post_processor_args: "",
+          taskId,
+          task_id: taskId,
         };
+        let startErr = null;
         try {
           await invoke<string>("ytdlp_download", { options: invokeOptions });
-        } catch {
-          await invoke<string>("start_download", { options: invokeOptions });
+        } catch (err1: any) {
+          try {
+            await invoke<string>("start_download", { options: invokeOptions });
+          } catch (err2: any) {
+            startErr = err2?.message || err2?.toString() || err1?.message || err1?.toString() || "Download failed to initialize";
+            console.error("ytdlp_download & start_download failed:", err1, err2);
+          }
+        }
+        if (startErr) {
+          setTasks((prev) =>
+            prev.map((t) =>
+              t.id === taskId
+                ? {
+                    ...t,
+                    status: "error",
+                    error: startErr,
+                    errorMessage: startErr,
+                    speed_formatted: "0 B/s",
+                    speedFormatted: "0 B/s",
+                    eta_formatted: "--",
+                  }
+                : t
+            )
+          );
         }
       }
     } catch (e) {
