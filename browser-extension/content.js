@@ -373,14 +373,25 @@
         }
       }
 
-      let postTitle =
-        caption || (author ? `${author} - Instagram Video` : "");
-      if (!postTitle) {
+      let cleanAuthor = author ? author.replace(/[\r\n\t]+/g, " ").trim() : "";
+      let cleanCaption = caption ? caption.replace(/[\r\n\t]+/g, " ").trim() : "";
+      let postTitle = "";
+      if (cleanAuthor && cleanCaption) {
+        postTitle = `${cleanAuthor} - ${cleanCaption}`;
+      } else if (cleanAuthor) {
+        postTitle = `${cleanAuthor} - Instagram Video`;
+      } else if (cleanCaption) {
+        postTitle = cleanCaption;
+      } else {
         postTitle =
           document.title
             .replace(/ • Instagram photos and videos$/, "")
             .replace(/ \| Instagram$/, "")
             .trim() || "Instagram Video";
+      }
+      postTitle = postTitle.replace(/[\\/:*?"<>|]/g, "_").trim();
+      if (!/\.[a-zA-Z0-9]{2,5}$/.test(postTitle)) {
+        postTitle = `${postTitle}.mp4`;
       }
 
       // Find poster thumbnail image
@@ -521,12 +532,20 @@
       return;
     }
 
-    const activePlayingVid = Array.from(document.querySelectorAll("video")).find(
-      (v) => !v.paused && v.currentTime > 0 && v.readyState >= 2
-    );
-    if (activePlayingVid) {
-      currentTargetVideo = activePlayingVid;
-      mediaTarget = extractMediaTarget(activePlayingVid);
+    const allVids = Array.from(document.querySelectorAll("video"));
+    let targetActiveVid = allVids.find((v) => !v.paused && v.currentTime > 0 && v.readyState >= 2);
+    if (!targetActiveVid) {
+      targetActiveVid = allVids.find((v) => {
+        const r = v.getBoundingClientRect();
+        return r.width > 120 && r.height > 120 && r.top < window.innerHeight && r.bottom > 0;
+      });
+    }
+    if (!targetActiveVid && currentTargetVideo) {
+      targetActiveVid = currentTargetVideo;
+    }
+    if (targetActiveVid) {
+      currentTargetVideo = targetActiveVid;
+      mediaTarget = extractMediaTarget(targetActiveVid);
     }
 
     let sniffedStreams = [];
@@ -673,8 +692,9 @@
         });
       }
     } else if (hostname.includes("instagram.com")) {
-      // 2. Instagram (Reels & Feed) - Real detected stream (IDM style)
-      const cleanTitle = title.length > 55 ? title.slice(0, 55) + "..." : title;
+      // 2. Instagram (Reels & Feed) - Real detected stream of active video
+      const baseTitle = title.replace(/\.mp4$/i, "");
+      const cleanTitle = baseTitle.length > 55 ? baseTitle.slice(0, 55) + "..." : baseTitle;
       const shortTitle = getShortTitle(cleanTitle, 28);
       const targetInstagramUrl =
         mediaTarget.postUrl || mediaTarget.url || window.location.href;
@@ -685,46 +705,44 @@
       const minDim = Math.min(vW, vH);
       const resTag = maxDim >= 1080 ? "1080p HD" : maxDim >= 720 ? "720p HD" : minDim >= 480 ? "480p" : minDim > 0 ? `${minDim}p` : "HD";
 
-      // Filter real sniffed streams for this reel/post
-      const igStreams = sniffedStreams.filter((st) => {
-        if (st.isAudio) return false;
-        if (st.contentLength > 0 && st.contentLength < 50000) return false;
-        return true;
+      // Match sniffed stream specifically for this video's URL
+      const matchedStream = sniffedStreams.find(
+        (st) =>
+          !st.isAudio &&
+          ((directSrc && st.url && st.url.split("?")[0] === directSrc.split("?")[0]) ||
+            st.url === directSrc)
+      );
+      const sizeStr = matchedStream?.sizeFormatted ? ` (${matchedStream.sizeFormatted})` : "";
+      const mp4Name = `${cleanTitle}.mp4`;
+      const mp3Name = `${cleanTitle}.mp3`;
+
+      // Option 1: Direct detected stream (exact playing video)
+      options.push({
+        label: `${shortTitle}, MP4 file, quality ${resTag}${sizeStr}`,
+        fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality ${resTag}${sizeStr} (Direct Stream)`,
+        shortTitle: shortTitle,
+        formatDisplay: `${resTag} • MP4${sizeStr}`,
+        quality: resTag,
+        url: directSrc || targetInstagramUrl,
+        filename: mp4Name,
+        container: "MP4",
+        isDirectFile: Boolean(directSrc),
       });
 
-      if (igStreams.length > 0) {
-        igStreams.sort((a, b) => (b.contentLength || b.bitrate || 0) - (a.contentLength || a.bitrate || 0));
-        const seenUrls = new Set();
-        igStreams.forEach((st) => {
-          if (seenUrls.has(st.url)) return;
-          seenUrls.add(st.url);
-          const q = st.quality || resTag;
-          const sizeStr = st.sizeFormatted ? ` (${st.sizeFormatted})` : "";
-          options.push({
-            label: `${shortTitle}, MP4 file, quality ${q}${sizeStr}`,
-            fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality ${q}${sizeStr} (with Sound)`,
-            shortTitle: shortTitle,
-            formatDisplay: `${q} • MP4${sizeStr}`,
-            quality: q,
-            url: st.url || targetInstagramUrl,
-            container: "MP4",
-            isDirectFile: Boolean(st.url && st.url.includes(".mp4")),
-          });
-        });
-      } else {
-        const dimStr = vW > 0 && vH > 0 ? ` (${vW}x${vH})` : "";
-        options.push({
-          label: `${shortTitle}, MP4 file, quality ${resTag}${dimStr}`,
-          fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality ${resTag}${dimStr} (with Sound)`,
-          shortTitle: shortTitle,
-          formatDisplay: `${resTag}${dimStr} • MP4`,
-          quality: resTag,
-          url: directSrc || targetInstagramUrl,
-          container: "MP4",
-          isDirectFile: Boolean(directSrc && directSrc.includes(".mp4")),
-        });
-      }
+      // Option 2: High quality merged media (via media engine)
+      options.push({
+        label: `${shortTitle}, Full HD MP4 (Merged Video + Audio)`,
+        fullLabel: `${cleanTitle}, Full HD MP4, ${durStr}Highest Available Quality`,
+        shortTitle: shortTitle,
+        formatDisplay: `Full HD • MP4`,
+        quality: "Best",
+        url: targetInstagramUrl,
+        filename: mp4Name,
+        container: "MP4",
+        isDirectFile: false,
+      });
 
+      // Option 3: Extracted Audio
       options.push({
         label: `${shortTitle}, MP3 Audio, Highest Quality`,
         fullLabel: `${cleanTitle}, MP3 Audio, ${durStr}Highest Quality (Extracted Audio)`,
@@ -732,7 +750,9 @@
         formatDisplay: "MP3 Audio",
         quality: "Audio",
         url: directSrc || targetInstagramUrl,
+        filename: mp3Name,
         container: "MP3",
+        isDirectFile: false,
       });
 
       const poster = mediaTarget.thumbnail || (vid && vid.poster);

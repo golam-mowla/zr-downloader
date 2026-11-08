@@ -7,7 +7,7 @@ use downloader::{DownloadTask, EngineState, UrlMetadata};
 use media::{AppUrlState, DownloadState};
 use std::collections::HashMap;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -696,6 +696,7 @@ pub fn run() {
             ytdlp_get_info,
             ytdlp_download,
             open_download_window,
+            get_download_task,
             // BitTorrent Engine Commands (librqbit)
             torrent::add_torrent,
             torrent::get_torrent_details,

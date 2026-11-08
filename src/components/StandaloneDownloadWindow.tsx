@@ -1,16 +1,19 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Play,
   Pause,
-  X,
   FolderOpen,
   FileCheck,
   Zap,
   AlertCircle,
   EyeOff,
+  Clock,
+  HardDrive,
+  CheckCircle2,
+  X,
 } from "lucide-react";
 import {
   DownloadTask,
@@ -19,6 +22,8 @@ import {
   getTotalBytes,
   getChunkCount,
   getIsResumable,
+  getSpeedFormatted,
+  getEtaFormatted,
 } from "../types";
 
 export interface StandaloneDownloadWindowProps {
@@ -43,24 +48,35 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
     }
   }, []);
 
-  // Fetch initial task state
+  // Fetch initial task state from Rust Engine / Media State
   useEffect(() => {
+    let isMounted = true;
     const fetchTask = async () => {
       try {
+        const directMatch = await invoke<DownloadTask | null>("get_download_task", { taskId });
+        if (directMatch && isMounted) {
+          setTask(directMatch);
+          return;
+        }
+
         const all = await invoke<DownloadTask[]>("get_all_downloads");
-        if (Array.isArray(all)) {
-          const found = all.find((t) => t.id === taskId);
-          if (found) {
-            setTask(found);
+        if (Array.isArray(all) && isMounted) {
+          const matched = all.find((t) => t.id === taskId);
+          if (matched) {
+            setTask(matched);
           }
         }
       } catch (err) {
-        console.error("Failed to load initial task:", err);
+        console.error("Failed to fetch download task:", err);
       }
     };
+
     fetchTask();
-    const interval = setInterval(fetchTask, 1500);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchTask, 1200);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [taskId]);
 
   // Listen to Tauri progress events
@@ -68,32 +84,55 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
     let unlistenProgress: (() => void) | undefined;
     let unlistenHttp: (() => void) | undefined;
     let unlistenMedia: (() => void) | undefined;
+    let unlistenZr: (() => void) | undefined;
 
     const setupListeners = async () => {
       try {
-        unlistenProgress = await listen<any>("progress", (event) => {
-          const updated = event.payload;
+        const handleUpdate = (updated: any) => {
           const id = updated?.id || updated?.taskId || updated?.task_id;
           if (id === taskId) {
-            setTask((prev) => (prev ? { ...prev, ...updated, id: taskId } : updated));
+            setTask((prev) => {
+              if (!prev) {
+                return {
+                  id: taskId,
+                  url: updated.url || "",
+                  filename: updated.filename || "Downloading...",
+                  save_path: updated.save_path || updated.savePath || "",
+                  savePath: updated.savePath || updated.save_path || "",
+                  total_bytes: updated.total_bytes ?? updated.totalBytes ?? 0,
+                  downloaded_bytes: updated.downloaded_bytes ?? updated.downloadedBytes ?? 0,
+                  percent: updated.percent ?? 0,
+                  speed_bps: updated.speed_bps ?? updated.speedBps ?? 0,
+                  speed_formatted: updated.speed_formatted ?? updated.speedFormatted ?? updated.speed ?? "0 B/s",
+                  eta_formatted: updated.eta_formatted ?? updated.etaFormatted ?? updated.eta ?? "--",
+                  status: updated.status || "downloading",
+                  category: updated.category || "video",
+                  chunk_count: updated.chunk_count ?? updated.chunkCount ?? 1,
+                  is_resumable: updated.is_resumable ?? updated.isResumable ?? true,
+                  chunks: updated.chunks || [],
+                  speed_history: updated.speed_history || updated.speedHistory || [],
+                  error_message: updated.error_message || updated.errorMessage,
+                  created_at: updated.created_at || new Date().toLocaleTimeString(),
+                };
+              }
+              return {
+                ...prev,
+                ...updated,
+                id: taskId,
+                filename: updated.filename || prev.filename,
+                url: updated.url || prev.url,
+                save_path: updated.save_path || updated.savePath || prev.save_path || prev.savePath,
+                savePath: updated.savePath || updated.save_path || prev.savePath || prev.save_path,
+                category: updated.category || prev.category,
+              };
+            });
           }
-        });
+        };
 
-        unlistenHttp = await listen<any>("download-progress", (event) => {
-          const updated = event.payload;
-          const id = updated?.id || updated?.taskId || updated?.task_id;
-          if (id === taskId) {
-            setTask((prev) => (prev ? { ...prev, ...updated, id: taskId } : updated));
-          }
-        });
-
-        unlistenMedia = await listen<any>("ytdlp-progress", (event) => {
-          const updated = event.payload;
-          const id = updated?.id || updated?.taskId || updated?.task_id;
-          if (id === taskId) {
-            setTask((prev) => (prev ? { ...prev, ...updated, id: taskId } : updated));
-          }
-        });
+        unlistenProgress = await listen<any>("progress", (e) => handleUpdate(e.payload));
+        unlistenHttp = await listen<any>("download-progress", (e) => handleUpdate(e.payload));
+        unlistenMedia = await listen<any>("ytdlp-progress", (e) => handleUpdate(e.payload));
+        unlistenZr = await listen<any>("zr://progress", (e) => handleUpdate(e.payload));
       } catch (e) {
         console.warn("Event listen error in popup window:", e);
       }
@@ -105,20 +144,24 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
       if (unlistenProgress) unlistenProgress();
       if (unlistenHttp) unlistenHttp();
       if (unlistenMedia) unlistenMedia();
+      if (unlistenZr) unlistenZr();
     };
   }, [taskId]);
 
-  // Update native window title
+  // Update native OS window title dynamically
   useEffect(() => {
     if (!task) return;
     const win = getCurrentWindow();
     const clampedPercent = Math.min(100, Math.max(0, task.percent || 0));
-    if (task.status === "completed") {
-      win.setTitle(`Download Complete - ${task.filename}`).catch(() => {});
+    const fn = task.filename || "Downloading...";
+    if (task.status === "completed" || clampedPercent >= 100) {
+      win.setTitle(`100% Complete - ${fn}`).catch(() => {});
     } else if (task.status === "error") {
-      win.setTitle(`Download Error - ${task.filename}`).catch(() => {});
+      win.setTitle(`Download Error - ${fn}`).catch(() => {});
+    } else if (task.status === "paused") {
+      win.setTitle(`Paused (${clampedPercent.toFixed(1)}%) - ${fn}`).catch(() => {});
     } else {
-      win.setTitle(`${clampedPercent.toFixed(1)}% of ${task.filename}`).catch(() => {});
+      win.setTitle(`${clampedPercent.toFixed(1)}% of ${fn}`).catch(() => {});
     }
   }, [task?.percent, task?.status, task?.filename]);
 
@@ -135,6 +178,8 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
   const totalBytes = getTotalBytes(task);
   const chunkCount = getChunkCount(task);
   const isResumable = getIsResumable(task);
+  const speedDisplay = getSpeedFormatted(task);
+  const etaDisplay = getEtaFormatted(task);
 
   const clampedPercent = Math.min(100, Math.max(0, task.percent || 0));
   const isCompleted = task.status === "completed" || clampedPercent >= 100;
@@ -144,43 +189,45 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
 
   const handlePause = async () => {
     try {
-      if (task.category === "torrent") {
-        await invoke("pause_torrent", { id: task.id });
+      if (task.category === "torrents" || task.category === "torrent") {
+        await invoke("pause_torrent", { idOrHash: task.id });
       } else {
-        await invoke("pause_http_download", { id: task.id });
+        await invoke("pause_http_download", { taskId: task.id });
       }
-      setTask((prev) => prev ? { ...prev, status: "paused" } : null);
+      setTask((prev) => (prev ? { ...prev, status: "paused" } : null));
     } catch (e) {
-      console.error(e);
+      console.error("Pause error:", e);
     }
   };
 
   const handleResume = async () => {
     try {
-      if (task.category === "torrent") {
-        await invoke("resume_torrent", { id: task.id });
+      if (task.category === "torrents" || task.category === "torrent") {
+        await invoke("resume_torrent", { idOrHash: task.id });
       } else {
-        await invoke("resume_http_download", { id: task.id });
+        await invoke("resume_http_download", { taskId: task.id });
       }
-      setTask((prev) => prev ? { ...prev, status: "downloading" } : null);
+      setTask((prev) => (prev ? { ...prev, status: "downloading" } : null));
     } catch (e) {
-      console.error(e);
+      console.error("Resume error:", e);
     }
   };
 
   const handleCancel = async () => {
     try {
-      if (task.category === "torrent") {
-        await invoke("remove_torrent", { id: task.id, deleteFiles: false });
+      if (task.category === "torrents" || task.category === "torrent") {
+        await invoke("pause_torrent", { idOrHash: task.id });
       } else {
         try {
-          await invoke("cancel_http_download", { id: task.id });
-        } catch {
           await invoke("cancel_download", { taskId: task.id });
-        }
+        } catch {}
+        try {
+          await invoke("cancel_http_download", { taskId: task.id, deleteFile: false });
+        } catch {}
       }
-    } catch (e) {}
-    // Close window after cancel
+    } catch (e) {
+      console.error("Cancel error:", e);
+    }
     try {
       await getCurrentWindow().close();
     } catch {}
@@ -188,65 +235,84 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
 
   const handleOpenFile = async () => {
     try {
-      const fullPath = `${task.save_path}\\${task.filename}`;
+      const folder = task.save_path || task.savePath || "";
+      const filename = task.filename || "";
+      const fullPath = folder ? `${folder.replace(/[/\\]+$/, "")}\\${filename}` : filename;
       await invoke("open_file", { path: fullPath });
     } catch (e) {
-      console.error(e);
+      console.error("Open file error:", e);
+      try {
+        const folder = task.save_path || task.savePath || "";
+        await invoke("open_folder", { path: folder });
+      } catch {}
     }
   };
 
   const handleOpenFolder = async () => {
     try {
-      await invoke("open_folder", { path: task.save_path });
+      const folder = task.save_path || task.savePath || "";
+      await invoke("open_folder", { path: folder });
     } catch (e) {
-      console.error(e);
+      console.error("Open folder error:", e);
     }
   };
 
   const handleHideToBackground = async () => {
     try {
       await getCurrentWindow().close();
-    } catch {}
+    } catch (err) {
+      console.error("Close window error:", err);
+    }
   };
 
   return (
-    <div className="w-screen h-screen flex flex-col justify-between p-4 bg-zr-surface text-zr-primary select-none overflow-y-auto">
-      {/* Top Header Card */}
-      <div className="space-y-3">
-        {/* Info Grid */}
-        <div className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-[12px] font-medium text-zr-secondary shrink-0">File Name:</span>
-            <span className="text-[13px] font-semibold text-zr-primary truncate text-right flex-1" title={task.filename}>
+    <div className="w-screen h-screen p-4 flex flex-col justify-between bg-zr-surface text-zr-primary select-none overflow-hidden font-sans">
+      {/* Top Details Card */}
+      <div className="space-y-3 flex-1 overflow-y-auto pr-0.5">
+        <div className="p-3.5 rounded-xl bg-slate-100/80 dark:bg-slate-900/80 border border-zr space-y-2 text-[13px]">
+          <div className="flex justify-between items-start gap-2">
+            <span className="text-zr-secondary font-medium w-24 shrink-0">File Name:</span>
+            <span
+              className="font-semibold text-zr-primary text-right break-all line-clamp-2 select-text"
+              title={task.filename}
+            >
               {task.filename}
             </span>
           </div>
 
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="text-[12px] font-medium text-zr-secondary shrink-0">URL:</span>
-            <span className="text-[11px] text-blue-600 dark:text-blue-400 font-mono truncate text-right flex-1" title={task.url}>
+          <div className="flex justify-between items-start gap-2">
+            <span className="text-zr-secondary font-medium w-24 shrink-0">URL:</span>
+            <span
+              className="text-blue-600 dark:text-blue-400 text-right truncate flex-1 font-mono text-[11px] select-text"
+              title={task.url}
+            >
               {task.url}
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 pt-1 border-t border-zr/50 text-[12px]">
+          <div className="grid grid-cols-2 gap-3 pt-1 border-t border-zr/40 text-[12px]">
             <div className="flex justify-between items-center pr-2">
               <span className="text-zr-secondary">Status:</span>
-              <span className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider ${
-                isCompleted
-                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                  : isError
-                  ? "bg-red-500/10 text-red-600 dark:text-red-400"
-                  : isPaused
-                  ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                  : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-              }`}>
+              <span
+                className={`font-semibold uppercase tracking-wider text-[11px] px-2 py-0.5 rounded ${
+                  isCompleted
+                    ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                    : isError
+                    ? "bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30"
+                    : isPaused
+                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
+                    : isAssembling
+                    ? "bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30"
+                    : "bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30"
+                }`}
+              >
                 {task.status}
               </span>
             </div>
+
             <div className="flex justify-between items-center pl-2 border-l border-zr/50">
               <span className="text-zr-secondary">Resume capability:</span>
-              <span className={`font-semibold ${isResumable ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+              <span className={`font-semibold ${isResumable ? "text-emerald-600 dark:text-emerald-400" : "text-amber-500"}`}>
                 {isResumable ? "Yes" : "No"}
               </span>
             </div>
@@ -261,9 +327,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
             </div>
             <div className="flex justify-between items-center pl-2 border-l border-zr/50">
               <span className="text-zr-secondary">Downloaded:</span>
-              <span className="font-semibold text-zr-primary">
-                {formatBytes(downloadedBytes)}
-              </span>
+              <span className="font-semibold text-zr-primary">{formatBytes(downloadedBytes)}</span>
             </div>
           </div>
 
@@ -274,34 +338,39 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
                 {isPaused ? (
                   <span className="text-amber-500">Paused</span>
                 ) : isCompleted ? (
-                  <span className="text-emerald-500 font-bold">100%</span>
+                  <span className="text-emerald-500 font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Finished
+                  </span>
+                ) : isError ? (
+                  <span className="text-red-500">Error</span>
                 ) : (
                   <>
                     <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500 animate-pulse" />
-                    <span>{task.speed_formatted || "Connecting..."}</span>
+                    <span>{speedDisplay}</span>
                   </>
                 )}
               </span>
             </div>
             <div className="flex justify-between items-center pl-2 border-l border-zr/50">
               <span className="text-zr-secondary">Time left:</span>
-              <span className="font-semibold text-zr-primary">
-                {isCompleted ? "00:00:00" : task.eta_formatted || "--"}
+              <span className="font-semibold text-zr-primary flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-zr-secondary" />
+                <span>{isCompleted ? "00:00:00" : etaDisplay}</span>
               </span>
             </div>
           </div>
         </div>
 
         {/* Error Message */}
-        {isError && task.errorMessage && (
+        {isError && (task.errorMessage || (task as any).error_message) && (
           <div className="p-2.5 rounded-lg border border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400 text-[12px] flex items-start gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span className="break-all">{task.errorMessage}</span>
+            <span className="break-all">{task.errorMessage || (task as any).error_message}</span>
           </div>
         )}
 
         {/* Progress Bar */}
-        <div className="space-y-1">
+        <div className="space-y-1 pt-1">
           <div className="flex justify-between text-[12px] font-semibold">
             <span className="text-zr-primary">{clampedPercent.toFixed(1)}%</span>
             <span className="text-zr-secondary">
@@ -326,7 +395,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
 
         {/* Chunk Connection Streams */}
         {!isCompleted && !isError && (
-          <div className="space-y-1">
+          <div className="space-y-1 pt-1">
             <div className="flex justify-between text-[11px] text-zr-secondary font-medium">
               <span>Segmented Connection:</span>
               <span className="text-blue-600 dark:text-blue-400 font-semibold">
