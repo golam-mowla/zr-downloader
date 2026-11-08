@@ -85,7 +85,7 @@ pub async fn get_or_init_torrent_api(
 
     let listen_opts = ListenerOptions {
         mode: ListenerMode::TcpAndUtp,
-        listen_addr: (std::net::Ipv4Addr::UNSPECIFIED, 6881).into(),
+        listen_addr: (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
         enable_upnp_port_forwarding: true,
         ..Default::default()
     };
@@ -105,7 +105,7 @@ pub async fn get_or_init_torrent_api(
             "dht.libtorrent.org:25401".to_string(),
             "dht.aelitis.com:6881".to_string(),
         ]),
-        port: Some(6881),
+        port: None,
         persistence: None,
     };
 
@@ -129,7 +129,7 @@ pub async fn get_or_init_torrent_api(
         dht: Some(dht_config),
         trackers: default_trackers,
         peer_limit: Some(300),
-        client_name_and_version: Some("ZR Downloader 1.2.9".to_string()),
+        client_name_and_version: Some("ZR Downloader 1.2.12".to_string()),
         ..Default::default()
     };
 

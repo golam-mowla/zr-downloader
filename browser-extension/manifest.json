@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ZR Downloader Assistant",
-  "version": "3.5.1",
+  "version": "3.5.2",
   "description": "High-speed 16-segment HTTP download accelerator and intelligent media stream grabber for ZR Downloader.",
   "icons": {
     "16": "icons/icon16.png",
@@ -29,14 +29,23 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.youtube.com/*", "*://youtube.com/*"],
-      "js": ["yt-main-world.js"],
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://youtube.com/*"
+      ],
+      "js": [
+        "yt-main-world.js"
+      ],
       "world": "MAIN",
       "run_at": "document_start"
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_end"
     }
   ],

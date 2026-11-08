@@ -1,4 +1,4 @@
-﻿import React from "react";
+﻿import React, { useState, useRef, useEffect } from "react";
 import {
   X,
   Minus,
@@ -7,6 +7,7 @@ import {
   FolderOpen,
   FileCheck,
   Zap,
+  GripHorizontal,
 } from "lucide-react";
 import {
   DownloadTask,
@@ -77,7 +78,46 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
     }
   };
 
-  const cascadeOffset = (dialogIndex % 8) * 26;
+  const initialOffset = (dialogIndex % 8) * 32;
+  const [pos, setPos] = useState({ x: initialOffset, y: initialOffset });
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef({ mouseX: 0, mouseY: 0, posX: 0, posY: 0 });
+
+  const handleTitleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button") || (e.target as HTMLElement).closest("a")) {
+      return;
+    }
+    e.preventDefault();
+    onBringToFront?.();
+
+    isDraggingRef.current = true;
+    dragStartRef.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      posX: pos.x,
+      posY: pos.y,
+    };
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!isDraggingRef.current) return;
+      const dx = moveEvent.clientX - dragStartRef.current.mouseX;
+      const dy = moveEvent.clientY - dragStartRef.current.mouseY;
+      setPos({
+        x: dragStartRef.current.posX + dx,
+        y: dragStartRef.current.posY + dy,
+      });
+    };
+
+    const handleMouseUp = () => {
+      isDraggingRef.current = false;
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  };
 
   return (
     <div
@@ -85,14 +125,17 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
       style={{ zIndex: 60 + dialogIndex }}
     >
       <div
-        onClick={onBringToFront}
+        onMouseDown={() => onBringToFront?.()}
         style={{
-          transform: `translate(${cascadeOffset}px, ${cascadeOffset}px)`,
+          transform: `translate(${pos.x}px, ${pos.y}px)`,
         }}
         className="pointer-events-auto w-full max-w-lg rounded-xl shadow-2xl border border-zr bg-zr-surface overflow-hidden transition-colors">
         {/* Titlebar */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-zr bg-zr-tableHead select-none">
+        <div 
+          onMouseDown={handleTitleMouseDown}
+          className="flex items-center justify-between px-4 py-2.5 border-b border-zr bg-zr-tableHead select-none cursor-move active:cursor-grabbing hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors">
           <div className="flex items-center space-x-2 min-w-0">
+            <GripHorizontal className="w-3.5 h-3.5 text-zr-secondary shrink-0 opacity-60" />
             <div className="w-5 h-5 rounded-md bg-emerald-500/10 flex items-center justify-center shrink-0 border border-emerald-500/20">
               <Zap className="w-3.5 h-3.5 text-emerald-500 fill-emerald-500/20" />
             </div>
