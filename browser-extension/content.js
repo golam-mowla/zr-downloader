@@ -239,6 +239,34 @@
     true
   );
 
+  // Find actively visible / playing video on screen (Instagram Reels, Shorts, etc.)
+  function findActiveVideoOnScreen() {
+    const vids = Array.from(document.querySelectorAll("video"));
+    if (vids.length === 0) return null;
+
+    // First: actively playing
+    const playing = vids.find((v) => !v.paused && v.currentTime > 0 && v.readyState >= 2);
+    if (playing) return playing;
+
+    // Second: closest to viewport center
+    const vpCenterY = window.innerHeight / 2;
+    let closestVid = null;
+    let minDistance = Infinity;
+
+    for (const v of vids) {
+      const rect = v.getBoundingClientRect();
+      if (rect.width < 80 || rect.height < 60) continue;
+      if (rect.bottom <= 0 || rect.top >= window.innerHeight) continue;
+      const vidCenterY = rect.top + rect.height / 2;
+      const dist = Math.abs(vidCenterY - vpCenterY);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestVid = v;
+      }
+    }
+    return closestVid || vids[0];
+  }
+
   // Find Instagram Reel / Post link
   function findInstagramPostUrl(vid, element) {
     if (

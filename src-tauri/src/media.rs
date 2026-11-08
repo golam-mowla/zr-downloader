@@ -81,6 +81,15 @@ pub struct MediaInfo {
     pub subtitles: Vec<SubtitleTrack>,
 }
 
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    let opt = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DownloadOptions {
@@ -535,6 +544,7 @@ fn make_command(bin_name: &str) -> Command {
     let mut cmd = Command::new(resolved);
     cmd.env("PATH", get_augmented_path());
     cmd.env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUNBUFFERED", "1");
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
@@ -1316,7 +1326,11 @@ pub async fn start_download(
             };
 
             let fmt_expr = if options.url.contains("instagram.com") {
-                "bv*+ba/b/best".to_string()
+                if vid_sel.contains("height") {
+                    format!("{}+ba/b/best", vid_sel)
+                } else {
+                    "bv*+ba/b/best".to_string()
+                }
             } else {
                 format!("{}+{}/{}/b", vid_sel, aud_sel, vid_sel)
             };
@@ -1466,22 +1480,25 @@ pub async fn start_download(
         }
 
         cmd.arg(options.url.trim());
+        cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let _ = app.emit(
-            "download-progress",
-            serde_json::json!({
-                "id": tid.clone(),
-                "percent": 2.0,
-                "text": "Initializing download stream...".to_string(),
-                "speed": "".to_string(),
-                "speed_formatted": "Connecting...".to_string(),
-                "eta": "".to_string(),
-                "eta_formatted": "--".to_string(),
-                "status": "downloading".to_string(),
-            }),
-        );
+        let init_p = serde_json::json!({
+            "id": tid.clone(),
+            "taskId": tid.clone(),
+            "percent": 2.0,
+            "text": "Initializing download stream...".to_string(),
+            "speed": "".to_string(),
+            "speed_formatted": "Connecting...".to_string(),
+            "speedFormatted": "Connecting...".to_string(),
+            "eta": "".to_string(),
+            "eta_formatted": "--".to_string(),
+            "etaFormatted": "--".to_string(),
+            "status": "downloading".to_string(),
+        });
+        let _ = app.emit("download-progress", init_p.clone());
+        let _ = app.emit("ytdlp-progress", init_p);
 
         let mut child = match cmd.spawn() {
             Ok(c) => c,
@@ -1637,28 +1654,27 @@ pub async fn start_download(
                             }
                         }
 
-                        let _ = app.emit(
-                            "download-progress",
-                            serde_json::json!({
-                                "id": tid.clone(),
-                                "taskId": tid.clone(),
-                                "percent": pct,
-                                "text": format!("{:.1}% of {} at {}", pct, format_bytes(last_total_bytes), speed_str),
-                                "speed": speed_str.clone(),
-                                "speed_formatted": speed_str.clone(),
-                                "speedFormatted": speed_str.clone(),
-                                "speed_bps": speed_bps,
-                                "speedBps": speed_bps,
-                                "eta": eta_str.clone(),
-                                "eta_formatted": eta_str.clone(),
-                                "etaFormatted": eta_str.clone(),
-                                "total_bytes": last_total_bytes,
-                                "totalBytes": last_total_bytes,
-                                "downloaded_bytes": last_downloaded_bytes,
-                                "downloadedBytes": last_downloaded_bytes,
-                                "status": "downloading".to_string(),
-                            }),
-                        );
+                        let zr_payload = serde_json::json!({
+                            "id": tid.clone(),
+                            "taskId": tid.clone(),
+                            "percent": pct,
+                            "text": format!("{:.1}% of {} at {}", pct, format_bytes(last_total_bytes), speed_str),
+                            "speed": speed_str.clone(),
+                            "speed_formatted": speed_str.clone(),
+                            "speedFormatted": speed_str.clone(),
+                            "speed_bps": speed_bps,
+                            "speedBps": speed_bps,
+                            "eta": eta_str.clone(),
+                            "eta_formatted": eta_str.clone(),
+                            "etaFormatted": eta_str.clone(),
+                            "total_bytes": last_total_bytes,
+                            "totalBytes": last_total_bytes,
+                            "downloaded_bytes": last_downloaded_bytes,
+                            "downloadedBytes": last_downloaded_bytes,
+                            "status": "downloading".to_string(),
+                        });
+                        let _ = app.emit("download-progress", zr_payload.clone());
+                        let _ = app.emit("ytdlp-progress", zr_payload);
                         continue;
                     }
                 }
@@ -1868,21 +1884,25 @@ pub async fn start_download(
 
         let hint_name = options.custom_filename.as_deref().unwrap_or("");
         cleanup_temp_and_part_files(&options.save_folder, hint_name);
-        let _ = app.emit(
-            "download-progress",
-            serde_json::json!({
-                "id": tid.clone(),
-                "percent": 100.0,
-                "text": "Download Completed Successfully! ✔".to_string(),
-                "speed": "Finished".to_string(),
-                "speed_formatted": "Finished".to_string(),
-                "eta": "00:00:00".to_string(),
-                "eta_formatted": "00:00:00".to_string(),
-                "total_bytes": final_total,
-                "downloaded_bytes": final_total,
-                "status": "completed".to_string(),
-            }),
-        );
+        let complete_payload = serde_json::json!({
+            "id": tid.clone(),
+            "taskId": tid.clone(),
+            "percent": 100.0,
+            "text": "Download Completed Successfully! ✔".to_string(),
+            "speed": "Finished".to_string(),
+            "speed_formatted": "Finished".to_string(),
+            "speedFormatted": "Finished".to_string(),
+            "eta": "00:00:00".to_string(),
+            "eta_formatted": "00:00:00".to_string(),
+            "etaFormatted": "00:00:00".to_string(),
+            "total_bytes": final_total,
+            "totalBytes": final_total,
+            "downloaded_bytes": final_total,
+            "downloadedBytes": final_total,
+            "status": "completed".to_string(),
+        });
+        let _ = app.emit("download-progress", complete_payload.clone());
+        let _ = app.emit("ytdlp-progress", complete_payload);
         let _ = app.emit(
             "download-complete",
             serde_json::json!({
