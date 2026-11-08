@@ -160,11 +160,43 @@ async fn remove_http_download(
 #[command]
 async fn get_all_downloads(
     state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
 ) -> Result<Vec<DownloadTask>, String> {
-    let tasks = state.tasks.read().await;
-    let mut list: Vec<DownloadTask> = tasks.values().cloned().collect();
+    let mut list: Vec<DownloadTask> = {
+        let tasks = state.tasks.read().await;
+        tasks.values().cloned().collect()
+    };
+    {
+        let media_tasks = download_state.tasks.lock().unwrap();
+        for t in media_tasks.values() {
+            if !list.iter().any(|existing| existing.id == t.id) {
+                list.push(t.clone());
+            }
+        }
+    }
     list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(list)
+}
+
+#[command]
+async fn get_download_task(
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    task_id: String,
+) -> Result<Option<DownloadTask>, String> {
+    {
+        let tasks = state.tasks.read().await;
+        if let Some(t) = tasks.get(&task_id) {
+            return Ok(Some(t.clone()));
+        }
+    }
+    {
+        let media_tasks = download_state.tasks.lock().unwrap();
+        if let Some(t) = media_tasks.get(&task_id) {
+            return Ok(Some(t.clone()));
+        }
+    }
+    Ok(None)
 }
 
 #[command]
@@ -490,9 +522,15 @@ async fn ytdlp_download(
 #[command]
 async fn open_download_window(
     app: AppHandle,
+    download_state: State<'_, DownloadState>,
     task_id: String,
     title: String,
+    initial_task: Option<DownloadTask>,
 ) -> Result<(), String> {
+    if let Some(t) = initial_task {
+        let mut tasks_lock = download_state.tasks.lock().unwrap();
+        tasks_lock.insert(task_id.clone(), t);
+    }
     let clean_label = format!("dl_{}", task_id.replace(|c: char| !c.is_alphanumeric(), "_"));
     if let Some(w) = app.get_webview_window(&clean_label) {
         let _ = w.show();
