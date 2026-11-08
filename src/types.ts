@@ -97,12 +97,16 @@ export const getIsResumable = (t: DownloadTask | any): boolean => {
 
 export const getSpeedFormatted = (t: DownloadTask | any): string => {
   if (!t) return "0 B/s";
-  if (t.speed_formatted && t.speed_formatted !== "0 B/s" && t.speed_formatted !== "--") return t.speed_formatted;
-  if (t.speedFormatted && t.speedFormatted !== "0 B/s" && t.speedFormatted !== "--") return t.speedFormatted;
-  if (t.speed && t.speed !== "0 B/s" && t.speed !== "--") return t.speed;
   const bps = t.speed_bps ?? t.speedBps ?? t.speed_bytes_per_sec ?? 0;
   if (typeof bps === "number" && bps > 0) {
     return `${formatBytes(bps)}/s`;
+  }
+  const sf = t.speed_formatted || t.speedFormatted || t.speed;
+  if (sf && sf !== "0 B/s" && sf !== "--" && sf !== "Connecting...") {
+    return sf;
+  }
+  if (t.status === "downloading" && bps === 0 && sf === "Connecting...") {
+    return "Connecting...";
   }
   return "0 B/s";
 };

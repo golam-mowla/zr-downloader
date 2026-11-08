@@ -48,9 +48,13 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
     }
   }, []);
 
-  // Fetch initial task state from Rust Engine / Media State
+  // Fetch initial task state from Rust Engine / Media State with automatic retries
   useEffect(() => {
     let isMounted = true;
+    let retries = 0;
+    const maxRetries = 15;
+    let timer: any = null;
+
     const fetchTask = async () => {
       try {
         const directMatch = await invoke<DownloadTask | null>("get_download_task", { taskId });
@@ -64,18 +68,23 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
           const matched = all.find((t) => t.id === taskId);
           if (matched) {
             setTask(matched);
+            return;
           }
         }
       } catch (err) {
         console.error("Failed to fetch download task:", err);
       }
+
+      retries++;
+      if (retries < maxRetries && isMounted) {
+        timer = setTimeout(fetchTask, 350);
+      }
     };
 
     fetchTask();
-    const interval = setInterval(fetchTask, 1200);
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      if (timer) clearTimeout(timer);
     };
   }, [taskId]);
 
@@ -92,6 +101,13 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
           const id = updated?.id || updated?.taskId || updated?.task_id;
           if (id === taskId) {
             setTask((prev) => {
+              const spdBps = updated.speed_bps ?? updated.speedBps ?? updated.speed_bytes_per_sec ?? prev?.speed_bps ?? 0;
+              const spdFormatted = updated.speed_formatted ?? updated.speedFormatted ?? (spdBps > 0 ? `${formatBytes(spdBps)}/s` : prev?.speed_formatted || "0 B/s");
+              const etaFormatted = updated.eta_formatted ?? updated.etaFormatted ?? prev?.eta_formatted ?? "--";
+              const pct = updated.percent !== undefined ? updated.percent : (prev?.percent ?? 0);
+              const downBytes = updated.downloaded_bytes ?? updated.downloadedBytes ?? prev?.downloaded_bytes ?? 0;
+              const totBytes = updated.total_bytes ?? updated.totalBytes ?? prev?.total_bytes ?? 0;
+
               if (!prev) {
                 return {
                   id: taskId,
@@ -99,12 +115,12 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
                   filename: updated.filename || "Downloading...",
                   save_path: updated.save_path || updated.savePath || "",
                   savePath: updated.savePath || updated.save_path || "",
-                  total_bytes: updated.total_bytes ?? updated.totalBytes ?? 0,
-                  downloaded_bytes: updated.downloaded_bytes ?? updated.downloadedBytes ?? 0,
-                  percent: updated.percent ?? 0,
-                  speed_bps: updated.speed_bps ?? updated.speedBps ?? 0,
-                  speed_formatted: updated.speed_formatted ?? updated.speedFormatted ?? updated.speed ?? "0 B/s",
-                  eta_formatted: updated.eta_formatted ?? updated.etaFormatted ?? updated.eta ?? "--",
+                  total_bytes: totBytes,
+                  downloaded_bytes: downBytes,
+                  percent: pct,
+                  speed_bps: spdBps,
+                  speed_formatted: spdFormatted,
+                  eta_formatted: etaFormatted,
                   status: updated.status || "downloading",
                   category: updated.category || "video",
                   chunk_count: updated.chunk_count ?? updated.chunkCount ?? 1,
@@ -119,6 +135,13 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
                 ...prev,
                 ...updated,
                 id: taskId,
+                percent: pct,
+                downloaded_bytes: downBytes,
+                total_bytes: totBytes,
+                speed_bps: spdBps,
+                speed_formatted: spdFormatted,
+                eta_formatted: etaFormatted,
+                status: updated.status || prev.status,
                 filename: updated.filename || prev.filename,
                 url: updated.url || prev.url,
                 save_path: updated.save_path || updated.savePath || prev.save_path || prev.savePath,
@@ -266,7 +289,19 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
   };
 
   return (
-    <div className="w-screen h-screen p-4 flex flex-col justify-between bg-zr-surface text-zr-primary select-none overflow-hidden font-sans">
+    <div className="w-screen h-screen p-3 flex flex-col justify-between bg-zr-surface text-zr-primary select-none overflow-hidden font-sans cursor-default">
+      {/* Native Drag Header Bar */}
+      <div data-tauri-drag-region className="flex items-center justify-between pb-2 mb-2 border-b border-zr/40 cursor-move select-none">
+        <div data-tauri-drag-region className="flex items-center gap-2">
+          <Zap className="w-4 h-4 text-emerald-500 animate-pulse" />
+          <span data-tauri-drag-region className="font-semibold text-xs text-zr-primary truncate max-w-[340px]">
+            {clampedPercent.toFixed(1)}% of {task.filename || "Downloading..."}
+          </span>
+        </div>
+        <div data-tauri-drag-region className="text-[11px] text-zr-secondary font-mono">
+          {speedDisplay}
+        </div>
+      </div>
       {/* Top Details Card */}
       <div className="space-y-3 flex-1 overflow-y-auto pr-0.5">
         <div className="p-3.5 rounded-xl bg-slate-100/80 dark:bg-slate-900/80 border border-zr space-y-2 text-[13px]">

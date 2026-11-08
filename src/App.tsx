@@ -323,10 +323,11 @@ export const App: React.FC = () => {
       }
       if (targetUrl && targetUrl.trim()) {
         const now = Date.now();
-        if (targetUrl.trim() === lastHandledUrl && now - lastHandledTime < 800) {
+        const urlKey = `${targetUrl.trim()}_${targetQuality}_${Boolean(raw.isDirectFile)}`;
+        if (urlKey === lastHandledUrl && now - lastHandledTime < 2500) {
           return; // Ignore immediate duplicate event from dual emission
         }
-        lastHandledUrl = targetUrl.trim();
+        lastHandledUrl = urlKey;
         lastHandledTime = now;
 
         let clean = cleanDownloadUrl(targetUrl.trim());
@@ -337,10 +338,7 @@ export const App: React.FC = () => {
 
         // Check for Instagram direct CDN stream where audio is separate:
         if (
-          (clean.includes("cdninstagram.com") ||
-            clean.includes("fbcdn.net") ||
-            (clean.includes("instagram.com") && clean.includes(".mp4"))) &&
-          raw.referrer &&
+          !raw.isDirectFile && (clean.includes("cdninstagram.com") || clean.includes("fbcdn.net") || (clean.includes("instagram.com") && clean.includes(".mp4"))) && raw.referrer &&
           (raw.referrer.includes("/reel/") || raw.referrer.includes("/p/"))
         ) {
           clean = raw.referrer;
@@ -458,7 +456,7 @@ export const App: React.FC = () => {
       }
     };
     const unlistenOpenUrl = listen<any>("open-url", handleOpenUrl);
-    const unlistenZrOpenUrl = listen<any>("zr://open-url", handleOpenUrl);
+    // zr open url listener removed
 
     // Register Android Bridge Dynamic Callbacks
     (window as any).onAndroidSharedUrl = (url: string) => {
@@ -514,7 +512,7 @@ export const App: React.FC = () => {
       unlistenZrComplete.then((f) => f()).catch(() => {});
       unlistenError.then((f) => f()).catch(() => {});
       unlistenOpenUrl.then((f) => f()).catch(() => {});
-      unlistenZrOpenUrl.then((f) => f()).catch(() => {});
+      // unlistenZrOpenUrl removed
       delete (window as any).onAndroidSharedUrl;
       delete (window as any).onAndroidFolderSelected;
       delete (window as any).onAndroidProgress;
@@ -944,6 +942,11 @@ export const App: React.FC = () => {
         const invokeOptions = {
           ...options,
           taskId,
+          task_id: taskId,
+          saveFolder: options.saveFolder || defaultDirRef.current,
+          save_folder: options.saveFolder || defaultDirRef.current,
+          customFilename: finalFilename,
+          custom_filename: finalFilename,
           lowDiskSpace: isLowSpace,
           low_disk_space: isLowSpace,
           usePartFiles: !isLowSpace,

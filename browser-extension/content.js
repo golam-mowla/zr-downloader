@@ -532,20 +532,25 @@
       return;
     }
 
-    const allVids = Array.from(document.querySelectorAll("video"));
-    let targetActiveVid = allVids.find((v) => !v.paused && v.currentTime > 0 && v.readyState >= 2);
-    if (!targetActiveVid) {
-      targetActiveVid = allVids.find((v) => {
-        const r = v.getBoundingClientRect();
-        return r.width > 120 && r.height > 120 && r.top < window.innerHeight && r.bottom > 0;
-      });
-    }
-    if (!targetActiveVid && currentTargetVideo) {
-      targetActiveVid = currentTargetVideo;
-    }
-    if (targetActiveVid) {
-      currentTargetVideo = targetActiveVid;
-      mediaTarget = extractMediaTarget(targetActiveVid);
+    // Preserve specific mediaTarget attached to this button
+    if (!mediaTarget || !mediaTarget.videoEl) {
+      const allVids = Array.from(document.querySelectorAll("video"));
+      let targetActiveVid = allVids.find((v) => !v.paused && v.currentTime > 0 && v.readyState >= 2);
+      if (!targetActiveVid) {
+        targetActiveVid = allVids.find((v) => {
+          const r = v.getBoundingClientRect();
+          return r.width > 120 && r.height > 120 && r.top < window.innerHeight && r.bottom > 0;
+        });
+      }
+      if (!targetActiveVid && currentTargetVideo) {
+        targetActiveVid = currentTargetVideo;
+      }
+      if (targetActiveVid) {
+        currentTargetVideo = targetActiveVid;
+        mediaTarget = extractMediaTarget(targetActiveVid);
+      }
+    } else {
+      currentTargetVideo = mediaTarget.videoEl;
     }
 
     let sniffedStreams = [];

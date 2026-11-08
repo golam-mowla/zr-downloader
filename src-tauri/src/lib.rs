@@ -52,9 +52,37 @@ async fn start_http_download(
         category: "docs".to_string(),
     });
 
-    let resolved_name = filename
+    let mut resolved_name = filename
         .filter(|n| !n.trim().is_empty())
-        .unwrap_or(meta.filename);
+        .unwrap_or(meta.filename.clone());
+    if resolved_name.starts_with("@[") && resolved_name.ends_with(']') {
+        resolved_name = resolved_name[2..resolved_name.len() - 1].trim().to_string();
+    }
+    resolved_name = resolved_name
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '[' || c == ']')
+        .trim()
+        .to_string();
+    if let Some(pos) = resolved_name.rfind(|c| c == '/' || c == '\\') {
+        resolved_name = resolved_name[pos + 1..].to_string();
+    }
+    if !resolved_name.contains('.') {
+        let ext = if let Some(pos) = meta.filename.rfind('.') {
+            &meta.filename[pos..]
+        } else if let Some(ref ct) = meta.content_type {
+            if ct.contains("mp4") {
+                ".mp4"
+            } else if ct.contains("webm") {
+                ".webm"
+            } else if ct.contains("audio/mpeg") || ct.contains("mp3") {
+                ".mp3"
+            } else {
+                ".bin"
+            }
+        } else {
+            ".mp4"
+        };
+        resolved_name = format!("{}{}", resolved_name, ext);
+    }
 
     let resolved_folder = save_folder
         .filter(|f| !f.trim().is_empty())
@@ -390,8 +418,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     }
 
                     if let Some(payload) = payload_opt {
-                        let _ = handle.emit("open-url", payload.clone());
-                        let _ = handle.emit("zr://open-url", payload);
+                        let _ = handle.emit("open-url", payload);
                         if let Some(win) = handle.get_webview_window("main") {
                             let _ = win.show();
                             let _ = win.unminimize();
@@ -522,35 +549,41 @@ async fn ytdlp_download(
 #[command]
 async fn open_download_window(
     app: AppHandle,
+    state: State<'_, EngineState>,
     download_state: State<'_, DownloadState>,
     task_id: String,
     title: String,
     initial_task: Option<serde_json::Value>,
 ) -> Result<(), String> {
-    if let Some(val) = initial_task {
+    if let Some(ref val) = initial_task {
+        let t = DownloadTask {
+            id: task_id.clone(),
+            url: val.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            filename: val.get("filename").and_then(|v| v.as_str()).unwrap_or("Download.mp4").to_string(),
+            save_path: val.get("save_path").or_else(|| val.get("savePath")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+            total_bytes: val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+            downloaded_bytes: val.get("downloaded_bytes").or_else(|| val.get("downloadedBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+            percent: val.get("percent").and_then(|v| v.as_f64()).unwrap_or(1.0),
+            speed_bps: val.get("speed_bps").or_else(|| val.get("speedBps")).and_then(|v| v.as_u64()).unwrap_or(0),
+            speed_formatted: val.get("speed_formatted").or_else(|| val.get("speedFormatted")).and_then(|v| v.as_str()).unwrap_or("Connecting...").to_string(),
+            eta_formatted: val.get("eta_formatted").or_else(|| val.get("etaFormatted")).and_then(|v| v.as_str()).unwrap_or("--").to_string(),
+            status: val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string(),
+            category: val.get("category").and_then(|v| v.as_str()).unwrap_or("video").to_string(),
+            chunk_count: 1,
+            is_resumable: true,
+            low_disk_space: val.get("low_disk_space").or_else(|| val.get("lowDiskSpace")).and_then(|v| v.as_bool()).unwrap_or(false),
+            chunks: Vec::new(),
+            speed_history: Vec::new(),
+            error_message: None,
+            created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+        };
+
         if let Ok(mut tasks_lock) = download_state.tasks.lock() {
-            let task = DownloadTask {
-                id: task_id.clone(),
-                url: val.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                filename: val.get("filename").and_then(|v| v.as_str()).unwrap_or("Download.mp4").to_string(),
-                save_path: val.get("save_path").or_else(|| val.get("savePath")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                total_bytes: val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
-                downloaded_bytes: val.get("downloaded_bytes").or_else(|| val.get("downloadedBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
-                percent: val.get("percent").and_then(|v| v.as_f64()).unwrap_or(1.0),
-                speed_bps: val.get("speed_bps").or_else(|| val.get("speedBps")).and_then(|v| v.as_u64()).unwrap_or(0),
-                speed_formatted: val.get("speed_formatted").or_else(|| val.get("speedFormatted")).and_then(|v| v.as_str()).unwrap_or("Connecting...").to_string(),
-                eta_formatted: val.get("eta_formatted").or_else(|| val.get("etaFormatted")).and_then(|v| v.as_str()).unwrap_or("--").to_string(),
-                status: val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string(),
-                category: val.get("category").and_then(|v| v.as_str()).unwrap_or("video").to_string(),
-                chunk_count: 1,
-                is_resumable: true,
-                low_disk_space: val.get("low_disk_space").or_else(|| val.get("lowDiskSpace")).and_then(|v| v.as_bool()).unwrap_or(false),
-                chunks: Vec::new(),
-                speed_history: Vec::new(),
-                error_message: None,
-                created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            };
-            tasks_lock.insert(task_id.clone(), task);
+            tasks_lock.insert(task_id.clone(), t.clone());
+        }
+        {
+            let mut engine_tasks = state.tasks.write().await;
+            engine_tasks.insert(task_id.clone(), t);
         }
     }
     let clean_label = format!("dl_{}", task_id.replace(|c: char| !c.is_alphanumeric(), "_"));
@@ -567,9 +600,10 @@ async fn open_download_window(
         WebviewUrl::App(url_str.into()),
     )
     .title(&title)
-    .inner_size(540.0, 440.0)
+    .inner_size(520.0, 420.0)
     .min_inner_size(480.0, 360.0)
     .resizable(true)
+    .decorations(true)
     .center()
     .build()
     .map_err(|e| format!("Window spawn error: {}", e))?;
