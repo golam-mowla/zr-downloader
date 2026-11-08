@@ -83,12 +83,36 @@ export const App: React.FC = () => {
     try {
       await invoke("open_download_window", {
         taskId: task.id,
-        initialTask: task,
+        initialTask: {
+          id: task.id,
+          url: task.url || "",
+          filename: task.filename || "download.mp4",
+          save_path: task.save_path || task.savePath || defaultDirRef.current || "",
+          savePath: task.save_path || task.savePath || defaultDirRef.current || "",
+          total_bytes: task.total_bytes || task.totalBytes || 0,
+          totalBytes: task.total_bytes || task.totalBytes || 0,
+          downloaded_bytes: task.downloaded_bytes || task.downloadedBytes || 0,
+          downloadedBytes: task.downloaded_bytes || task.downloadedBytes || 0,
+          percent: task.percent || 1.0,
+          speed_bps: task.speed_bps || task.speedBps || 0,
+          speedBps: task.speed_bps || task.speedBps || 0,
+          speed_formatted: task.speed_formatted || task.speedFormatted || "Connecting...",
+          speedFormatted: task.speed_formatted || task.speedFormatted || "Connecting...",
+          eta_formatted: task.eta_formatted || task.etaFormatted || "--",
+          etaFormatted: task.eta_formatted || task.etaFormatted || "--",
+          status: task.status || "downloading",
+          category: task.category || "video",
+          chunk_count: task.chunk_count || 1,
+          is_resumable: true,
+          low_disk_space: Boolean(task.low_disk_space || task.lowDiskSpace),
+        },
         title: `${task.percent?.toFixed(1) || 0}% of ${task.filename || 'Downloading...'}`,
       });
     } catch (err) {
-      console.warn("Native window could not be opened, using in-app dialog:", err);
-      setActivePopupTaskIds((prev) => (prev.includes(task.id) ? prev : [...prev, task.id]));
+      console.warn("Native window open error:", err);
+      if ((window as any).GMAndroidBridge) {
+        setActivePopupTaskIds((prev) => (prev.includes(task.id) ? prev : [...prev, task.id]));
+      }
     }
   };
 
@@ -1297,8 +1321,8 @@ export const App: React.FC = () => {
         )}
       </div>
 
-      {/* IDM-Style Independent Download Status Dialogs */}
-      {activePopupTaskIds.map((taskId, index) => {
+      {/* IDM-Style Independent Download Status Dialogs (Only on Android mobile fallback) */}
+      {(window as any).GMAndroidBridge && activePopupTaskIds.map((taskId, index) => {
         const task = tasks.find((t) => t.id === taskId);
         if (!task) return null;
         return (
