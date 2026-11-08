@@ -83,6 +83,7 @@ export const App: React.FC = () => {
     try {
       await invoke("open_download_window", {
         taskId: task.id,
+        initialTask: task,
         title: `${task.percent?.toFixed(1) || 0}% of ${task.filename || 'Downloading...'}`,
       });
     } catch (err) {

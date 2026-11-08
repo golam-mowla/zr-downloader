@@ -19,6 +19,7 @@ pub struct DownloadState {
     pub active_pids: Arc<Mutex<HashMap<String, u32>>>,
     pub cancelled_tasks: Arc<Mutex<HashMap<String, bool>>>,
     pub task_options: Arc<Mutex<HashMap<String, DownloadOptions>>>,
+    pub tasks: Arc<Mutex<HashMap<String, DownloadTask>>>,
 }
 
 pub struct AppUrlState {
@@ -976,7 +977,31 @@ pub async fn start_download(
     cancelled_tasks.lock().unwrap().insert(task_id.clone(), false);
     state.task_options.lock().unwrap().insert(task_id.clone(), options.clone());
 
+    let initial_task = DownloadTask {
+        id: task_id.clone(),
+        url: options.url.clone(),
+        filename: options.custom_filename.clone().unwrap_or_else(|| "Online Media.mp4".to_string()),
+        save_path: options.save_folder.clone(),
+        total_bytes: 0,
+        downloaded_bytes: 0,
+        percent: 1.0,
+        speed_bps: 0,
+        speed_formatted: "Connecting...".to_string(),
+        eta_formatted: "--".to_string(),
+        status: "downloading".to_string(),
+        category: if options.download_mode == "audio" { "audio".to_string() } else { "video".to_string() },
+        chunk_count: 1,
+        is_resumable: true,
+        low_disk_space: options.low_disk_space.unwrap_or(false),
+        chunks: Vec::new(),
+        speed_history: Vec::new(),
+        error_message: None,
+        created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    };
+    state.tasks.lock().unwrap().insert(task_id.clone(), initial_task);
+
     let tid = task_id.clone();
+    let media_tasks = state.tasks.clone();
     tauri::async_runtime::spawn_blocking(move || {
         if let Err(e) = fs::create_dir_all(&options.save_folder) {
             let err_msg = format!("Failed to create output folder: {}", e);
