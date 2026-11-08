@@ -9,8 +9,8 @@ use tokio::sync::RwLock;
 use librqbit::api::{Api, TorrentDetailsResponse, TorrentIdOrHash};
 use librqbit::http_api_types::{PeerStatsFilter, PeerStatsSnapshot};
 use librqbit::{
-    AddTorrent, AddTorrentOptions, ListenerMode, ListenerOptions, Session, SessionOptions,
-    TorrentStatsState,
+    AddTorrent, AddTorrentOptions, ConnectionOptions, DhtSessionConfig, ListenerMode,
+    ListenerOptions, PeerConnectionOptions, Session, SessionOptions, TorrentStatsState,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -42,6 +42,28 @@ impl Default for TorrentState {
     }
 }
 
+pub const TOP_TRACKER_URLS: &[&str] = &[
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://explodie.org:6969/announce",
+    "udp://tracker.openbittorrent.com:6969/announce",
+    "udp://tracker.cyberia.is:6969/announce",
+    "udp://p4p.arenabg.com:1337/announce",
+    "http://tracker.openbittorrent.com:80/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://tracker.moeking.me:6969/announce",
+    "udp://tracker.coppersurfer.tk:6969/announce",
+    "udp://9.rarbg.to:2920/announce",
+    "udp://tracker.pirateparty.gr:6969/announce",
+    "udp://tracker.leechers-paradise.org:6969/announce",
+    "udp://ipv4.tracker.harry.lu:80/announce",
+    "udp://valakas.rollo.cc:6969/announce",
+    "udp://tracker.zerobytes.xyz:1337/announce",
+    "udp://tracker.fnix.net:6969/announce",
+];
+
 pub async fn get_or_init_torrent_api(
     state: &TorrentState,
     default_dir: Option<String>,
@@ -63,34 +85,51 @@ pub async fn get_or_init_torrent_api(
 
     let listen_opts = ListenerOptions {
         mode: ListenerMode::TcpAndUtp,
-        listen_addr: (std::net::Ipv4Addr::UNSPECIFIED, 0).into(),
+        listen_addr: (std::net::Ipv4Addr::UNSPECIFIED, 6881).into(),
         enable_upnp_port_forwarding: true,
         ..Default::default()
     };
 
     let mut default_trackers = std::collections::HashSet::new();
-    let tracker_urls = [
-        "udp://tracker.opentrackr.org:1337/announce",
-        "udp://open.stealth.si:80/announce",
-        "udp://tracker.torrent.eu.org:451/announce",
-        "udp://explodie.org:6969/announce",
-        "udp://tracker.openbittorrent.com:6969/announce",
-        "udp://tracker.cyberia.is:6969/announce",
-        "udp://p4p.arenabg.com:1337/announce",
-        "http://tracker.openbittorrent.com:80/announce",
-        "udp://open.demonii.com:1337/announce",
-        "udp://tracker.dler.org:6969/announce",
-    ];
-    for t in tracker_urls {
+    for &t in TOP_TRACKER_URLS {
         if let Ok(u) = reqwest::Url::parse(t) {
             default_trackers.insert(u);
         }
     }
 
+    let dht_config = DhtSessionConfig {
+        bootstrap_addrs: Some(vec![
+            "router.bittorrent.com:6881".to_string(),
+            "router.utorrent.com:6881".to_string(),
+            "dht.transmissionbt.com:6881".to_string(),
+            "dht.libtorrent.org:25401".to_string(),
+            "dht.aelitis.com:6881".to_string(),
+        ]),
+        port: Some(6881),
+        persistence: None,
+    };
+
+    let peer_opts = PeerConnectionOptions {
+        connect_timeout: Some(std::time::Duration::from_secs(4)),
+        read_write_timeout: Some(std::time::Duration::from_secs(10)),
+        keep_alive_interval: Some(std::time::Duration::from_secs(30)),
+        max_request_window: Some(256),
+    };
+
+    let conn_opts = ConnectionOptions {
+        enable_tcp: true,
+        proxy_url: None,
+        peer_opts: Some(peer_opts.clone()),
+    };
+
     let session_opts = SessionOptions {
         fastresume: true,
         listen: Some(listen_opts),
+        connect: Some(conn_opts),
+        dht: Some(dht_config),
         trackers: default_trackers,
+        peer_limit: Some(300),
+        client_name_and_version: Some("ZR Downloader 1.2.9".to_string()),
         ..Default::default()
     };
 
@@ -151,11 +190,20 @@ pub async fn add_torrent(
         AddTorrent::from_bytes(bytes)
     };
 
+    let all_trackers: Vec<String> = TOP_TRACKER_URLS.iter().map(|&s| s.to_string()).collect();
     let add_opts = AddTorrentOptions {
         paused: request.paused.unwrap_or(false),
         output_folder: request.save_folder.clone(),
         only_files: request.selected_files.clone(),
         overwrite: true,
+        peer_limit: Some(250),
+        trackers: Some(all_trackers),
+        peer_opts: Some(PeerConnectionOptions {
+            connect_timeout: Some(std::time::Duration::from_secs(4)),
+            read_write_timeout: Some(std::time::Duration::from_secs(10)),
+            keep_alive_interval: Some(std::time::Duration::from_secs(30)),
+            max_request_window: Some(256),
+        }),
         ..Default::default()
     };
 

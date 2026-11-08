@@ -587,30 +587,29 @@
         ytData = parseYouTubeFromDom() || ytData;
       }
 
+      const allStandard = [
+        "2160p (4K)",
+        "1440p (2K)",
+        "1080p HD",
+        "720p HD",
+        "480p",
+        "360p",
+        "240p",
+        "144p",
+      ];
       let availableQualities = [];
       if (ytData && ytData.qualities && ytData.qualities.length > 0) {
         availableQualities = sortQualities(ytData.qualities);
+        // Ensure standard HD formats are always available for yt-dlp to extract
+        ["1080p HD", "720p HD", "480p", "360p"].forEach((std) => {
+          const num = std.split("p")[0];
+          if (!availableQualities.some((q) => q.includes(num))) {
+            availableQualities.push(std);
+          }
+        });
+        availableQualities = sortQualities(availableQualities);
       } else {
-        const vH = vid && vid.videoHeight ? vid.videoHeight : 0;
-        const allStandard = [
-          "2160p (4K)",
-          "1440p (2K)",
-          "1080p HD",
-          "720p HD",
-          "480p",
-          "360p",
-          "240p",
-          "144p",
-        ];
-        if (vH > 0) {
-          availableQualities = allStandard.filter((q) => {
-            const m = q.match(/(\d+)p/);
-            return m && parseInt(m[1], 10) <= vH;
-          });
-        }
-        if (availableQualities.length === 0) {
-          availableQualities = ["360p", "240p", "144p"];
-        }
+        availableQualities = allStandard;
       }
 
       // Add ONLY qualities that actually exist for this video
@@ -688,44 +687,18 @@
       const vH = vid && vid.videoHeight ? vid.videoHeight : 0;
       const maxDim = Math.max(vW, vH);
 
-      let detectedQuality = "1080p HD";
-      if (maxDim >= 1080) detectedQuality = "1080p HD";
-      else if (maxDim >= 720) detectedQuality = "720p HD";
-      else if (maxDim >= 480) detectedQuality = "480p";
-      else if (maxDim > 0) detectedQuality = `${Math.min(vW, vH)}p`;
-
-      options.push({
-        label: `${shortTitle}, MP4 file, quality ${detectedQuality}`,
-        fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality ${detectedQuality} (Original HD Quality, with Sound)`,
-        shortTitle: shortTitle,
-        formatDisplay: `${detectedQuality} • MP4`,
-        quality: detectedQuality,
-        url: targetInstagramUrl,
-        container: "MP4",
+      const igQualities = ["1080p HD", "720p HD", "480p"];
+      igQualities.forEach((qTag) => {
+        options.push({
+          label: `${shortTitle}, MP4 file, quality ${qTag}`,
+          fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality ${qTag} (with Sound)`,
+          shortTitle: shortTitle,
+          formatDisplay: `${qTag} • MP4`,
+          quality: qTag,
+          url: targetInstagramUrl,
+          container: "MP4",
+        });
       });
-
-      if (detectedQuality === "1080p HD") {
-        options.push({
-          label: `${shortTitle}, MP4 file, quality 720p HD`,
-          fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality 720p HD (with Sound)`,
-          shortTitle: shortTitle,
-          formatDisplay: "720p HD • MP4",
-          quality: "720p HD",
-          url: targetInstagramUrl,
-          container: "MP4",
-        });
-      }
-      if (detectedQuality === "1080p HD" || detectedQuality === "720p HD") {
-        options.push({
-          label: `${shortTitle}, MP4 file, quality 480p`,
-          fullLabel: `${cleanTitle}, MP4 file, ${durStr}quality 480p (with Sound)`,
-          shortTitle: shortTitle,
-          formatDisplay: "480p • MP4",
-          quality: "480p",
-          url: targetInstagramUrl,
-          container: "MP4",
-        });
-      }
 
       options.push({
         label: `${shortTitle}, MP3 Audio, Highest Quality`,
@@ -951,13 +924,14 @@
       });
 
       const titleSpan = document.createElement("span");
-      titleSpan.innerText = `${idx + 1}. ${opt.shortTitle || getShortTitle(mediaTarget.title, 26)}`;
+      titleSpan.innerText = `${idx + 1}. ${opt.shortTitle || getShortTitle(opt.filename || mediaTarget.title, 24)}`;
       Object.assign(titleSpan.style, {
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
         flex: "1",
         minWidth: "0",
+        maxWidth: "250px",
       });
 
       const formatSpan = document.createElement("span");
