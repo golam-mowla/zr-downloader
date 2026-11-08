@@ -21,7 +21,7 @@ pub struct DownloadState {
 }
 
 pub struct AppUrlState {
-    pub pending_url: Arc<Mutex<Option<String>>>,
+    pub pending_url: Arc<Mutex<Option<serde_json::Value>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

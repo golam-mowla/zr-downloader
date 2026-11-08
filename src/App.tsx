@@ -77,13 +77,14 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     return (localStorage.getItem("zr-theme") as "dark" | "light") || "dark";
   });
-  const [activePopupTask, setActivePopupTask] = useState<DownloadTask | null>(null);
+  const [activePopupTaskIds, setActivePopupTaskIds] = useState<string[]>([]);
 
   const defaultDirRef = useRef(defaultDir);
   defaultDirRef.current = defaultDir;
   const handleAddMediaDownloadRef = useRef<(options: any) => Promise<void>>(() => Promise.resolve());
   const handleAddDirectDownloadRef = useRef<(url: string, savePath: string, filename: string, connections: number, lowDiskSpace?: boolean) => Promise<void>>(() => Promise.resolve());
   const handleAddTorrentDownloadRef = useRef<(urlOrPath: string, savePath: string, sequential: boolean) => Promise<void>>(() => Promise.resolve());
+  const handleOpenUrlRef = useRef<(payload: any) => void>(() => {});
 
   useEffect(() => {
     if (theme === "dark") {
@@ -137,10 +138,9 @@ export const App: React.FC = () => {
             setIsAddModalOpen(true);
           }
         }
-        const pending = await invoke<string | null>("get_pending_url");
-        if (pending && typeof pending === "string" && pending.trim()) {
-          setModalInitialUrl(pending.trim());
-          setIsAddModalOpen(true);
+        const pending = await invoke<any>("get_pending_url");
+        if (pending) {
+          handleOpenUrlRef.current(pending);
         }
       } catch {}
     };
@@ -778,10 +778,7 @@ export const App: React.FC = () => {
     }
   };
 
-  const currentPopupTask = useMemo(() => {
-    if (!activePopupTask) return null;
-    return tasks.find((t) => t.id === activePopupTask.id) || activePopupTask;
-  }, [tasks, activePopupTask]);
+
 
   const handleAddDirectDownload = async (
     url: string,
@@ -822,7 +819,7 @@ export const App: React.FC = () => {
           createdAt: new Date().toLocaleTimeString(),
         };
         setTasks((prev) => [newDirectTask, ...prev.filter((t) => t.id !== newDirectTask.id)]);
-        setActivePopupTask(newDirectTask);
+        setActivePopupTaskIds((prev) => prev.includes(newDirectTask.id) ? prev : [...prev, newDirectTask.id]);
         androidBridge.startDownload(taskId, url, "best", "", false, "", "", false, "", savePath || "", finalFilename);
         return;
       }
@@ -837,7 +834,7 @@ export const App: React.FC = () => {
       setTasks(updated);
       if (taskId) {
         const created = updated.find((t) => t.id === taskId);
-        if (created) setActivePopupTask(created);
+        if (created) setActivePopupTaskIds((prev) => prev.includes(created.id) ? prev : [...prev, created.id]);
       }
     } catch (e) {
       console.error("Direct download failed to start:", e);
@@ -881,7 +878,7 @@ export const App: React.FC = () => {
       };
 
       setTasks((prev) => [newMediaTask, ...prev.filter((t) => t.id !== newMediaTask.id)]);
-      setActivePopupTask(newMediaTask);
+      setActivePopupTaskIds((prev) => prev.includes(newMediaTask.id) ? prev : [...prev, newMediaTask.id]);
 
       if (androidBridge?.startDownload) {
         androidBridge.startDownload(
@@ -1229,7 +1226,7 @@ export const App: React.FC = () => {
                   if (task.category === "torrents") {
                     setSelectedTorrentId(id);
                   } else {
-                    setActivePopupTask(task);
+                    setActivePopupTaskIds((prev) => prev.includes(task.id) ? prev : [...prev, task.id]);
                   }
                 }
               }}
@@ -1272,20 +1269,30 @@ export const App: React.FC = () => {
         )}
       </div>
 
-      {/* Download Status Dialog / Popup Window */}
-      {currentPopupTask && (
-        <DownloadStatusDialog
-          task={currentPopupTask}
-          isOpen={Boolean(currentPopupTask)}
-          onClose={() => setActivePopupTask(null)}
-          onPause={handlePause}
-          onResume={handleResume}
-          onCancel={handleCancel}
-          onOpenFile={handleOpenFile}
-          onOpenFolder={handleOpenFolder}
-          theme={theme}
-        />
-      )}
+      {/* IDM-Style Independent Download Status Dialogs */}
+      {activePopupTaskIds.map((taskId, index) => {
+        const task = tasks.find((t) => t.id === taskId);
+        if (!task) return null;
+        return (
+          <DownloadStatusDialog
+            key={task.id}
+            task={task}
+            isOpen={true}
+            dialogIndex={index}
+            totalDialogs={activePopupTaskIds.length}
+            onClose={() => setActivePopupTaskIds((prev) => prev.filter((id) => id !== task.id))}
+            onBringToFront={() => {
+              setActivePopupTaskIds((prev) => [task.id, ...prev.filter((id) => id !== task.id)]);
+            }}
+            onPause={handlePause}
+            onResume={handleResume}
+            onCancel={handleCancel}
+            onOpenFile={handleOpenFile}
+            onOpenFolder={handleOpenFolder}
+            theme={theme}
+          />
+        );
+      })}
 
       {/* Add Download Modal */}
       <AddDownloadModal

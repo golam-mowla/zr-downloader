@@ -26,6 +26,9 @@ export interface DownloadStatusDialogProps {
   onCancel: (id: string) => void;
   onOpenFile: (path: string) => void;
   onOpenFolder: (path: string) => void;
+  dialogIndex?: number;
+  totalDialogs?: number;
+  onBringToFront?: () => void;
   theme?: "dark" | "light";
 }
 
@@ -38,6 +41,9 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
   onCancel,
   onOpenFile,
   onOpenFolder,
+  dialogIndex = 0,
+  totalDialogs = 1,
+  onBringToFront,
   theme = "dark",
 }) => {
   if (!isOpen) return null;
@@ -71,13 +77,25 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
     }
   };
 
+  const cascadeOffset = (dialogIndex % 8) * 26;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 select-none">
-      <div className="w-full max-w-lg rounded-xl shadow-2xl border border-zr bg-zr-surface overflow-hidden transition-colors">
+    <div
+      className="fixed inset-0 pointer-events-none flex items-center justify-center p-4 select-none"
+      style={{ zIndex: 60 + dialogIndex }}
+    >
+      <div
+        onClick={onBringToFront}
+        style={{
+          transform: `translate(${cascadeOffset}px, ${cascadeOffset}px)`,
+        }}
+        className="pointer-events-auto w-full max-w-lg rounded-xl shadow-2xl border border-zr bg-zr-surface overflow-hidden transition-colors">
         {/* Titlebar */}
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-zr bg-zr-tableHead select-none">
           <div className="flex items-center space-x-2 min-w-0">
-            <span className="text-base">🐐</span>
+            <div className="w-5 h-5 rounded-md bg-emerald-500/10 flex items-center justify-center shrink-0 border border-emerald-500/20">
+              <Zap className="w-3.5 h-3.5 text-emerald-500 fill-emerald-500/20" />
+            </div>
             <span className="font-semibold text-[13px] text-zr-primary truncate">
               {isCompleted
                 ? `Download Complete - ${task.filename}`

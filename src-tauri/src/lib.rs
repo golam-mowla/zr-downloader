@@ -242,6 +242,70 @@ pub fn decode_percent_encoded(input: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
+    let mut target_url = None;
+    let mut target_filename = None;
+    let mut target_quality = None;
+    let mut target_referrer = None;
+    let mut target_container = None;
+    let mut is_torrent = false;
+    let mut auto_start = false;
+    let mut is_direct_file = false;
+    let mut low_disk_space = false;
+
+    for part in query_str.split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        let lower = part.to_ascii_lowercase();
+        if lower.starts_with("url=") {
+            target_url = Some(decode_percent_encoded(&part[4..]));
+        } else if lower.starts_with("filename=") {
+            target_filename = Some(decode_percent_encoded(&part[9..]));
+        } else if lower.starts_with("quality=") {
+            target_quality = Some(decode_percent_encoded(&part[8..]));
+        } else if lower.starts_with("autostart=") {
+            let val = &part[10..];
+            auto_start = val == "true" || val == "1";
+        } else if lower.starts_with("istorrent=") {
+            let val = &part[10..];
+            is_torrent = val == "true" || val == "1";
+        } else if lower.starts_with("referrer=") {
+            target_referrer = Some(decode_percent_encoded(&part[9..]));
+        } else if lower.starts_with("container=") {
+            target_container = Some(decode_percent_encoded(&part[10..]));
+        } else if lower.starts_with("isdirectfile=") {
+            let val = &part[13..];
+            is_direct_file = val == "true" || val == "1";
+        } else if lower.starts_with("lowdiskspace=") {
+            let val = &part[13..];
+            low_disk_space = val == "true" || val == "1";
+        }
+    }
+
+    if let Some(url) = target_url {
+        let clean = url.trim().to_string();
+        if !clean.is_empty() {
+            let is_detected_torrent = is_torrent
+                || clean.starts_with("magnet:")
+                || clean.ends_with(".torrent")
+                || clean.contains(".torrent");
+            return Some(serde_json::json!({
+                "url": clean,
+                "filename": target_filename,
+                "quality": target_quality,
+                "autoStart": auto_start,
+                "isTorrent": is_detected_torrent,
+                "referrer": target_referrer,
+                "container": target_container,
+                "isDirectFile": is_direct_file,
+                "lowDiskSpace": low_disk_space
+            }));
+        }
+    }
+    None
+}
+
 async fn start_local_bridge(app_handle: AppHandle) {
     let mut listener = None;
     for _ in 0..15 {
@@ -285,70 +349,23 @@ async fn start_local_bridge(app_handle: AppHandle) {
                         return;
                     }
 
-                    let mut target_url = None;
-                    let mut target_filename = None;
-                    let mut target_quality = None;
-                    let mut target_referrer = None;
-                    let mut target_container = None;
-                    let mut is_torrent = false;
-                    let mut auto_start = false;
-                    let mut is_direct_file = false;
-                    let mut low_disk_space = false;
+                    let mut payload_opt = None;
                     if let Some(idx) = req_str.find("/open?") {
                         let query_str = &req_str[idx + 6..];
                         let end_idx = query_str.find(|c: char| c == ' ' || c == '\r' || c == '\n').unwrap_or(query_str.len());
                         let clean_query = &query_str[..end_idx];
-
-                        for part in clean_query.split('&') {
-                            if part.starts_with("url=") {
-                                target_url = Some(decode_percent_encoded(&part[4..]));
-                            } else if part.starts_with("filename=") {
-                                target_filename = Some(decode_percent_encoded(&part[9..]));
-                            } else if part.starts_with("quality=") {
-                                target_quality = Some(decode_percent_encoded(&part[8..]));
-                            } else if part.starts_with("autostart=") {
-                                auto_start = &part[10..] == "true" || &part[10..] == "1";
-                            } else if part.starts_with("isTorrent=") {
-                                is_torrent = &part[10..] == "true" || &part[10..] == "1";
-                            } else if part.starts_with("referrer=") {
-                                target_referrer = Some(decode_percent_encoded(&part[9..]));
-                            } else if part.starts_with("container=") {
-                                target_container = Some(decode_percent_encoded(&part[10..]));
-                            } else if part.starts_with("isDirectFile=") {
-                                is_direct_file = &part[13..] == "true" || &part[13..] == "1";
-                            } else if part.starts_with("lowDiskSpace=") {
-                                low_disk_space = &part[13..] == "true" || &part[13..] == "1";
-                            }
-                        }
+                        payload_opt = parse_open_query(clean_query);
                     }
 
-                    if let Some(url) = target_url {
-                        let clean = url.trim().to_string();
-                        if !clean.is_empty() {
-                            let is_detected_torrent = is_torrent
-                                || clean.starts_with("magnet:")
-                                || clean.ends_with(".torrent")
-                                || clean.contains(".torrent");
-                            let payload = serde_json::json!({
-                                "url": clean,
-                                "filename": target_filename,
-                                "quality": target_quality,
-                                "autoStart": auto_start,
-                                "isTorrent": is_detected_torrent,
-                                "referrer": target_referrer,
-                                "container": target_container,
-                                "isDirectFile": is_direct_file,
-                                "lowDiskSpace": low_disk_space
-                            });
-                            let _ = handle.emit("open-url", payload.clone());
-                            let _ = handle.emit("zr://open-url", payload);
-                            if let Some(win) = handle.get_webview_window("main") {
-                                let _ = win.show();
-                                let _ = win.unminimize();
-                                let _ = win.set_always_on_top(true);
-                                let _ = win.set_focus();
-                                let _ = win.set_always_on_top(false);
-                            }
+                    if let Some(payload) = payload_opt {
+                        let _ = handle.emit("open-url", payload.clone());
+                        let _ = handle.emit("zr://open-url", payload);
+                        if let Some(win) = handle.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.unminimize();
+                            let _ = win.set_always_on_top(true);
+                            let _ = win.set_focus();
+                            let _ = win.set_always_on_top(false);
                         }
                         let body = "{\"status\":\"ok\",\"received\":true,\"app\":\"ZR Downloader\"}";
                         let resp = format!(
@@ -451,7 +468,7 @@ fn register_windows_protocols() {
 }
 
 #[command]
-fn get_pending_url(state: State<'_, AppUrlState>) -> Option<String> {
+fn get_pending_url(state: State<'_, AppUrlState>) -> Option<serde_json::Value> {
     let mut lock = state.pending_url.lock().ok()?;
     lock.take()
 }
