@@ -494,7 +494,7 @@ async fn ytdlp_download(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut pending_arg_req: Option<String> = None;
-    let mut pending_arg_url: Option<String> = None;
+    let mut pending_arg_payload: Option<serde_json::Value> = None;
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
         for arg in &args[1..] {
@@ -518,22 +518,23 @@ pub fn run() {
                 if let Some(pos) = without_proto.find("open?") {
                     pending_arg_req = Some(without_proto[pos..].to_string());
                     let query = &without_proto[pos + 5..];
-                    for part in query.split('&') {
-                        if part.starts_with("url=") {
-                            pending_arg_url = Some(decode_percent_encoded(&part[4..]));
-                        }
-                    }
+                    pending_arg_payload = parse_open_query(query);
                     break;
                 } else if let Some(pos) = without_proto.find("?url=") {
-                    pending_arg_req = Some(format!("open{}", &without_proto[pos..]));
-                    pending_arg_url = Some(decode_percent_encoded(&without_proto[pos + 5..]));
+                    let query = &without_proto[pos + 1..];
+                    pending_arg_req = Some(format!("open?{}", query));
+                    pending_arg_payload = parse_open_query(query);
                     break;
                 }
             } else if trimmed.starts_with("magnet:") || trimmed.ends_with(".torrent") || trimmed.contains(".torrent") || trimmed.starts_with("http://") || trimmed.starts_with("https://") {
                 let is_torrent = trimmed.starts_with("magnet:") || trimmed.ends_with(".torrent") || trimmed.contains(".torrent");
                 let torrent_param = if is_torrent { "&isTorrent=true" } else { "" };
                 pending_arg_req = Some(format!("open?url={}{}", url_encode(trimmed), torrent_param));
-                pending_arg_url = Some(trimmed.to_string());
+                pending_arg_payload = Some(serde_json::json!({
+                    "url": trimmed,
+                    "isTorrent": is_torrent,
+                    "autoStart": false
+                }));
                 break;
             }
         }
@@ -563,7 +564,7 @@ pub fn run() {
             task_options: Arc::new(Mutex::new(HashMap::new())),
         })
         .manage(AppUrlState {
-            pending_url: Arc::new(Mutex::new(pending_arg_url)),
+            pending_url: Arc::new(Mutex::new(pending_arg_payload)),
         })
         .manage(EngineState::new())
         .manage(torrent::TorrentState::default())
