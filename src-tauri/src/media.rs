@@ -933,6 +933,28 @@ pub async fn fetch_media_info(
 // Command 2: Start Download (Video, Audio, Subtitles Only, Clipping, Parabolic)
 // ---------------------------------------------------------------------------
 
+pub fn cleanup_temp_and_part_files(save_folder: &str, title_hint: &str) {
+    if let Ok(entries) = fs::read_dir(save_folder) {
+        let clean_hint = title_hint.replace(|c: char| !c.is_alphanumeric(), "").to_lowercase();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let name_lower = name.to_lowercase();
+                if name_lower.contains(".temp.") || name_lower.ends_with(".part") || name_lower.ends_with(".ytdl") {
+                    let clean_name = name_lower.replace(|c: char| !c.is_alphanumeric(), "");
+                    if clean_hint.is_empty()
+                        || clean_name.contains(&clean_hint)
+                        || clean_hint.contains(&clean_name)
+                        || clean_hint.len() < 3
+                    {
+                        let _ = fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[command]
 pub async fn start_download(
     app: AppHandle,
