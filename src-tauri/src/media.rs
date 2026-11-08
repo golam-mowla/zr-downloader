@@ -2160,6 +2160,7 @@ pub async fn install_app_update(_app: AppHandle, download_url: String) -> Result
     .map_err(|e| format!("Task join error: {}", e))?
 }
 
+#[allow(dead_code)]
 fn decode_percent_encoded(input: &str) -> String {
     let mut bytes = Vec::new();
     let mut chars = input.bytes();
