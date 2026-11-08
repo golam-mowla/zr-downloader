@@ -1546,6 +1546,17 @@ pub async fn start_download(
                             parts[5].to_string()
                         };
 
+                        if let Ok(mut tasks_lock) = media_tasks.lock() {
+                            if let Some(t) = tasks_lock.get_mut(&tid) {
+                                t.percent = pct;
+                                t.downloaded_bytes = last_downloaded_bytes;
+                                t.total_bytes = last_total_bytes;
+                                t.speed_formatted = speed_str.clone();
+                                t.eta_formatted = eta_str.clone();
+                                t.status = "downloading".to_string();
+                            }
+                        }
+
                         let _ = app.emit(
                             "download-progress",
                             serde_json::json!({
@@ -1757,6 +1768,17 @@ pub async fn start_download(
             last_downloaded_bytes
         };
 
+        if let Ok(mut tasks_lock) = media_tasks.lock() {
+            if let Some(t) = tasks_lock.get_mut(&tid) {
+                t.percent = 100.0;
+                t.downloaded_bytes = final_total;
+                t.total_bytes = final_total;
+                t.status = "completed".to_string();
+                t.speed_formatted = "Finished".to_string();
+                t.eta_formatted = "00:00:00".to_string();
+            }
+        }
+
         let hint_name = options.custom_filename.as_deref().unwrap_or("");
         cleanup_temp_and_part_files(&options.save_folder, hint_name);
         let _ = app.emit(
@@ -1765,10 +1787,10 @@ pub async fn start_download(
                 "id": tid.clone(),
                 "percent": 100.0,
                 "text": "Download Completed Successfully! ✔".to_string(),
-                "speed": "Done".to_string(),
-                "speed_formatted": "Done".to_string(),
-                "eta": "00:00".to_string(),
-                "eta_formatted": "0s".to_string(),
+                "speed": "Finished".to_string(),
+                "speed_formatted": "Finished".to_string(),
+                "eta": "00:00:00".to_string(),
+                "eta_formatted": "00:00:00".to_string(),
                 "total_bytes": final_total,
                 "downloaded_bytes": final_total,
                 "status": "completed".to_string(),
