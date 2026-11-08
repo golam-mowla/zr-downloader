@@ -987,7 +987,7 @@ pub async fn start_download(
 ) -> Result<String, String> {
     let resolved_folder = if options.save_folder.trim().is_empty()
         || options.save_folder.trim() == "Downloads"
-        || !Path::new(&options.save_folder).is_absolute()
+        || !std::path::Path::new(&options.save_folder).is_absolute()
     {
         dirs_or_default_downloads()
     } else {
