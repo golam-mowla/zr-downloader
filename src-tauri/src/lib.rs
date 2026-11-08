@@ -488,7 +488,7 @@ async fn ytdlp_download(
 }
 
 #[command]
-pub async fn open_download_window(
+async fn open_download_window(
     app: AppHandle,
     task_id: String,
     title: String,
