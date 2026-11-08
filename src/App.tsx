@@ -808,7 +808,10 @@ export const App: React.FC = () => {
       const androidBridge = (window as any).GMAndroidBridge;
       if (androidBridge?.startDownload) {
         const taskId = `direct-${Date.now()}`;
-        const finalFilename = filename?.trim() || url.split("/").pop()?.split("?")[0] || "download";
+        let finalFilename = filename?.trim() || url.split("/").pop()?.split("?")[0] || "download";
+        if (!/\.[a-zA-Z0-9]{2,5}$/.test(finalFilename)) {
+          finalFilename = `${finalFilename}.mp4`;
+        }
         const newDirectTask: DownloadTask = {
           id: taskId,
           url,
