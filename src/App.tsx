@@ -408,7 +408,8 @@ export const App: React.FC = () => {
               preferredAudioCodec: "default",
               preferredSubtitleFormat: "default",
               preferredFps: "default",
-              usePartFiles: true,
+              usePartFiles: !Boolean(raw.lowDiskSpace || raw.low_disk_space || localStorage.getItem("zr_low_disk_space") === "true"),
+              lowDiskSpace: Boolean(raw.lowDiskSpace || raw.low_disk_space || localStorage.getItem("zr_low_disk_space") === "true"),
               concurrentConnections: 8,
             });
           }
@@ -895,7 +896,18 @@ export const App: React.FC = () => {
           finalFilename
         );
       } else {
-        const invokeOptions = { ...options, taskId };
+        const isLowSpace = Boolean(
+          options.lowDiskSpace ||
+          options.low_disk_space ||
+          localStorage.getItem("zr_low_disk_space") === "true"
+        );
+        const invokeOptions = {
+          ...options,
+          taskId,
+          lowDiskSpace: isLowSpace,
+          low_disk_space: isLowSpace,
+          usePartFiles: !isLowSpace,
+        };
         try {
           await invoke<string>("ytdlp_download", { options: invokeOptions });
         } catch {
