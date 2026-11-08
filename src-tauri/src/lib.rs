@@ -638,6 +638,7 @@ pub fn run() {
             active_pids: Arc::new(Mutex::new(HashMap::new())),
             cancelled_tasks: Arc::new(Mutex::new(HashMap::new())),
             task_options: Arc::new(Mutex::new(HashMap::new())),
+            tasks: Arc::new(Mutex::new(HashMap::new())),
         })
         .manage(AppUrlState {
             pending_url: Arc::new(Mutex::new(pending_arg_payload)),
