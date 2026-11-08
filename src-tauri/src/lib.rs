@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{command, AppHandle, Emitter, Manager, State};
+use tauri::{command, AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -487,6 +487,44 @@ async fn ytdlp_download(
     media::start_download(app, state, options).await
 }
 
+#[command]
+pub async fn open_download_window(
+    app: AppHandle,
+    task_id: String,
+    title: String,
+) -> Result<(), String> {
+    let clean_label = format!("dl_{}", task_id.replace(|c: char| !c.is_alphanumeric(), "_"));
+    if let Some(w) = app.get_webview_window(&clean_label) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+
+    let url_str = format!("index.html?popup=true&taskId={}", task_id);
+    let app_clone = app.clone();
+    let label_clone = clean_label.clone();
+    let title_clone = title.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let _ = WebviewWindowBuilder::new(
+            &app_clone,
+            &label_clone,
+            WebviewUrl::App(url_str.into()),
+        )
+        .title(&title_clone)
+        .inner_size(540.0, 440.0)
+        .min_inner_size(480.0, 360.0)
+        .resizable(true)
+        .center()
+        .build();
+    })
+    .await
+    .map_err(|e| format!("Window spawn error: {}", e))?;
+
+    Ok(())
+}
+
+
 // ---------------------------------------------------------------------------
 // App Entrypoint
 // ---------------------------------------------------------------------------
@@ -657,6 +695,7 @@ pub fn run() {
             get_pending_url,
             ytdlp_get_info,
             ytdlp_download,
+            open_download_window,
             // BitTorrent Engine Commands (librqbit)
             torrent::add_torrent,
             torrent::get_torrent_details,

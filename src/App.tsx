@@ -79,6 +79,18 @@ export const App: React.FC = () => {
   });
   const [activePopupTaskIds, setActivePopupTaskIds] = useState<string[]>([]);
 
+  const openDownloadPopup = async (task: DownloadTask) => {
+    try {
+      await invoke("open_download_window", {
+        taskId: task.id,
+        title: `${task.percent?.toFixed(1) || 0}% of ${task.filename || 'Downloading...'}`,
+      });
+    } catch (err) {
+      console.warn("Native window could not be opened, using in-app dialog:", err);
+      setActivePopupTaskIds((prev) => (prev.includes(task.id) ? prev : [...prev, task.id]));
+    }
+  };
+
   const defaultDirRef = useRef(defaultDir);
   defaultDirRef.current = defaultDir;
   const handleAddMediaDownloadRef = useRef<(options: any) => Promise<void>>(() => Promise.resolve());
@@ -835,7 +847,7 @@ export const App: React.FC = () => {
       setTasks(updated);
       if (taskId) {
         const created = updated.find((t) => t.id === taskId);
-        if (created) setActivePopupTaskIds((prev) => prev.includes(created.id) ? prev : [...prev, created.id]);
+        if (created) openDownloadPopup(created);
       }
     } catch (e) {
       console.error("Direct download failed to start:", e);
@@ -879,7 +891,7 @@ export const App: React.FC = () => {
       };
 
       setTasks((prev) => [newMediaTask, ...prev.filter((t) => t.id !== newMediaTask.id)]);
-      setActivePopupTaskIds((prev) => prev.includes(newMediaTask.id) ? prev : [...prev, newMediaTask.id]);
+      openDownloadPopup(newMediaTask);
 
       if (androidBridge?.startDownload) {
         androidBridge.startDownload(
@@ -1238,7 +1250,7 @@ export const App: React.FC = () => {
                   if (task.category === "torrents") {
                     setSelectedTorrentId(id);
                   } else {
-                    setActivePopupTaskIds((prev) => prev.includes(task.id) ? prev : [...prev, task.id]);
+                    openDownloadPopup(task);
                   }
                 }
               }}
