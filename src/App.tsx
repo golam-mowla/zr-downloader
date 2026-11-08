@@ -1294,7 +1294,7 @@ export const App: React.FC = () => {
             totalDialogs={activePopupTaskIds.length}
             onClose={() => setActivePopupTaskIds((prev) => prev.filter((id) => id !== task.id))}
             onBringToFront={() => {
-              setActivePopupTaskIds((prev) => [task.id, ...prev.filter((id) => id !== task.id)]);
+              setActivePopupTaskIds((prev) => [...prev.filter((id) => id !== task.id), task.id]);
             }}
             onPause={handlePause}
             onResume={handleResume}
