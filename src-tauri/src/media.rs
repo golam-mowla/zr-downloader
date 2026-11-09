@@ -25,7 +25,8 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::{command, AppHandle, Emitter, State};
 
 #[cfg(target_os = "windows")]
@@ -275,6 +276,10 @@ pub struct ToolStatus {
 // Cross-Platform Binary & PATH Discovery (Fixes Windows GUI PATH issues)
 // ---------------------------------------------------------------------------
 
+static FFMPEG_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+static YTDLP_PATH: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+static EXE_CACHE: RwLock<Option<HashMap<String, Option<PathBuf>>>> = RwLock::new(None);
+
 fn get_augmented_path() -> String {
     let current_path = env::var("PATH").unwrap_or_default();
     let mut extra_dirs: Vec<PathBuf> = Vec::new();
@@ -297,18 +302,13 @@ fn get_augmented_path() -> String {
         extra_dirs.push(cwd.join("tools"));
     }
 
-    // 3. User Dedicated Tool Paths
-    extra_dirs.push(PathBuf::from(r"D:\00VideoEditing Tools\yt-dlp"));
-    extra_dirs.push(PathBuf::from(r"D:\00VideoEditing Tools\yt-dlp\bin"));
-    extra_dirs.push(PathBuf::from(r"D:\Antigravity\yt-dlp"));
-
+    // 3. User & System Standard Locations (No hardcoded D:\ paths)
     if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
         let local = PathBuf::from(&local_app_data);
         // App's own local managed bin directory
         extra_dirs.push(local.clone());
         extra_dirs.push(local.join("ZR Downloader").join("bin"));
         extra_dirs.push(local.join("ZR Downloader"));
-        extra_dirs.push(local.join("ZR Downloader").join("bin"));
         extra_dirs.push(local.join("GM-Downloader").join("bin"));
         extra_dirs.push(local.join("Programs").join("yt-dlp"));
 
@@ -392,6 +392,14 @@ fn get_augmented_path() -> String {
 }
 
 fn find_exe_in_augmented_path(bin_name: &str) -> Option<PathBuf> {
+    if let Ok(guard) = EXE_CACHE.read() {
+        if let Some(ref map) = *guard {
+            if let Some(val) = map.get(bin_name) {
+                return val.clone();
+            }
+        }
+    }
+
     let aug_path = get_augmented_path();
     let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
     let exts = if cfg!(target_os = "windows") {
@@ -400,6 +408,7 @@ fn find_exe_in_augmented_path(bin_name: &str) -> Option<PathBuf> {
         vec![""]
     };
 
+    let mut found = None;
     for dir in aug_path.split(sep) {
         if dir.trim().is_empty() {
             continue;
@@ -408,27 +417,61 @@ fn find_exe_in_augmented_path(bin_name: &str) -> Option<PathBuf> {
         for ext in &exts {
             let candidate = base.join(format!("{}{}", bin_name, ext));
             if candidate.is_file() {
-                return Some(candidate);
+                found = Some(candidate);
+                break;
             }
         }
+        if found.is_some() {
+            break;
+        }
     }
-    None
+
+    if let Ok(mut guard) = EXE_CACHE.write() {
+        let map = guard.get_or_insert_with(HashMap::new);
+        map.insert(bin_name.to_string(), found.clone());
+    }
+
+    found
 }
 
 fn ensure_ffmpeg_available() -> Option<PathBuf> {
-    // 1. Check well-known locations first
+    FFMPEG_PATH.get_or_init(|| {
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(local) = env::var("LOCALAPPDATA") {
+                let candidates = [
+                    PathBuf::from(&local).join("ZR Downloader").join("bin").join("ffmpeg.exe"),
+                    PathBuf::from(&local).join("ZR Downloader").join("ffmpeg.exe"),
+                    PathBuf::from(&local).join("GM-Downloader").join("bin").join("ffmpeg.exe"),
+                    PathBuf::from(&local).join("ffmpeg.exe"),
+                    PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe"),
+                    PathBuf::from(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+                ];
+                for p in &candidates {
+                    if p.exists() {
+                        return Some(p.clone());
+                    }
+                }
+            }
+        }
+
+        if let Some(existing) = find_exe_in_augmented_path("ffmpeg") {
+            return Some(existing);
+        }
+
+        None
+    }).clone()
+}
+
+fn find_ytdlp_binary() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(local) = env::var("LOCALAPPDATA") {
             let candidates = [
-                PathBuf::from(&local).join("ZR Downloader").join("bin").join("ffmpeg.exe"),
-                PathBuf::from(&local).join("ZR Downloader").join("ffmpeg.exe"),
-                PathBuf::from(&local).join("GM-Downloader").join("bin").join("ffmpeg.exe"),
-                PathBuf::from(&local).join("ffmpeg.exe"),
-                PathBuf::from(r"D:\Subtitle Edit\ffmpeg\ffmpeg.exe"),
-                PathBuf::from(r"D:\Subtitle Edit\ffmpeg\bin\ffmpeg.exe"),
-                PathBuf::from(r"C:\ffmpeg\bin\ffmpeg.exe"),
-                PathBuf::from(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+                PathBuf::from(&local).join("ZR Downloader").join("bin").join("yt-dlp.exe"),
+                PathBuf::from(&local).join("ZR Downloader").join("yt-dlp.exe"),
+                PathBuf::from(&local).join("GM-Downloader").join("bin").join("yt-dlp.exe"),
+                PathBuf::from(&local).join("yt-dlp.exe"),
             ];
             for p in &candidates {
                 if p.exists() {
@@ -437,102 +480,110 @@ fn ensure_ffmpeg_available() -> Option<PathBuf> {
             }
         }
     }
-
-    // 2. Scan augmented PATH
-    if let Some(existing) = find_exe_in_augmented_path("ffmpeg") {
-        return Some(existing);
-    }
-
-    None
+    find_exe_in_augmented_path("yt-dlp")
 }
 
 fn ensure_ytdlp_available() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(local) = env::var("LOCALAPPDATA") {
-            let p_zr = PathBuf::from(&local).join("ZR Downloader").join("bin").join("yt-dlp.exe");
-            if p_zr.exists() { return Some(p_zr); }
-            let p_zr_root = PathBuf::from(&local).join("ZR Downloader").join("yt-dlp.exe");
-            if p_zr_root.exists() { return Some(p_zr_root); }
-            let p_gm = PathBuf::from(&local).join("GM-Downloader").join("bin").join("yt-dlp.exe");
-            if p_gm.exists() { return Some(p_gm); }
-            let p_direct = PathBuf::from(&local).join("yt-dlp.exe");
-            if p_direct.exists() { return Some(p_direct); }
-        }
-    }
-
-    if let Some(existing) = find_exe_in_augmented_path("yt-dlp") {
-        return Some(existing);
-    }
-
-    // Auto-download standalone yt-dlp executable if missing on the system
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
-            let target_dir = PathBuf::from(&local_app_data).join("GM-Downloader").join("bin");
-            let _ = fs::create_dir_all(&target_dir);
-            let target_exe = target_dir.join("yt-dlp.exe");
-
-            // 1. Try curl.exe
-            let mut curl_cmd = Command::new("curl.exe");
-            curl_cmd.args([
-                "-L",
-                "-o",
-                target_exe.to_string_lossy().as_ref(),
-                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
-            ]);
-            curl_cmd.creation_flags(CREATE_NO_WINDOW);
-            if let Ok(status) = curl_cmd.status() {
-                if status.success() && target_exe.exists() {
-                    return Some(target_exe);
-                }
-            }
-
-            // 2. Try PowerShell Invoke-WebRequest fallback
-            let ps_script = format!(
-                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe' -OutFile '{}'",
-                target_exe.display()
-            );
-            let mut ps_cmd = Command::new("powershell.exe");
-            ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
-            ps_cmd.creation_flags(CREATE_NO_WINDOW);
-            if let Ok(status) = ps_cmd.status() {
-                if status.success() && target_exe.exists() {
-                    return Some(target_exe);
-                }
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Ok(user_profile) = env::var("HOME") {
-            let target_dir = PathBuf::from(&user_profile).join(".local").join("bin");
-            let _ = fs::create_dir_all(&target_dir);
-            let target_bin = target_dir.join("yt-dlp");
-
-            let mut curl_cmd = Command::new("curl");
-            curl_cmd.args([
-                "-L",
-                "-o",
-                target_bin.to_string_lossy().as_ref(),
-                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
-            ]);
-            if let Ok(status) = curl_cmd.status() {
-                if status.success() && target_bin.exists() {
-                    let _ = Command::new("chmod").args(["+x", target_bin.to_string_lossy().as_ref()]).status();
-                    return Some(target_bin);
-                }
-            }
-        }
-    }
-
-    None
+    ensure_ytdlp_result().ok()
 }
 
+fn ensure_ytdlp_result() -> Result<PathBuf, String> {
+    YTDLP_PATH.get_or_init(|| {
+        if let Some(existing) = find_ytdlp_binary() {
+            return Ok(existing);
+        }
+
+        // Auto-download standalone yt-dlp executable once if missing on system
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+                let target_dir = PathBuf::from(&local_app_data).join("ZR Downloader").join("bin");
+                let _ = fs::create_dir_all(&target_dir);
+                let target_exe = target_dir.join("yt-dlp.exe");
+
+                // 1. Try curl.exe with strict max-time 60s and connect-timeout 10s
+                let mut curl_cmd = Command::new("curl.exe");
+                curl_cmd.args([
+                    "--fail",
+                    "--max-time",
+                    "60",
+                    "--connect-timeout",
+                    "10",
+                    "-L",
+                    "-o",
+                    target_exe.to_string_lossy().as_ref(),
+                    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+                ]);
+                curl_cmd.creation_flags(CREATE_NO_WINDOW);
+                if let Ok(status) = curl_cmd.status() {
+                    if status.success() && target_exe.exists() {
+                        return Ok(target_exe);
+                    }
+                }
+
+                // 2. Try PowerShell with 60s timeout fallback
+                let ps_script = format!(
+                    "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $wc = New-Object System.Net.WebClient; $wc.Headers.Add('User-Agent', 'ZR-Downloader'); $wc.DownloadFile('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', '{}')",
+                    target_exe.display()
+                );
+                let mut ps_cmd = Command::new("powershell.exe");
+                ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
+                ps_cmd.creation_flags(CREATE_NO_WINDOW);
+                if let Ok(mut child) = ps_cmd.spawn() {
+                    let start = std::time::Instant::now();
+                    loop {
+                        if let Ok(Some(st)) = child.try_wait() {
+                            if st.success() && target_exe.exists() {
+                                return Ok(target_exe);
+                            }
+                            break;
+                        }
+                        if start.elapsed() >= std::time::Duration::from_secs(60) {
+                            let _ = child.kill();
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(user_profile) = env::var("HOME") {
+                let target_dir = PathBuf::from(&user_profile).join(".local").join("bin");
+                let _ = fs::create_dir_all(&target_dir);
+                let target_bin = target_dir.join("yt-dlp");
+
+                let mut curl_cmd = Command::new("curl");
+                curl_cmd.args([
+                    "--fail",
+                    "--max-time",
+                    "60",
+                    "--connect-timeout",
+                    "10",
+                    "-L",
+                    "-o",
+                    target_bin.to_string_lossy().as_ref(),
+                    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
+                ]);
+                if let Ok(status) = curl_cmd.status() {
+                    if status.success() && target_bin.exists() {
+                        let _ = Command::new("chmod").args(["+x", target_bin.to_string_lossy().as_ref()]).status();
+                        return Ok(target_bin);
+                    }
+                }
+            }
+        }
+
+        Err("yt-dlp executable could not be found or downloaded. Please check network connection.".to_string())
+    }).clone()
+}
+
+// make_command does NOT auto-download - uses existing binary or falls back to 'yt-dlp'
 fn make_command(bin_name: &str) -> Command {
     let resolved = if bin_name == "yt-dlp" {
-        ensure_ytdlp_available()
+        find_ytdlp_binary()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| bin_name.to_string())
     } else {
@@ -550,6 +601,119 @@ fn make_command(bin_name: &str) -> Command {
     cmd.creation_flags(CREATE_NO_WINDOW);
 
     cmd
+}
+
+// Watchdog runner for yt-dlp commands (kills process if no output for timeout_secs)
+fn run_command_with_watchdog(mut cmd: Command, timeout_secs: u64) -> Result<std::process::Output, String> {
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn yt-dlp process: {}", e))?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let last_activity = Arc::new(AtomicU64::new(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    ));
+    let last_act_out = last_activity.clone();
+    let last_act_err = last_activity.clone();
+
+    let out_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let err_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+
+    let out_buf_clone = out_buf.clone();
+    let t_out = std::thread::spawn(move || {
+        if let Some(mut stream) = stdout {
+            use std::io::Read;
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = stream.read(&mut chunk) {
+                if n == 0 { break; }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                last_act_out.store(now, Ordering::Relaxed);
+                if let Ok(mut buf) = out_buf_clone.lock() {
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+            }
+        }
+    });
+
+    let err_buf_clone = err_buf.clone();
+    let t_err = std::thread::spawn(move || {
+        if let Some(mut stream) = stderr {
+            use std::io::Read;
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = stream.read(&mut chunk) {
+                if n == 0 { break; }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                last_act_err.store(now, Ordering::Relaxed);
+                if let Ok(mut buf) = err_buf_clone.lock() {
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+            }
+        }
+    });
+
+    let mut timed_out = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let _ = t_out.join();
+                let _ = t_err.join();
+                let stdout_data = out_buf.lock().map(|b| b.clone()).unwrap_or_default();
+                let stderr_data = err_buf.lock().map(|b| b.clone()).unwrap_or_default();
+                return Ok(std::process::Output {
+                    status,
+                    stdout: stdout_data,
+                    stderr: stderr_data,
+                });
+            }
+            Ok(None) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let last = last_activity.load(Ordering::Relaxed);
+                if now.saturating_sub(last) >= timeout_secs {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(format!("Process error: {}", e));
+            }
+        }
+    }
+
+    if timed_out {
+        let _ = child.wait();
+        let _ = t_out.join();
+        let _ = t_err.join();
+        return Err(format!("yt-dlp timed out: no output received for {} seconds", timeout_secs));
+    }
+
+    let status = child.wait().map_err(|e| format!("Wait error: {}", e))?;
+    let _ = t_out.join();
+    let _ = t_err.join();
+    let stdout_data = out_buf.lock().map(|b| b.clone()).unwrap_or_default();
+    let stderr_data = err_buf.lock().map(|b| b.clone()).unwrap_or_default();
+    Ok(std::process::Output {
+        status,
+        stdout: stdout_data,
+        stderr: stderr_data,
+    })
 }
 
 fn short_codec(c: &str) -> String {
@@ -753,14 +917,13 @@ pub async fn fetch_media_info(
             cmd
         };
 
-        // Attempt 1: Standard extractor (discovers full 4K, 2K, 1080p, 60fps, Opus, etc. without format restrictions)
-        let mut output = build_cmd(None)
-            .output()
+        // Attempt 1: Standard extractor with 60s watchdog
+        let mut output = run_command_with_watchdog(build_cmd(None), 60)
             .map_err(|e| format!("Could not launch yt-dlp: {}", e))?;
 
         // Attempt 2: If failed (e.g. YouTube bot detection or login check), retry with iOS client bypass
         if !output.status.success() {
-            if let Ok(retry_out) = build_cmd(Some("youtube:player_client=ios,web")).output() {
+            if let Ok(retry_out) = run_command_with_watchdog(build_cmd(Some("youtube:player_client=ios,web")), 60) {
                 if retry_out.status.success() {
                     output = retry_out;
                 }
@@ -769,7 +932,7 @@ pub async fn fetch_media_info(
 
         // Attempt 3: If still failed, retry with Android client bypass
         if !output.status.success() {
-            if let Ok(retry_out) = build_cmd(Some("youtube:player_client=android,web")).output() {
+            if let Ok(retry_out) = run_command_with_watchdog(build_cmd(Some("youtube:player_client=android,web")), 60) {
                 if retry_out.status.success() {
                     output = retry_out;
                 }
@@ -1524,20 +1687,32 @@ pub async fn start_download(
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
+        let last_activity = Arc::new(AtomicU64::new(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        ));
+        let last_act_out = last_activity.clone();
+        let last_act_err = last_activity.clone();
+
         // Read stderr in background thread to capture errors & FFmpeg cut progress
         let err_lines = Arc::new(Mutex::new(Vec::<String>::new()));
         let err_lines_clone = err_lines.clone();
         let app_err = app.clone();
         let tid_err = tid.clone();
         let clip_dur_err = clip_target_duration;
-        if let Some(se) = stderr {
-            std::thread::spawn(move || {
+        let t_stderr = if let Some(se) = stderr {
+            Some(std::thread::spawn(move || {
                 let reader = BufReader::new(se);
                 for line in reader.lines().flatten() {
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    last_act_err.store(now_secs, Ordering::Relaxed);
                     let trimmed = line.trim().to_string();
                     if !trimmed.is_empty() {
-                        // err log throttled
-
                         // Live progress for FFmpeg cut & encoding from stderr
                         if let Some((sec, speed)) = parse_ffmpeg_time_and_speed(&trimmed) {
                             let pct = if let Some(target_dur) = clip_dur_err {
@@ -1578,247 +1753,226 @@ pub async fn start_download(
                         err_lines_clone.lock().unwrap().push(trimmed);
                     }
                 }
-            });
-        }
+            }))
+        } else {
+            None
+        };
 
-        // Read stdout for progress lines
-        let mut last_total_bytes: u64 = 0;
-        let mut last_downloaded_bytes: u64 = 0;
-        let mut last_emit_instant = std::time::Instant::now();
-        if let Some(so) = stdout {
-            let reader = BufReader::new(so);
-            for line in reader.lines().flatten() {
-                let is_canc = cancelled_tasks.lock().unwrap().get(&tid).copied().unwrap_or(false);
-                if is_canc {
-                    break;
-                }
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                // log emit throttled
+        // Read stdout for progress lines in background thread
+        let last_total_arc = Arc::new(AtomicU64::new(0));
+        let last_down_arc = Arc::new(AtomicU64::new(0));
+        let last_tot_out = last_total_arc.clone();
+        let last_down_out = last_down_arc.clone();
+        let app_out = app.clone();
+        let tid_out = tid.clone();
+        let cancelled_tasks_out = cancelled_tasks.clone();
+        let is_clipping_out = is_clipping_active;
+        let media_tasks_out = media_tasks.clone();
 
-                // Parse structured ZR progress template: [ZR_PROG] 45.2% | 1234567 | 2345678 | NA | 3.80MiB/s | 01:30:00
-                let is_zr_prog = trimmed.contains("[ZR_PROG]");
-                if is_zr_prog {
-                    let prog_idx = trimmed.find("[ZR_PROG]").unwrap_or(0);
-                    let payload = trimmed[prog_idx + 9..].trim();
-                    let parts: Vec<&str> = payload.split('|').map(|s| s.trim()).collect();
-                    if parts.len() >= 6 {
-                        let pct_str = parts[0].trim_end_matches('%').trim();
-                        let mut pct = pct_str.parse::<f64>().unwrap_or(0.0);
+        let t_stdout = if let Some(so) = stdout {
+            Some(std::thread::spawn(move || {
+                let reader = BufReader::new(so);
+                let mut last_emit_instant = std::time::Instant::now();
+                for line in reader.lines().flatten() {
+                    let now_secs = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    last_act_out.store(now_secs, Ordering::Relaxed);
 
-                        let down_b = parts[1].parse::<u64>().unwrap_or(0);
-                        if down_b > 0 {
-                            last_downloaded_bytes = down_b;
-                        }
+                    let is_canc = cancelled_tasks_out.lock().unwrap().get(&tid_out).copied().unwrap_or(false);
+                    if is_canc {
+                        break;
+                    }
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
 
-                        let mut tot_b = parts[2].parse::<u64>().unwrap_or(0);
-                        if tot_b == 0 {
-                            if let Ok(f) = parts[3].parse::<f64>() {
-                                if f > 0.0 {
-                                    tot_b = f as u64;
+                    // Parse structured ZR progress template: [ZR_PROG] 45.2% | 1234567 | 2345678 | NA | 3.80MiB/s | 01:30:00
+                    let is_zr_prog = trimmed.contains("[ZR_PROG]");
+                    if is_zr_prog {
+                        let prog_idx = trimmed.find("[ZR_PROG]").unwrap_or(0);
+                        let payload = trimmed[prog_idx + 9..].trim();
+                        let parts: Vec<&str> = payload.split('|').map(|s| s.trim()).collect();
+                        if parts.len() >= 6 {
+                            let pct_str = parts[0].trim_end_matches('%').trim();
+                            let mut pct = pct_str.parse::<f64>().unwrap_or(0.0);
+                            if is_clipping_out {
+                                pct = pct * 0.90;
+                            }
+
+                            let down_b: u64 = parts[1].parse().unwrap_or(0);
+                            let tot_b: u64 = parts[2].parse().unwrap_or(0);
+                            let tot_est_b: u64 = parts[3].parse().unwrap_or(0);
+                            let speed_str = parts[4].to_string();
+                            let eta_str = parts[5].to_string();
+
+                            let effective_total = if tot_b > 0 {
+                                tot_b
+                            } else if tot_est_b > 0 {
+                                tot_est_b
+                            } else {
+                                0
+                            };
+
+                            if effective_total > 0 {
+                                last_tot_out.store(effective_total, Ordering::Relaxed);
+                            }
+                            if down_b > 0 {
+                                last_down_out.store(down_b, Ordering::Relaxed);
+                            }
+
+                            let text = if effective_total > 0 {
+                                format!("{:.1}% of {}", pct, format_bytes(effective_total))
+                            } else if down_b > 0 {
+                                format!("{:.1}% ({})", pct, format_bytes(down_b))
+                            } else {
+                                format!("{:.1}%", pct)
+                            };
+
+                            if let Ok(mut tasks_lock) = media_tasks_out.lock() {
+                                if let Some(t) = tasks_lock.get_mut(&tid_out) {
+                                    t.percent = pct;
+                                    t.downloaded_bytes = down_b;
+                                    t.total_bytes = effective_total;
+                                    t.speed_formatted = speed_str.clone();
+                                    t.eta_formatted = eta_str.clone();
+                                    t.status = "downloading".to_string();
                                 }
                             }
+
+                            let now = std::time::Instant::now();
+                            if now.duration_since(last_emit_instant).as_millis() >= 250 || pct >= 99.5 {
+                                last_emit_instant = now;
+                                let _ = app_out.emit(
+                                    "download-progress",
+                                    serde_json::json!({
+                                        "id": tid_out.clone(),
+                                        "percent": pct,
+                                        "text": text,
+                                        "speed": speed_str.clone(),
+                                        "speed_formatted": speed_str.clone(),
+                                        "eta": eta_str.clone(),
+                                        "eta_formatted": eta_str.clone(),
+                                        "downloaded_bytes": down_b,
+                                        "total_bytes": effective_total,
+                                        "status": "downloading".to_string(),
+                                    }),
+                                );
+                            }
+                            continue;
                         }
-                        if tot_b > 0 {
-                            last_total_bytes = tot_b;
+                    }
+
+                    // Fallback percentage parser
+                    if let Some(pct) = parse_ytdlp_percent(trimmed) {
+                        let mut scaled_pct = pct;
+                        if is_clipping_out {
+                            scaled_pct = pct * 0.90;
                         }
-
-                        if pct <= 0.0 && last_total_bytes > 0 && last_downloaded_bytes > 0 {
-                            pct = ((last_downloaded_bytes as f64 / last_total_bytes as f64) * 100.0).clamp(0.0, 99.9);
-                        }
-
-                        let speed_str = if parts[4] == "NA" || parts[4].is_empty() {
-                            "".to_string()
-                        } else {
-                            parts[4].to_string()
-                        };
-
-                        let eta_str = if parts[5] == "NA" || parts[5] == "Unknown" || parts[5].is_empty() {
-                            "--".to_string()
-                        } else {
-                            parts[5].to_string()
-                        };
-
-                        let speed_bps = parse_human_size_to_bytes(&speed_str);
-
-                        if let Ok(mut tasks_lock) = media_tasks.lock() {
-                            if let Some(t) = tasks_lock.get_mut(&tid) {
-                                t.percent = pct;
-                                t.downloaded_bytes = last_downloaded_bytes;
-                                t.total_bytes = last_total_bytes;
-                                t.speed_bps = speed_bps;
-                                t.speed_formatted = speed_str.clone();
-                                t.eta_formatted = eta_str.clone();
+                        if let Ok(mut tasks_lock) = media_tasks_out.lock() {
+                            if let Some(t) = tasks_lock.get_mut(&tid_out) {
+                                t.percent = scaled_pct;
                                 t.status = "downloading".to_string();
                             }
                         }
-
                         let now = std::time::Instant::now();
-                        let elapsed_ms = now.duration_since(last_emit_instant).as_millis();
-                        if elapsed_ms >= 250 || pct >= 99.5 {
+                        if now.duration_since(last_emit_instant).as_millis() >= 250 || scaled_pct >= 99.5 {
                             last_emit_instant = now;
-                            let zr_payload = serde_json::json!({
-                                "id": tid.clone(),
-                                "taskId": tid.clone(),
-                                "percent": pct,
-                                "text": format!("{:.1}% of {} at {}", pct, format_bytes(last_total_bytes), speed_str),
-                                "speed": speed_str.clone(),
-                                "speed_formatted": speed_str.clone(),
-                                "speedFormatted": speed_str.clone(),
-                                "speed_bps": speed_bps,
-                                "speedBps": speed_bps,
-                                "eta": eta_str.clone(),
-                                "eta_formatted": eta_str.clone(),
-                                "etaFormatted": eta_str.clone(),
-                                "total_bytes": last_total_bytes,
-                                "totalBytes": last_total_bytes,
-                                "downloaded_bytes": last_downloaded_bytes,
-                                "downloadedBytes": last_downloaded_bytes,
-                                "status": "downloading".to_string(),
-                            });
-                            let _ = app.emit("download-progress", zr_payload);
-                        }
-                        continue;
-                    }
-                }
-
-                // Parse standard yt-dlp progress line fallback: [download]  45.2% of 84.60MiB at  6.42MiB/s ETA 00:06
-                if trimmed.starts_with("[download]") && trimmed.contains('%') {
-                    let after_tag = trimmed.trim_start_matches("[download]").trim();
-                    let pct_part = after_tag.split('%').next().unwrap_or("0").trim();
-                    let pct = pct_part.parse::<f64>().unwrap_or(0.0);
-
-                    // Parse total size: "[download]  45.2% of 84.60MiB at  6.42MiB/s ETA 00:06"
-                    if let Some(of_idx) = after_tag.find("of ") {
-                        let after_of = &after_tag[of_idx + 3..];
-                        let size_str = after_of.split_whitespace().next().unwrap_or("");
-                        let b = parse_human_size_to_bytes(size_str);
-                        if b > 0 {
-                            last_total_bytes = b;
+                            let _ = app_out.emit(
+                                "download-progress",
+                                serde_json::json!({
+                                    "id": tid_out.clone(),
+                                    "percent": scaled_pct,
+                                    "status": "downloading".to_string(),
+                                }),
+                            );
                         }
                     }
 
-                    let downloaded_bytes = if last_total_bytes > 0 {
-                        ((last_total_bytes as f64) * (pct / 100.0)) as u64
-                    } else if last_downloaded_bytes > 0 {
-                        last_downloaded_bytes
-                    } else {
-                        0
-                    };
-                    if downloaded_bytes > 0 {
-                        last_downloaded_bytes = downloaded_bytes;
-                    }
-
-                    let speed = if let Some(idx) = after_tag.find("at ") {
-                        after_tag[idx + 3..]
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string()
-                    } else {
-                        "".to_string()
-                    };
-
-                    let eta = if let Some(idx) = after_tag.find("ETA ") {
-                        after_tag[idx + 4..]
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string()
-                    } else {
-                        "".to_string()
-                    };
-
-                    let _ = app.emit(
-                        "download-progress",
-                        serde_json::json!({
-                            "id": tid.clone(),
-                            "percent": pct,
-                            "text": after_tag.to_string(),
-                            "speed": speed.clone(),
-                            "speed_formatted": speed.clone(),
-                            "eta": eta.clone(),
-                            "eta_formatted": eta.clone(),
-                            "total_bytes": last_total_bytes,
-                            "downloaded_bytes": last_downloaded_bytes,
-                            "status": "downloading".to_string(),
-                        }),
-                    );
-                } else if trimmed.contains("time=") && (trimmed.contains("frame=") || trimmed.contains("size=")) {
-                    if let Some((sec, speed)) = parse_ffmpeg_time_and_speed(trimmed) {
-                        let pct = if let Some(target_dur) = clip_target_duration {
-                            if target_dur > 0.0 {
-                                ((sec / target_dur) * 100.0).clamp(2.0, 99.5)
-                            } else {
-                                50.0
+                    // Post-processing indication
+                    if trimmed.starts_with("[Merger]")
+                        || trimmed.starts_with("[Fixup")
+                        || trimmed.starts_with("[VideoConvertor]")
+                        || trimmed.starts_with("[ExtractAudio]")
+                        || trimmed.starts_with("[EmbedThumbnail]")
+                        || trimmed.starts_with("[Metadata]")
+                    {
+                        if let Ok(mut tasks_lock) = media_tasks_out.lock() {
+                            if let Some(t) = tasks_lock.get_mut(&tid_out) {
+                                t.percent = 99.0;
+                                t.status = "assembling".to_string();
+                                t.speed_formatted = "Finishing...".to_string();
                             }
-                        } else {
-                            50.0
-                        };
-                        let text = if let Some(target_dur) = clip_target_duration {
-                            format!(
-                                "Cutting & Encoding: {:.1}% ({}/{} at {})",
-                                pct,
-                                format_seconds_to_timestamp(sec),
-                                format_seconds_to_timestamp(target_dur),
-                                if speed.is_empty() { "1x".to_string() } else { speed.clone() }
-                            )
-                        } else {
-                            format!("Cutting media: {} (Speed: {})", format_seconds_to_timestamp(sec), speed)
-                        };
-                        let _ = app.emit(
+                        }
+                        let _ = app_out.emit(
                             "download-progress",
                             serde_json::json!({
-                                "id": tid.clone(),
-                                "percent": pct,
-                                "text": text,
-                                "speed": speed.clone(),
-                                "speed_formatted": speed.clone(),
-                                "eta": "".to_string(),
-                                "eta_formatted": "--".to_string(),
-                                "status": "downloading".to_string(),
+                                "id": tid_out.clone(),
+                                "percent": 99.0,
+                                "text": format!("Post-processing: {}", trimmed),
+                                "speed": "".to_string(),
+                                "speed_formatted": "Finishing...".to_string(),
+                                "eta": "00:00".to_string(),
+                                "eta_formatted": "0s".to_string(),
+                                "status": "assembling".to_string(),
                             }),
                         );
                     }
-                } else if trimmed.contains("Downloading 1 time ranges") {
-                    let _ = app.emit(
-                        "download-progress",
-                        serde_json::json!({
-                            "id": tid.clone(),
-                            "percent": 5.0,
-                            "text": format!("Extracting timeframe section: {}", trimmed),
-                            "speed": "".to_string(),
-                            "speed_formatted": "0 B/s".to_string(),
-                            "eta": "".to_string(),
-                            "eta_formatted": "--".to_string(),
-                            "status": "downloading".to_string(),
-                        }),
-                    );
-                } else if trimmed.starts_with("[Merger]")
-                    || trimmed.starts_with("[ExtractAudio]")
-                    || trimmed.starts_with("[EmbedSubtitle]")
-                    || trimmed.starts_with("[Metadata]")
-                {
-                    let _ = app.emit(
-                        "download-progress",
-                        serde_json::json!({
-                            "id": tid.clone(),
-                            "percent": 99.0,
-                            "text": format!("Post-processing: {}", trimmed),
-                            "speed": "".to_string(),
-                            "speed_formatted": "Finishing...".to_string(),
-                            "eta": "00:00".to_string(),
-                            "eta_formatted": "0s".to_string(),
-                            "status": "assembling".to_string(),
-                        }),
-                    );
+                }
+            }))
+        } else {
+            None
+        };
+
+        // Watchdog loop: checks child process every 250ms; kills process if no output for 60 seconds
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let mut status = None;
+        loop {
+            match child.try_wait() {
+                Ok(Some(s)) => {
+                    status = Some(s);
+                    break;
+                }
+                Ok(None) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let last = last_activity.load(Ordering::Relaxed);
+                    let is_canc = cancelled_tasks.lock().unwrap().get(&tid).copied().unwrap_or(false);
+                    if is_canc {
+                        let _ = child.kill();
+                        status = child.wait().ok();
+                        break;
+                    }
+                    if now.saturating_sub(last) >= 60 {
+                        timed_out.store(true, Ordering::SeqCst);
+                        let _ = child.kill();
+                        status = child.wait().ok();
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+                Err(_) => {
+                    let _ = child.kill();
+                    status = child.wait().ok();
+                    break;
                 }
             }
         }
 
-        let status = child.wait();
+        if let Some(t) = t_stdout {
+            let _ = t.join();
+        }
+        if let Some(t) = t_stderr {
+            let _ = t.join();
+        }
+
+        let last_total_bytes = last_total_arc.load(Ordering::Relaxed);
+        let last_downloaded_bytes = last_down_arc.load(Ordering::Relaxed);
+
         active_pids.lock().unwrap().remove(&tid);
 
         let was_cancelled = cancelled_tasks.lock().unwrap().remove(&tid).unwrap_or(false);
@@ -1834,6 +1988,32 @@ pub async fn start_download(
                     "eta_formatted": "--"
                 }),
             );
+            return;
+        }
+
+        if timed_out.load(Ordering::SeqCst) {
+            let timeout_err = "Download timed out: no output received from media stream for 60 seconds".to_string();
+            let hint_name = options.custom_filename.as_deref().unwrap_or("");
+            cleanup_temp_and_part_files(&options.save_folder, hint_name);
+            let _ = app.emit("download-error", serde_json::json!({ "id": tid.clone(), "error": timeout_err }));
+            let _ = app.emit(
+                "download-progress",
+                serde_json::json!({
+                    "id": tid.clone(),
+                    "status": "error",
+                    "error_message": timeout_err,
+                    "speed": "0 B/s",
+                    "speed_formatted": "0 B/s",
+                    "eta": "--",
+                    "eta_formatted": "--"
+                }),
+            );
+            if let Ok(mut tasks_lock) = media_tasks.lock() {
+                if let Some(t) = tasks_lock.get_mut(&tid) {
+                    t.status = "error".to_string();
+                    t.error_message = Some(timeout_err);
+                }
+            }
             return;
         }
 
@@ -1867,7 +2047,14 @@ pub async fn start_download(
                     "eta_formatted": "--"
                 }),
             );
+            if let Ok(mut tasks_lock) = media_tasks.lock() {
+                if let Some(t) = tasks_lock.get_mut(&tid) {
+                    t.status = "error".to_string();
+                    t.error_message = Some(meaningful_err);
+                }
+            }
             return;
+        }            return;
         }
 
         let final_total = if last_total_bytes > 0 {

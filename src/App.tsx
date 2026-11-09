@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWindow, ProgressBarStatus } from "@tauri-apps/api/window";
 import {
   Download,
@@ -954,9 +954,9 @@ export const App: React.FC = () => {
       };
 
       setTasks((prev) => [newMediaTask, ...prev.filter((t) => t.id !== newMediaTask.id)]);
-      openDownloadPopup(newMediaTask);
 
       if (androidBridge?.startDownload) {
+        openDownloadPopup(newMediaTask);
         androidBridge.startDownload(
           taskId,
           options.url,
@@ -980,109 +980,64 @@ export const App: React.FC = () => {
         if (cleanMediaUrl.startsWith("@[") && cleanMediaUrl.endsWith("]")) {
           cleanMediaUrl = cleanMediaUrl.slice(2, -1).trim();
         }
+        // ONLY camelCase keys - prevents serde "duplicate field" error with rust aliases
         const invokeOptions = {
           url: cleanMediaUrl,
           saveFolder: options.saveFolder || defaultDirRef.current || "",
-          save_folder: options.saveFolder || defaultDirRef.current || "",
           customFilename: finalFilename,
-          custom_filename: finalFilename,
           downloadMode: isAudio ? "audio" : "video",
-          download_mode: isAudio ? "audio" : "video",
           container: options.container || (isAudio ? "MP3 (Audio)" : "MP4 (Video)"),
           videoStreamId: options.videoStreamId || "best",
-          video_stream_id: options.videoStreamId || "best",
           audioStreamId: options.audioStreamId || "best",
-          audio_stream_id: options.audioStreamId || "best",
           audioBitrate: options.audioBitrate || "Best",
-          audio_bitrate: options.audioBitrate || "Best",
           enableSubtitles: Boolean(options.enableSubtitles),
-          enable_subtitles: Boolean(options.enableSubtitles),
           subtitleLang: options.subtitleLang || "en",
-          subtitle_lang: options.subtitleLang || "en",
           subtitleFormat: options.subtitleFormat || "srt",
-          subtitle_format: options.subtitleFormat || "srt",
           subtitleSaveMode: options.subtitleSaveMode || "separate",
-          subtitle_save_mode: options.subtitleSaveMode || "separate",
           enableClip: Boolean(options.enableClip),
-          enable_clip: Boolean(options.enableClip),
           startTime: options.startTime || "00:00:00",
-          start_time: options.startTime || "00:00:00",
           endTime: options.endTime || "00:00:10",
-          end_time: options.endTime || "00:00:10",
           preciseCut: Boolean(options.preciseCut),
-          precise_cut: Boolean(options.preciseCut),
           maxActiveDownloads: 3,
-          max_active_downloads: 3,
           overwriteFiles: Boolean(options.overwriteFiles),
-          overwrite_files: Boolean(options.overwriteFiles),
           includeMediaId: false,
-          include_media_id: false,
           includeAutoSubtitles: false,
-          include_auto_subtitles: false,
           includeSuperRes: false,
-          include_super_res: false,
           preferredVideoCodec: "default",
-          preferred_video_codec: "default",
           preferredAudioCodec: "default",
-          preferred_audio_codec: "default",
           preferredSubtitleFormat: "default",
-          preferred_subtitle_format: "default",
           preferredFps: "default",
-          preferred_fps: "default",
           usePartFiles: !isLowSpace,
-          use_part_files: !isLowSpace,
           lowDiskSpace: isLowSpace,
-          low_disk_space: isLowSpace,
           sponsorBlock: false,
-          sponsor_block: false,
           limitSpeed: false,
-          limit_speed: false,
           speedLimitKb: 0,
-          speed_limit_kb: 0,
           proxy: "",
           cookiesFile: "",
-          cookies_file: "",
           cookiesBrowser: "",
-          cookies_browser: "",
           useAria2c: false,
-          use_aria2c: false,
           aria2Connections: 8,
-          aria2_connections: 8,
           ytdlpDiscoveryArgs: "",
-          ytdlp_discovery_args: "",
           ytdlpDownloadArgs: "",
-          ytdlp_download_args: "",
           translateMetadata: false,
-          translate_metadata: false,
           embedMetadata: true,
-          embed_metadata: true,
           embedThumbnails: true,
-          embed_thumbnails: true,
           cropAudioThumbnails: true,
-          crop_audio_thumbnails: true,
           embedChapters: false,
-          embed_chapters: false,
           splitChapters: false,
-          split_chapters: false,
           embedSubtitlesGlobal: false,
-          embed_subtitles_global: false,
           ffmpegThreads: 4,
-          ffmpeg_threads: 4,
           postProcessorArgs: "",
-          post_processor_args: "",
           taskId,
-          task_id: taskId,
         };
-        let startErr = null;
+        let startErr: string | null = null;
         try {
           await invoke<string>("ytdlp_download", { options: invokeOptions });
-        } catch (err1: any) {
-          try {
-            await invoke<string>("start_download", { options: invokeOptions });
-          } catch (err2: any) {
-            startErr = err2?.message || err2?.toString() || err1?.message || err1?.toString() || "Download failed to initialize";
-            console.error("ytdlp_download & start_download failed:", err1, err2);
-          }
+          // Open popup ONLY after download starts successfully
+          openDownloadPopup(newMediaTask);
+        } catch (err: any) {
+          startErr = err?.message || err?.toString() || "Download failed to initialize";
+          console.error("ytdlp_download failed:", err);
         }
         if (startErr) {
           setTasks((prev) =>
@@ -1091,8 +1046,8 @@ export const App: React.FC = () => {
                 ? {
                     ...t,
                     status: "error",
-                    error: startErr,
-                    errorMessage: startErr,
+                    error: startErr!,
+                    errorMessage: startErr!,
                     speed_formatted: "0 B/s",
                     speedFormatted: "0 B/s",
                     eta_formatted: "--",
@@ -1100,6 +1055,19 @@ export const App: React.FC = () => {
                 : t
             )
           );
+          try {
+            await emit("download-progress", {
+              id: taskId,
+              taskId,
+              status: "error",
+              error_message: startErr,
+              errorMessage: startErr,
+              speed_formatted: "0 B/s",
+              eta_formatted: "--",
+            });
+          } catch (emitErr) {
+            console.warn("Failed to emit download-progress error:", emitErr);
+          }
         }
       }
     } catch (e) {
