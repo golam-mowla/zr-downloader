@@ -580,6 +580,16 @@ fn ensure_ytdlp_result() -> Result<PathBuf, String> {
     }).clone()
 }
 
+fn parse_ytdlp_percent(line: &str) -> Option<f64> {
+    if let Some(pos) = line.find('%') {
+        let before = &line[..pos];
+        let token = before.split_whitespace().last()?;
+        token.parse::<f64>().ok()
+    } else {
+        None
+    }
+}
+
 // make_command does NOT auto-download - uses existing binary or falls back to 'yt-dlp'
 fn make_command(bin_name: &str) -> Command {
     let resolved = if bin_name == "yt-dlp" {
