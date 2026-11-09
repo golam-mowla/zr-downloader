@@ -2054,7 +2054,6 @@ pub async fn start_download(
                 }
             }
             return;
-        }            return;
         }
 
         let final_total = if last_total_bytes > 0 {
