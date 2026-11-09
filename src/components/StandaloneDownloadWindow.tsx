@@ -52,7 +52,6 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
   useEffect(() => {
     let isMounted = true;
     let retries = 0;
-    const maxRetries = 15;
     let timer: any = null;
 
     const fetchTask = async () => {
@@ -76,8 +75,8 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
       }
 
       retries++;
-      if (retries < maxRetries && isMounted) {
-        timer = setTimeout(fetchTask, 350);
+      if (retries < 6 && isMounted) {
+        timer = setTimeout(fetchTask, 400);
       }
     };
 
@@ -88,74 +87,80 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
     };
   }, [taskId]);
 
-  // Listen to Tauri progress events
+  // Listen to Tauri progress events with throttled state updates
   useEffect(() => {
-    let unlistenProgress: (() => void) | undefined;
-    let unlistenHttp: (() => void) | undefined;
-    let unlistenMedia: (() => void) | undefined;
-    let unlistenZr: (() => void) | undefined;
+    let unlisten: (() => void) | undefined;
+    let pendingUpdate: any = null;
+    let rafId: number | null = null;
+
+    const applyUpdate = () => {
+      rafId = null;
+      if (!pendingUpdate) return;
+      const updated = pendingUpdate;
+      pendingUpdate = null;
+
+      setTask((prev) => {
+        const spdBps = updated.speed_bps ?? updated.speedBps ?? updated.speed_bytes_per_sec ?? prev?.speed_bps ?? 0;
+        const spdFormatted = updated.speed_formatted ?? updated.speedFormatted ?? (spdBps > 0 ? `${formatBytes(spdBps)}/s` : prev?.speed_formatted || "0 B/s");
+        const etaFormatted = updated.eta_formatted ?? updated.etaFormatted ?? prev?.eta_formatted ?? "--";
+        const pct = updated.percent !== undefined ? updated.percent : (prev?.percent ?? 0);
+        const downBytes = updated.downloaded_bytes ?? updated.downloadedBytes ?? prev?.downloaded_bytes ?? 0;
+        const totBytes = updated.total_bytes ?? updated.totalBytes ?? prev?.total_bytes ?? 0;
+
+        if (!prev) {
+          return {
+            id: taskId,
+            url: updated.url || "",
+            filename: updated.filename || "Downloading...",
+            save_path: updated.save_path || updated.savePath || "",
+            savePath: updated.savePath || updated.save_path || "",
+            total_bytes: totBytes,
+            downloaded_bytes: downBytes,
+            percent: pct,
+            speed_bps: spdBps,
+            speed_formatted: spdFormatted,
+            eta_formatted: etaFormatted,
+            status: updated.status || "downloading",
+            category: updated.category || "video",
+            chunk_count: updated.chunk_count ?? updated.chunkCount ?? 1,
+            is_resumable: updated.is_resumable ?? updated.isResumable ?? true,
+            chunks: updated.chunks || [],
+            speed_history: updated.speed_history || updated.speedHistory || [],
+            error_message: updated.error_message || updated.errorMessage,
+            created_at: updated.created_at || new Date().toLocaleTimeString(),
+          };
+        }
+        return {
+          ...prev,
+          ...updated,
+          id: taskId,
+          percent: pct,
+          downloaded_bytes: downBytes,
+          total_bytes: totBytes,
+          speed_bps: spdBps,
+          speed_formatted: spdFormatted,
+          eta_formatted: etaFormatted,
+          status: updated.status || prev.status,
+          filename: updated.filename || prev.filename,
+          url: updated.url || prev.url,
+          save_path: updated.save_path || updated.savePath || prev.save_path || prev.savePath,
+          savePath: updated.savePath || updated.save_path || prev.savePath || prev.save_path,
+          category: updated.category || prev.category,
+        };
+      });
+    };
 
     const setupListeners = async () => {
       try {
-        const handleUpdate = (updated: any) => {
-          const id = updated?.id || updated?.taskId || updated?.task_id;
+        unlisten = await listen<any>("download-progress", (e) => {
+          const id = e.payload?.id || e.payload?.taskId || e.payload?.task_id;
           if (id === taskId) {
-            setTask((prev) => {
-              const spdBps = updated.speed_bps ?? updated.speedBps ?? updated.speed_bytes_per_sec ?? prev?.speed_bps ?? 0;
-              const spdFormatted = updated.speed_formatted ?? updated.speedFormatted ?? (spdBps > 0 ? `${formatBytes(spdBps)}/s` : prev?.speed_formatted || "0 B/s");
-              const etaFormatted = updated.eta_formatted ?? updated.etaFormatted ?? prev?.eta_formatted ?? "--";
-              const pct = updated.percent !== undefined ? updated.percent : (prev?.percent ?? 0);
-              const downBytes = updated.downloaded_bytes ?? updated.downloadedBytes ?? prev?.downloaded_bytes ?? 0;
-              const totBytes = updated.total_bytes ?? updated.totalBytes ?? prev?.total_bytes ?? 0;
-
-              if (!prev) {
-                return {
-                  id: taskId,
-                  url: updated.url || "",
-                  filename: updated.filename || "Downloading...",
-                  save_path: updated.save_path || updated.savePath || "",
-                  savePath: updated.savePath || updated.save_path || "",
-                  total_bytes: totBytes,
-                  downloaded_bytes: downBytes,
-                  percent: pct,
-                  speed_bps: spdBps,
-                  speed_formatted: spdFormatted,
-                  eta_formatted: etaFormatted,
-                  status: updated.status || "downloading",
-                  category: updated.category || "video",
-                  chunk_count: updated.chunk_count ?? updated.chunkCount ?? 1,
-                  is_resumable: updated.is_resumable ?? updated.isResumable ?? true,
-                  chunks: updated.chunks || [],
-                  speed_history: updated.speed_history || updated.speedHistory || [],
-                  error_message: updated.error_message || updated.errorMessage,
-                  created_at: updated.created_at || new Date().toLocaleTimeString(),
-                };
-              }
-              return {
-                ...prev,
-                ...updated,
-                id: taskId,
-                percent: pct,
-                downloaded_bytes: downBytes,
-                total_bytes: totBytes,
-                speed_bps: spdBps,
-                speed_formatted: spdFormatted,
-                eta_formatted: etaFormatted,
-                status: updated.status || prev.status,
-                filename: updated.filename || prev.filename,
-                url: updated.url || prev.url,
-                save_path: updated.save_path || updated.savePath || prev.save_path || prev.savePath,
-                savePath: updated.savePath || updated.save_path || prev.savePath || prev.save_path,
-                category: updated.category || prev.category,
-              };
-            });
+            pendingUpdate = { ...pendingUpdate, ...e.payload };
+            if (!rafId) {
+              rafId = window.requestAnimationFrame(applyUpdate);
+            }
           }
-        };
-
-        unlistenProgress = await listen<any>("progress", (e) => handleUpdate(e.payload));
-        unlistenHttp = await listen<any>("download-progress", (e) => handleUpdate(e.payload));
-        unlistenMedia = await listen<any>("ytdlp-progress", (e) => handleUpdate(e.payload));
-        unlistenZr = await listen<any>("zr://progress", (e) => handleUpdate(e.payload));
+        });
       } catch (e) {
         console.warn("Event listen error in popup window:", e);
       }
@@ -164,25 +169,33 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
     setupListeners();
 
     return () => {
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenHttp) unlistenHttp();
-      if (unlistenMedia) unlistenMedia();
-      if (unlistenZr) unlistenZr();
+      if (unlisten) unlisten();
+      if (rafId) window.cancelAnimationFrame(rafId);
     };
   }, [taskId]);
 
-  // Update native OS window title dynamically
+  // Update native OS window title dynamically (throttled to avoid Windows message queue lag)
+  const lastTitleUpdateRef = React.useRef<number>(0);
+
   useEffect(() => {
     if (!task) return;
-    const win = getCurrentWindow();
+    const now = Date.now();
     const clampedPercent = Math.min(100, Math.max(0, task.percent || 0));
+    const isFinished = task.status === "completed" || clampedPercent >= 100;
+
+    if (!isFinished && now - lastTitleUpdateRef.current < 500) {
+      return;
+    }
+    lastTitleUpdateRef.current = now;
+
+    const win = getCurrentWindow();
     const fn = task.filename || "Downloading...";
-    if (task.status === "completed" || clampedPercent >= 100) {
+    if (isFinished) {
       win.setTitle(`100% Complete - ${fn}`).catch(() => {});
     } else if (task.status === "error") {
       win.setTitle(`Download Error - ${fn}`).catch(() => {});
     } else if (task.status === "paused") {
-      win.setTitle(`Paused (${clampedPercent.toFixed(1)}%) - ${fn}`).catch(() => {});
+      win.setTitle(`Paused (${clampedPercent.toFixed(0)}%) - ${fn}`).catch(() => {});
     } else {
       win.setTitle(`${clampedPercent.toFixed(1)}% of ${fn}`).catch(() => {});
     }

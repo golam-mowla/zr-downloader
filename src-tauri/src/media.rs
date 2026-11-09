@@ -1536,7 +1536,7 @@ pub async fn start_download(
                 for line in reader.lines().flatten() {
                     let trimmed = line.trim().to_string();
                     if !trimmed.is_empty() {
-                        let _ = app_err.emit("download-log", trimmed.clone());
+                        // err log throttled
 
                         // Live progress for FFmpeg cut & encoding from stderr
                         if let Some((sec, speed)) = parse_ffmpeg_time_and_speed(&trimmed) {
@@ -1584,6 +1584,7 @@ pub async fn start_download(
         // Read stdout for progress lines
         let mut last_total_bytes: u64 = 0;
         let mut last_downloaded_bytes: u64 = 0;
+        let mut last_emit_instant = std::time::Instant::now();
         if let Some(so) = stdout {
             let reader = BufReader::new(so);
             for line in reader.lines().flatten() {
@@ -1595,7 +1596,7 @@ pub async fn start_download(
                 if trimmed.is_empty() {
                     continue;
                 }
-                let _ = app.emit("download-log", trimmed.to_string());
+                // log emit throttled
 
                 // Parse structured ZR progress template: [ZR_PROG] 45.2% | 1234567 | 2345678 | NA | 3.80MiB/s | 01:30:00
                 let is_zr_prog = trimmed.contains("[ZR_PROG]");
@@ -1654,27 +1655,31 @@ pub async fn start_download(
                             }
                         }
 
-                        let zr_payload = serde_json::json!({
-                            "id": tid.clone(),
-                            "taskId": tid.clone(),
-                            "percent": pct,
-                            "text": format!("{:.1}% of {} at {}", pct, format_bytes(last_total_bytes), speed_str),
-                            "speed": speed_str.clone(),
-                            "speed_formatted": speed_str.clone(),
-                            "speedFormatted": speed_str.clone(),
-                            "speed_bps": speed_bps,
-                            "speedBps": speed_bps,
-                            "eta": eta_str.clone(),
-                            "eta_formatted": eta_str.clone(),
-                            "etaFormatted": eta_str.clone(),
-                            "total_bytes": last_total_bytes,
-                            "totalBytes": last_total_bytes,
-                            "downloaded_bytes": last_downloaded_bytes,
-                            "downloadedBytes": last_downloaded_bytes,
-                            "status": "downloading".to_string(),
-                        });
-                        let _ = app.emit("download-progress", zr_payload.clone());
-                        let _ = app.emit("ytdlp-progress", zr_payload);
+                        let now = std::time::Instant::now();
+                        let elapsed_ms = now.duration_since(last_emit_instant).as_millis();
+                        if elapsed_ms >= 250 || pct >= 99.5 {
+                            last_emit_instant = now;
+                            let zr_payload = serde_json::json!({
+                                "id": tid.clone(),
+                                "taskId": tid.clone(),
+                                "percent": pct,
+                                "text": format!("{:.1}% of {} at {}", pct, format_bytes(last_total_bytes), speed_str),
+                                "speed": speed_str.clone(),
+                                "speed_formatted": speed_str.clone(),
+                                "speedFormatted": speed_str.clone(),
+                                "speed_bps": speed_bps,
+                                "speedBps": speed_bps,
+                                "eta": eta_str.clone(),
+                                "eta_formatted": eta_str.clone(),
+                                "etaFormatted": eta_str.clone(),
+                                "total_bytes": last_total_bytes,
+                                "totalBytes": last_total_bytes,
+                                "downloaded_bytes": last_downloaded_bytes,
+                                "downloadedBytes": last_downloaded_bytes,
+                                "status": "downloading".to_string(),
+                            });
+                            let _ = app.emit("download-progress", zr_payload);
+                        }
                         continue;
                     }
                 }
