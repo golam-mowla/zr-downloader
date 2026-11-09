@@ -188,54 +188,62 @@ export const App: React.FC = () => {
     loadInitialData();
   }, []);
 
-  // Listen to Tauri backend events
+  // Listen to Tauri backend events with high-performance requestAnimationFrame batching
   useEffect(() => {
-    const handleProgress = (event: { payload: any }) => {
-      const updated = event.payload;
-      const id = updated?.id || updated?.taskId || updated?.task_id;
-      if (!updated || !id) return;
-      updated.id = id;
+    const pendingUpdates = new Map<string, any>();
+    let rafId: number | null = null;
+
+    const flushBatch = () => {
+      rafId = null;
+      if (pendingUpdates.size === 0) return;
+      const updates = Array.from(pendingUpdates.values());
+      pendingUpdates.clear();
+
       setTasks((prev) => {
-        const index = prev.findIndex((t) => t.id === updated.id);
+        let changed = false;
+        const next = [...prev];
         const now = new Date();
         const timeStr = `${now.getMinutes()}:${now.getSeconds()}`;
-        const speedBps = updated.speed_bps || updated.speedBps || updated.speed_bytes_per_sec || 0;
-        const speedKb = Math.round(speedBps / 1024);
-        const downloadedBytes = updated.downloaded_bytes ?? updated.downloadedBytes ?? updated.downloaded ?? 0;
-        const totalBytes = updated.total_bytes ?? updated.totalBytes ?? updated.total ?? 0;
-        const isResumable = Boolean(updated.is_resumable ?? updated.isResumable ?? updated.supports_ranges ?? false);
 
-        if (index >= 0) {
-          const current = prev[index];
-          const prevHistory = current.speedHistory || [];
-          const newHistory = [...prevHistory, { time: timeStr, speedKb }].slice(-25);
+        for (const updated of updates) {
+          const index = next.findIndex((t) => t.id === updated.id);
+          const speedBps = updated.speed_bps || updated.speedBps || updated.speed_bytes_per_sec || 0;
+          const speedKb = Math.round(speedBps / 1024);
+          const downloadedBytes = updated.downloaded_bytes ?? updated.downloadedBytes ?? updated.downloaded ?? 0;
+          const totalBytes = updated.total_bytes ?? updated.totalBytes ?? updated.total ?? 0;
+          const isResumable = Boolean(updated.is_resumable ?? updated.isResumable ?? updated.supports_ranges ?? false);
 
-          const updatedList = [...prev];
-          updatedList[index] = {
-            ...current,
-            ...updated,
-            percent: (updated.percent !== undefined && updated.percent !== null) ? Number(updated.percent) : current.percent,
-            downloaded_bytes: downloadedBytes || current.downloaded_bytes || 0,
-            downloadedBytes: downloadedBytes || current.downloadedBytes || 0,
-            total_bytes: totalBytes || current.total_bytes || current.totalBytes || 0,
-            totalBytes: totalBytes || current.total_bytes || current.totalBytes || 0,
-            is_resumable: isResumable || current.is_resumable || current.isResumable || false,
-            isResumable: isResumable || current.isResumable || current.is_resumable || false,
-            speed_bytes_per_sec: speedBps,
-            speedBps,
-            speed_formatted: updated.speed_formatted || updated.speedFormatted || updated.speed || (speedBps > 0 ? (speedBps >= 1048576 ? `${(speedBps / 1048576).toFixed(2)} MB/s` : `${(speedBps / 1024).toFixed(1)} KB/s`) : "0 B/s"),
-            speedFormatted: updated.speed_formatted || updated.speedFormatted || updated.speed || (speedBps > 0 ? (speedBps >= 1048576 ? `${(speedBps / 1048576).toFixed(2)} MB/s` : `${(speedBps / 1024).toFixed(1)} KB/s`) : "0 B/s"),
-            speed: updated.speed_formatted || updated.speedFormatted || updated.speed || (speedBps > 0 ? (speedBps >= 1048576 ? `${(speedBps / 1048576).toFixed(2)} MB/s` : `${(speedBps / 1024).toFixed(1)} KB/s`) : "0 B/s"),
-            eta_formatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
-            etaFormatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
-            eta: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
-            errorMessage: updated.error_message || updated.errorMessage || current.errorMessage,
-            speedHistory: newHistory,
-          };
-          return updatedList;
-        } else {
-          return [
-            {
+          if (index >= 0) {
+            const current = next[index];
+            const prevHistory = current.speedHistory || [];
+            const newHistory = speedBps > 0
+              ? [...prevHistory, { time: timeStr, speedKb }].slice(-25)
+              : prevHistory;
+
+            next[index] = {
+              ...current,
+              ...updated,
+              percent: (updated.percent !== undefined && updated.percent !== null) ? Number(updated.percent) : current.percent,
+              downloaded_bytes: downloadedBytes || current.downloaded_bytes || 0,
+              downloadedBytes: downloadedBytes || current.downloadedBytes || 0,
+              total_bytes: totalBytes || current.total_bytes || current.totalBytes || 0,
+              totalBytes: totalBytes || current.total_bytes || current.totalBytes || 0,
+              is_resumable: isResumable || current.is_resumable || current.isResumable || false,
+              isResumable: isResumable || current.isResumable || current.is_resumable || false,
+              speed_bytes_per_sec: speedBps,
+              speedBps,
+              speed_formatted: updated.speed_formatted || updated.speedFormatted || updated.speed || (speedBps > 0 ? (speedBps >= 1048576 ? `${(speedBps / 1048576).toFixed(2)} MB/s` : `${(speedBps / 1024).toFixed(1)} KB/s`) : "0 B/s"),
+              speedFormatted: updated.speed_formatted || updated.speedFormatted || updated.speed || (speedBps > 0 ? (speedBps >= 1048576 ? `${(speedBps / 1048576).toFixed(2)} MB/s` : `${(speedBps / 1024).toFixed(1)} KB/s`) : "0 B/s"),
+              speed: updated.speed_formatted || updated.speedFormatted || updated.speed || (speedBps > 0 ? (speedBps >= 1048576 ? `${(speedBps / 1048576).toFixed(2)} MB/s` : `${(speedBps / 1024).toFixed(1)} KB/s`) : "0 B/s"),
+              eta_formatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
+              etaFormatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
+              eta: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
+              errorMessage: updated.error_message || updated.errorMessage || current.errorMessage,
+              speedHistory: newHistory,
+            };
+            changed = true;
+          } else {
+            next.unshift({
               ...updated,
               downloaded_bytes: downloadedBytes,
               downloadedBytes,
@@ -252,16 +260,27 @@ export const App: React.FC = () => {
               etaFormatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
               eta: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
               speedHistory: [{ time: timeStr, speedKb }],
-            },
-            ...prev,
-          ];
+            });
+            changed = true;
+          }
         }
+        return changed ? next : prev;
       });
+    };
+
+    const handleProgress = (event: { payload: any }) => {
+      const updated = event.payload;
+      const id = updated?.id || updated?.taskId || updated?.task_id;
+      if (!updated || !id) return;
+      updated.id = id;
+      pendingUpdates.set(id, { ...(pendingUpdates.get(id) || {}), ...updated });
+      if (!rafId) {
+        rafId = window.requestAnimationFrame(flushBatch);
+      }
     };
 
     // 1. Download progress event
     const unlistenProgress = listen<any>("download-progress", handleProgress);
-    const unlistenZrProgress = listen<any>("zr://progress", handleProgress);
 
     // 2. Download complete event
     const handleComplete = (event: { payload: any }) => {
@@ -512,7 +531,7 @@ export const App: React.FC = () => {
 
     return () => {
       unlistenProgress.then((f) => f()).catch(() => {});
-      unlistenZrProgress.then((f) => f()).catch(() => {});
+      // unlistenZrProgress removed
       unlistenComplete.then((f) => f()).catch(() => {});
       unlistenZrComplete.then((f) => f()).catch(() => {});
       unlistenError.then((f) => f()).catch(() => {});

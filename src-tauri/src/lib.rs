@@ -197,7 +197,9 @@ async fn get_all_downloads(
     {
         let media_tasks = download_state.tasks.lock().unwrap();
         for t in media_tasks.values() {
-            if !list.iter().any(|existing| existing.id == t.id) {
+            if let Some(pos) = list.iter().position(|existing| existing.id == t.id) {
+                list[pos] = t.clone();
+            } else {
                 list.push(t.clone());
             }
         }
@@ -212,13 +214,20 @@ async fn get_download_task(
     download_state: State<'_, DownloadState>,
     task_id: String,
 ) -> Result<Option<DownloadTask>, String> {
-    {
+    if task_id.starts_with("media-") {
+        let media_tasks = download_state.tasks.lock().unwrap();
+        if let Some(t) = media_tasks.get(&task_id) {
+            return Ok(Some(t.clone()));
+        }
         let tasks = state.tasks.read().await;
         if let Some(t) = tasks.get(&task_id) {
             return Ok(Some(t.clone()));
         }
-    }
-    {
+    } else {
+        let tasks = state.tasks.read().await;
+        if let Some(t) = tasks.get(&task_id) {
+            return Ok(Some(t.clone()));
+        }
         let media_tasks = download_state.tasks.lock().unwrap();
         if let Some(t) = media_tasks.get(&task_id) {
             return Ok(Some(t.clone()));
@@ -564,34 +573,60 @@ async fn open_download_window(
             .to_string()
     });
     if let Some(ref val) = initial_task {
-        let t = DownloadTask {
-            id: task_id.clone(),
-            url: val.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-            filename: val.get("filename").and_then(|v| v.as_str()).unwrap_or("Download.mp4").to_string(),
-            save_path: val.get("save_path").or_else(|| val.get("savePath")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-            total_bytes: val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
-            downloaded_bytes: val.get("downloaded_bytes").or_else(|| val.get("downloadedBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
-            percent: val.get("percent").and_then(|v| v.as_f64()).unwrap_or(1.0),
-            speed_bps: val.get("speed_bps").or_else(|| val.get("speedBps")).and_then(|v| v.as_u64()).unwrap_or(0),
-            speed_formatted: val.get("speed_formatted").or_else(|| val.get("speedFormatted")).and_then(|v| v.as_str()).unwrap_or("Connecting...").to_string(),
-            eta_formatted: val.get("eta_formatted").or_else(|| val.get("etaFormatted")).and_then(|v| v.as_str()).unwrap_or("--").to_string(),
-            status: val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string(),
-            category: val.get("category").and_then(|v| v.as_str()).unwrap_or("video").to_string(),
-            chunk_count: 1,
-            is_resumable: true,
-            low_disk_space: val.get("low_disk_space").or_else(|| val.get("lowDiskSpace")).and_then(|v| v.as_bool()).unwrap_or(false),
-            chunks: Vec::new(),
-            speed_history: Vec::new(),
-            error_message: None,
-            created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-        };
-
-        if let Ok(mut tasks_lock) = download_state.tasks.lock() {
-            tasks_lock.insert(task_id.clone(), t.clone());
-        }
-        {
+        let is_media = task_id.starts_with("media-");
+        if is_media {
+            if let Ok(mut tasks_lock) = download_state.tasks.lock() {
+                if !tasks_lock.contains_key(&task_id) {
+                    let t = DownloadTask {
+                        id: task_id.clone(),
+                        url: val.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        filename: val.get("filename").and_then(|v| v.as_str()).unwrap_or("Download.mp4").to_string(),
+                        save_path: val.get("save_path").or_else(|| val.get("savePath")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        total_bytes: val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+                        downloaded_bytes: val.get("downloaded_bytes").or_else(|| val.get("downloadedBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+                        percent: val.get("percent").and_then(|v| v.as_f64()).unwrap_or(1.0),
+                        speed_bps: val.get("speed_bps").or_else(|| val.get("speedBps")).and_then(|v| v.as_u64()).unwrap_or(0),
+                        speed_formatted: val.get("speed_formatted").or_else(|| val.get("speedFormatted")).and_then(|v| v.as_str()).unwrap_or("Connecting...").to_string(),
+                        eta_formatted: val.get("eta_formatted").or_else(|| val.get("etaFormatted")).and_then(|v| v.as_str()).unwrap_or("--").to_string(),
+                        status: val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string(),
+                        category: val.get("category").and_then(|v| v.as_str()).unwrap_or("video").to_string(),
+                        chunk_count: 1,
+                        is_resumable: true,
+                        low_disk_space: val.get("low_disk_space").or_else(|| val.get("lowDiskSpace")).and_then(|v| v.as_bool()).unwrap_or(false),
+                        chunks: Vec::new(),
+                        speed_history: Vec::new(),
+                        error_message: None,
+                        created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                    };
+                    tasks_lock.insert(task_id.clone(), t);
+                }
+            }
+        } else {
             let mut engine_tasks = state.tasks.write().await;
-            engine_tasks.insert(task_id.clone(), t);
+            if !engine_tasks.contains_key(&task_id) {
+                let t = DownloadTask {
+                    id: task_id.clone(),
+                    url: val.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    filename: val.get("filename").and_then(|v| v.as_str()).unwrap_or("Download.mp4").to_string(),
+                    save_path: val.get("save_path").or_else(|| val.get("savePath")).and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    total_bytes: val.get("total_bytes").or_else(|| val.get("totalBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+                    downloaded_bytes: val.get("downloaded_bytes").or_else(|| val.get("downloadedBytes")).and_then(|v| v.as_u64()).unwrap_or(0),
+                    percent: val.get("percent").and_then(|v| v.as_f64()).unwrap_or(1.0),
+                    speed_bps: val.get("speed_bps").or_else(|| val.get("speedBps")).and_then(|v| v.as_u64()).unwrap_or(0),
+                    speed_formatted: val.get("speed_formatted").or_else(|| val.get("speedFormatted")).and_then(|v| v.as_str()).unwrap_or("Connecting...").to_string(),
+                    eta_formatted: val.get("eta_formatted").or_else(|| val.get("etaFormatted")).and_then(|v| v.as_str()).unwrap_or("--").to_string(),
+                    status: val.get("status").and_then(|v| v.as_str()).unwrap_or("downloading").to_string(),
+                    category: val.get("category").and_then(|v| v.as_str()).unwrap_or("video").to_string(),
+                    chunk_count: 1,
+                    is_resumable: true,
+                    low_disk_space: val.get("low_disk_space").or_else(|| val.get("lowDiskSpace")).and_then(|v| v.as_bool()).unwrap_or(false),
+                    chunks: Vec::new(),
+                    speed_history: Vec::new(),
+                    error_message: None,
+                    created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                };
+                engine_tasks.insert(task_id.clone(), t);
+            }
         }
     }
     let clean_label = format!("dl_{}", task_id.replace(|c: char| !c.is_alphanumeric(), "_"));
