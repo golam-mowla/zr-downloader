@@ -90,6 +90,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
   // Listen to Tauri progress events with throttled state updates
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenError: (() => void) | undefined;
     let pendingUpdate: any = null;
     let rafId: number | null = null;
 
@@ -161,6 +162,23 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
             }
           }
         });
+        unlistenError = await listen<any>("download-error", (e) => {
+          const id = e.payload?.id || e.payload?.taskId || e.payload?.task_id;
+          if (id === taskId) {
+            const errorMsg = e.payload?.error || "Download failed";
+            pendingUpdate = {
+              ...pendingUpdate,
+              status: "error",
+              error_message: errorMsg,
+              errorMessage: errorMsg,
+              speed_formatted: "0 B/s",
+              eta_formatted: "--",
+            };
+            if (!rafId) {
+              rafId = window.requestAnimationFrame(applyUpdate);
+            }
+          }
+        });
       } catch (e) {
         console.warn("Event listen error in popup window:", e);
       }
@@ -170,6 +188,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
 
     return () => {
       if (unlisten) unlisten();
+      if (unlistenError) unlistenError();
       if (rafId) window.cancelAnimationFrame(rafId);
     };
   }, [taskId]);
