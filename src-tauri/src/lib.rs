@@ -215,18 +215,22 @@ async fn get_download_task(
     task_id: String,
 ) -> Result<Option<DownloadTask>, String> {
     if task_id.starts_with("media-") {
-        let media_tasks = download_state.tasks.lock().unwrap();
-        if let Some(t) = media_tasks.get(&task_id) {
-            return Ok(Some(t.clone()));
+        {
+            let media_tasks = download_state.tasks.lock().unwrap();
+            if let Some(t) = media_tasks.get(&task_id) {
+                return Ok(Some(t.clone()));
+            }
         }
         let tasks = state.tasks.read().await;
         if let Some(t) = tasks.get(&task_id) {
             return Ok(Some(t.clone()));
         }
     } else {
-        let tasks = state.tasks.read().await;
-        if let Some(t) = tasks.get(&task_id) {
-            return Ok(Some(t.clone()));
+        {
+            let tasks = state.tasks.read().await;
+            if let Some(t) = tasks.get(&task_id) {
+                return Ok(Some(t.clone()));
+            }
         }
         let media_tasks = download_state.tasks.lock().unwrap();
         if let Some(t) = media_tasks.get(&task_id) {
