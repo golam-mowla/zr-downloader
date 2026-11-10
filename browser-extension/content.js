@@ -548,10 +548,201 @@
   // IDM-Style Format Dropdown Menu
   // ---------------------------------------------------------------------------
   function hideDropdown() {
+    dropdownSeq++; // invalidates any async build still in flight
     if (activeDropdown) {
       activeDropdown.remove();
       activeDropdown = null;
     }
+    document.querySelectorAll("#zr-format-dropdown").forEach((n) => n.remove());
+    try {
+      scheduleHide();
+    } catch (e) {}
+  }
+
+  // Close the quality list on ANY outside interaction (clicks, other tabs/iframes, scroll, Esc)
+  (function installDropdownDismissers() {
+    const dismissIfOutside = (e) => {
+      if (!activeDropdown) return;
+      const path = e.composedPath ? e.composedPath() : [e.target];
+      if (path.includes(activeDropdown)) return;
+      if (activeGrabberButton && path.includes(activeGrabberButton)) return;
+      hideDropdown();
+    };
+    ["pointerdown", "mousedown", "touchstart", "click", "auxclick", "contextmenu"].forEach((t) =>
+      window.addEventListener(t, dismissIfOutside, true)
+    );
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (e.key === "Escape" && activeDropdown) hideDropdown();
+      },
+      true
+    );
+    // Clicking inside an iframe (video players) never reaches this document, but it blurs the window.
+    window.addEventListener("blur", () => {
+      if (activeDropdown) hideDropdown();
+    });
+    window.addEventListener("resize", () => {
+      if (activeDropdown) hideDropdown();
+    });
+    window.addEventListener(
+      "scroll",
+      (e) => {
+        if (activeDropdown && !(e.target && activeDropdown.contains && activeDropdown.contains(e.target))) {
+          hideDropdown();
+        }
+      },
+      true
+    );
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && activeDropdown) hideDropdown();
+    });
+  })();
+
+  // --- Real quality list (IDM-style) from ZR Downloader's yt-dlp engine -------------------------
+  let dropdownSeq = 0;
+  const zrFormatsCache = new Map(); // pageUrl -> { t, promise }
+  const ZR_FORMAT_HOSTS =
+    /(youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com|reddit\.com|twitch\.tv|kick\.com)/i;
+
+  function fetchRealFormats(pageUrl) {
+    const hit = zrFormatsCache.get(pageUrl);
+    if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.promise;
+    const promise = new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ action: "GET_FORMATS", url: pageUrl }, (resp) => {
+          if (chrome.runtime.lastError || !resp || !resp.ok || !resp.info) {
+            zrFormatsCache.delete(pageUrl);
+            resolve(null);
+            return;
+          }
+          resolve(resp.info);
+        });
+      } catch (e) {
+        zrFormatsCache.delete(pageUrl);
+        resolve(null);
+      }
+    });
+    zrFormatsCache.set(pageUrl, { t: Date.now(), promise });
+    return promise;
+  }
+
+  function prefetchFormatsForPage() {
+    try {
+      if (ZR_FORMAT_HOSTS.test(location.hostname)) fetchRealFormats(location.href);
+    } catch (e) {}
+  }
+
+  function buildRealFormatOptions(info, pageUrl, fallbackTitle, durStr) {
+    const streams = (info.videoStreams || []).filter((s) => s && s.height);
+    if (!streams.length) return [];
+    const title = (info.title || fallbackTitle || "Video").replace(/\.mp4$/i, "");
+    const cleanTitle = title.length > 55 ? title.slice(0, 55) + "..." : title;
+    const shortTitle = getShortTitle(cleanTitle, 28);
+    const dur = durStr || formatDurationForList(info.duration);
+
+    // One row per (height, fps): prefer MP4, then the largest stream
+    const best = new Map();
+    const score = (x) => (x.ext === "mp4" ? 1e13 : 0) + (x.filesize || 0);
+    streams.forEach((st) => {
+      const fps = st.fps && st.fps > 30 ? st.fps : 30;
+      const key = `${st.height}_${fps}`;
+      const cur = best.get(key);
+      if (!cur || score(st) > score(cur)) best.set(key, st);
+    });
+    const rows = Array.from(best.values()).sort(
+      (a, b) => b.height - a.height || (b.fps || 0) - (a.fps || 0)
+    );
+
+    const options = [];
+    rows.forEach((st) => {
+      const hd = st.height >= 720 ? `${st.height}p HD` : `${st.height}p`;
+      const fpsInfo = st.fps && st.fps > 30 ? ` ${st.fps}fps` : "";
+      const sizeInfo = st.filesize ? `, ${formatBytes(st.filesize)}` : "";
+      options.push({
+        label: `${shortTitle}, MP4 file, ${dur}quality ${hd}${fpsInfo}${sizeInfo}`,
+        fullLabel: `${cleanTitle}, MP4 file, ${dur}quality ${hd}${fpsInfo}${sizeInfo}`,
+        shortTitle,
+        formatDisplay: `${hd}${fpsInfo} • ${(st.ext || "mp4").toUpperCase()}${st.filesize ? " • " + formatBytes(st.filesize) : ""}`,
+        quality: `${st.height}p`,
+        formatId: st.id,
+        url: pageUrl,
+        container: "MP4",
+        filename: `${cleanTitle}.mp4`,
+      });
+    });
+
+    options.push({
+      label: `${shortTitle}, MP3 Audio, ${dur}Highest Quality`,
+      fullLabel: `${cleanTitle}, MP3 Audio, ${dur}Highest Quality`,
+      shortTitle,
+      formatDisplay: "MP3 Audio",
+      quality: "Audio",
+      url: pageUrl,
+      container: "MP3",
+      filename: `${cleanTitle}.mp3`,
+    });
+
+    if (info.thumbnail && /^https?:/i.test(info.thumbnail)) {
+      options.push({
+        label: `${shortTitle}, Thumbnail (JPG)`,
+        fullLabel: `${cleanTitle}, Thumbnail (JPG)`,
+        shortTitle,
+        formatDisplay: "Thumbnail JPG",
+        quality: "Thumbnail",
+        url: info.thumbnail,
+        container: "JPG",
+        isDirectFile: true,
+        filename: `${cleanTitle.slice(0, 45)}_thumbnail.jpg`,
+      });
+    }
+    return options;
+  }
+
+  function formatDurationForList(totalSec) {
+    if (!totalSec || isNaN(totalSec) || totalSec <= 0) return "";
+    const s = Math.round(totalSec);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return m > 0 ? `${h} hours ${m} min, ` : `${h} hours, `;
+    if (m > 0 && s % 60 === 0) return `${m} min, `;
+    return `${s} sec, `;
+  }
+
+  function createDropdownShell(anchorBtn) {
+    document.querySelectorAll("#zr-format-dropdown").forEach((n) => n.remove());
+    const shell = document.createElement("div");
+    shell.id = "zr-format-dropdown";
+    Object.assign(shell.style, {
+      position: "fixed",
+      zIndex: "2147483647",
+      background: "#ffffff",
+      border: "1px solid #717171",
+      boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+      borderRadius: "2px",
+      minWidth: "380px",
+      maxWidth: "640px",
+      fontFamily: 'Tahoma, "Segoe UI", Arial, sans-serif',
+      fontSize: "12px",
+      color: "#0f172a",
+      direction: "ltr",
+      userSelect: "none",
+      overflow: "hidden",
+    });
+    const loading = document.createElement("div");
+    loading.innerText = "ZR Downloader — fetching available qualities…";
+    Object.assign(loading.style, { padding: "10px 14px", color: "#475569" });
+    shell.appendChild(loading);
+    const btnRect = anchorBtn.getBoundingClientRect();
+    shell.style.top = `${Math.min(window.innerHeight - 120, btnRect.bottom + 2)}px`;
+    if (btnRect.left < window.innerWidth / 2) {
+      shell.style.left = `${Math.max(8, btnRect.left)}px`;
+    } else {
+      shell.style.right = `${Math.max(8, window.innerWidth - btnRect.right)}px`;
+    }
+    (document.fullscreenElement || document.webkitFullscreenElement || document.body).appendChild(shell);
+    activeDropdown = shell;
+    return shell;
   }
 
   async function showFormatDropdown(anchorBtn, mediaTarget) {
@@ -559,6 +750,10 @@
       hideDropdown();
       return;
     }
+    // Show the panel immediately (IDM-like) and fill it when the data arrives.
+    const shell = createDropdownShell(anchorBtn);
+    const mySeq = ++dropdownSeq;
+    const stillOpen = () => activeDropdown === shell && dropdownSeq === mySeq && shell.isConnected;
 
     // Preserve specific mediaTarget attached to this button
     if (!mediaTarget || !mediaTarget.videoEl) {
@@ -590,6 +785,8 @@
         sniffedStreams = resp.streams;
       }
     } catch (e) {}
+
+    if (!stillOpen()) return;
 
     const title = mediaTarget.title || "Video";
     const hostname = window.location.hostname;
@@ -631,8 +828,34 @@
 
     const options = [];
 
+    // 0. REAL formats straight from yt-dlp via the ZR app (accurate like IDM). Falls back to the
+    //    legacy detection below when ZR is offline or the site is not supported.
+    let realOptions = null;
+    {
+      const hasDirectSniffed = sniffedStreams.some((st) => !st.isAudio && st.contentLength > 50000);
+      const knownHost = ZR_FORMAT_HOSTS.test(hostname);
+      if (knownHost || !hasDirectSniffed) {
+        let pageUrl = mediaTarget.postUrl || mediaTarget.url || window.location.href;
+        if (/^(blob:|data:)/i.test(pageUrl)) pageUrl = window.location.href;
+        if (hostname.includes("youtube.com") && !/[?&]v=/.test(pageUrl) && !pageUrl.includes("youtu.be/")) {
+          pageUrl = window.location.href;
+        }
+        const info = await Promise.race([
+          fetchRealFormats(pageUrl),
+          new Promise((r) => setTimeout(() => r(null), 30000)),
+        ]);
+        if (!stillOpen()) return;
+        if (info) {
+          const built = buildRealFormatOptions(info, pageUrl, title, durStr);
+          if (built.length) realOptions = built;
+        }
+      }
+    }
+
     // 1. YouTube - Query REAL available qualities from player API, subtitles, and thumbnail
-    if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) {
+    if (realOptions && realOptions.length) {
+      options.push(...realOptions);
+    } else if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) {
       requestYouTubeData();
       let ytData = lastYouTubeData;
       if (!ytData || !ytData.qualities || ytData.qualities.length === 0) {
@@ -975,9 +1198,11 @@
       }
     }
 
-    // Create dropdown container
-    const dropdown = document.createElement("div");
-    dropdown.id = "zr-format-dropdown";
+    if (!stillOpen()) return;
+
+    // Fill the already-open panel
+    const dropdown = shell;
+    dropdown.innerHTML = "";
     Object.assign(dropdown.style, {
       position: "fixed",
       zIndex: "2147483647",
@@ -1123,6 +1348,7 @@
           url: stripRangeParams(opt.url || mediaTarget.url),
           filename: opt.filename || mediaTarget.title,
           quality: opt.quality,
+          formatId: opt.formatId || "",
           autoStart: true,
           container:
             opt.container || (opt.quality === "Audio" ? "MP3" : "MP4"),
@@ -1163,11 +1389,9 @@
     }
     dropdown.style.top = `${top}px`;
 
-    const container =
-      document.fullscreenElement ||
-      document.webkitFullscreenElement ||
-      document.body;
-    container.appendChild(dropdown);
+    if (!dropdown.isConnected) {
+      (document.fullscreenElement || document.webkitFullscreenElement || document.body).appendChild(dropdown);
+    }
     activeDropdown = dropdown;
   }
 
@@ -1450,6 +1674,7 @@
     activeGrabberButton.style.display = "flex";
     activeGrabberButton.style.opacity = "1";
     activeGrabberButton.style.pointerEvents = "auto";
+    prefetchFormatsForPage();
   }
 
   // ---------------------------------------------------------------------------

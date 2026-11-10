@@ -388,7 +388,30 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 // Send URL to ZR Downloader Desktop App
-async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "", isDirectFile = false, lowDiskSpace = false) {
+const formatsCache = new Map(); // url -> { t, promise }
+function getRealFormats(url) {
+  if (!url) return Promise.resolve(null);
+  const hit = formatsCache.get(url);
+  if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.promise;
+  const promise = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 65000);
+    try {
+      const res = await fetch(`${ZR_BRIDGE_URL}/formats?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+      if (!res.ok) throw new Error("formats " + res.status);
+      return await res.json();
+    } catch (e) {
+      formatsCache.delete(url);
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  formatsCache.set(url, { t: Date.now(), promise });
+  return promise;
+}
+
+async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "", isDirectFile = false, lowDiskSpace = false, formatId = "") {
   let cleanUrl = normalizeMediaUrl((mediaUrl || "").trim());
   if (!cleanUrl) return;
 
@@ -450,7 +473,8 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
     const containerParam = container ? `&container=${encodeURIComponent(container)}` : "";
     const directParam = isDirectFile ? `&isDirectFile=true` : "";
     const lowSpaceParam = lowDiskSpace ? `&lowDiskSpace=true` : "";
-    const bridgeEndpoint = `${ZR_BRIDGE_URL}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}`;
+    const formatParam = formatId ? `&formatid=${encodeURIComponent(formatId)}` : "";
+    const bridgeEndpoint = `${ZR_BRIDGE_URL}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}${formatParam}`;
     const resp = await fetch(bridgeEndpoint, {
       method: "GET",
       signal: controller.signal,
@@ -541,8 +565,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       request.referrer || "",
       request.container || "",
       Boolean(request.isDirectFile),
-      Boolean(request.lowDiskSpace)
+      Boolean(request.lowDiskSpace),
+      request.formatId || ""
     ).then((res) => sendResponse(res));
+    return true;
+  }
+
+  if (request.action === "GET_FORMATS") {
+    getRealFormats(request.url)
+      .then((info) => sendResponse({ ok: Boolean(info), info }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
 
