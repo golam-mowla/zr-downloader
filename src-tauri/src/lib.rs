@@ -321,6 +321,7 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
     let mut target_quality = None;
     let mut target_referrer = None;
     let mut target_container = None;
+    let mut target_format_id = None;
     let mut is_torrent = false;
     let mut auto_start = false;
     let mut is_direct_file = false;
@@ -347,6 +348,8 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
             target_referrer = Some(decode_percent_encoded(&part[9..]));
         } else if lower.starts_with("container=") {
             target_container = Some(decode_percent_encoded(&part[10..]));
+        } else if lower.starts_with("formatid=") {
+            target_format_id = Some(decode_percent_encoded(&part[9..]));
         } else if lower.starts_with("isdirectfile=") {
             let val = &part[13..];
             is_direct_file = val == "true" || val == "1";
@@ -371,6 +374,7 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
                 "isTorrent": is_detected_torrent,
                 "referrer": target_referrer,
                 "container": target_container,
+                "formatId": target_format_id,
                 "isDirectFile": is_direct_file,
                 "lowDiskSpace": low_disk_space
             }));
@@ -378,6 +382,8 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
     }
     None
 }
+
+static FORMATS_CACHE: std::sync::OnceLock<Mutex<HashMap<String, (std::time::Instant, String)>>> = std::sync::OnceLock::new();
 
 async fn start_local_bridge(app_handle: AppHandle) {
     let mut listener = None;
@@ -406,7 +412,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
             let handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                let mut buf = [0u8; 4096];
+                let mut buf = [0u8; 16384];
                 if let Ok(n) = stream.read(&mut buf).await {
                     let req_str = String::from_utf8_lossy(&buf[..n]);
 
@@ -416,7 +422,59 @@ async fn start_local_bridge(app_handle: AppHandle) {
                         return;
                     }
 
-                    if req_str.contains("/ping") {
+                    let first_line = req_str.lines().next().unwrap_or("").to_string();
+                    if first_line.starts_with("GET /formats?") {
+                        // Real, accurate quality list for the browser extension (IDM-style), powered by yt-dlp.
+                        let q = &first_line["GET /formats?".len()..];
+                        let q = q.split(" HTTP/").next().unwrap_or(q);
+                        let mut target = String::new();
+                        for part in q.split('&') {
+                            if let Some(v) = part.strip_prefix("url=") {
+                                target = decode_percent_encoded(v);
+                            }
+                        }
+                        let (status_line, body) = if target.trim().is_empty() {
+                            ("400 Bad Request", "{\"error\":\"missing_url\"}".to_string())
+                        } else {
+                            let cache = FORMATS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+                            let cached = cache.lock().ok().and_then(|m| {
+                                m.get(&target).and_then(|(t, body)| {
+                                    if t.elapsed() < std::time::Duration::from_secs(600) { Some(body.clone()) } else { None }
+                                })
+                            });
+                            if let Some(body) = cached {
+                                ("200 OK", body)
+                            } else {
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(60),
+                                    media::fetch_media_info(target.clone(), None, None, None, None),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(info)) => {
+                                        let body = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
+                                        if let Ok(mut m) = cache.lock() {
+                                            if m.len() > 64 { m.clear(); }
+                                            m.insert(target.clone(), (std::time::Instant::now(), body.clone()));
+                                        }
+                                        ("200 OK", body)
+                                    }
+                                    Ok(Err(e)) => ("502 Bad Gateway", serde_json::json!({ "error": e }).to_string()),
+                                    Err(_) => ("504 Gateway Timeout", "{\"error\":\"timeout\"}".to_string()),
+                                }
+                            }
+                        };
+                        let resp = format!(
+                            "HTTP/1.1 {}\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            status_line,
+                            body.as_bytes().len(),
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                        return;
+                    }
+
+                    if first_line.starts_with("GET /ping") || req_str.contains("/ping") && !first_line.contains("/open?") {
                         let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.9\"}\r\n";
                         let _ = stream.write_all(resp.as_bytes()).await;
                         return;

@@ -87,10 +87,39 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
     };
   }, [taskId]);
 
+  // Safety net: poll the backend once a second while the task is active, so the popup still
+  // shows real progress even if an event is missed (or the event bridge is unavailable).
+  useEffect(() => {
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const t = await invoke<DownloadTask | null>("get_download_task", { taskId, task_id: taskId });
+        if (t && !stopped) {
+          setTask((prev) => {
+            if (!prev) return t;
+            const finished = prev.status === "completed" || prev.status === "error";
+            if (finished && t.status === prev.status) return prev;
+            const same =
+              prev.percent === t.percent &&
+              prev.status === t.status &&
+              prev.downloaded_bytes === t.downloaded_bytes &&
+              prev.speed_formatted === t.speed_formatted;
+            return same ? prev : { ...prev, ...t, id: taskId };
+          });
+        }
+      } catch {}
+    };
+    const timer = window.setInterval(tick, 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [taskId]);
+
   // Listen to Tauri progress events with throttled state updates
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    let unlistenError: (() => void) | undefined;
     let pendingUpdate: any = null;
     let rafId: number | null = null;
 
@@ -162,23 +191,6 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
             }
           }
         });
-        unlistenError = await listen<any>("download-error", (e) => {
-          const id = e.payload?.id || e.payload?.taskId || e.payload?.task_id;
-          if (id === taskId) {
-            const errorMsg = e.payload?.error || "Download failed";
-            pendingUpdate = {
-              ...pendingUpdate,
-              status: "error",
-              error_message: errorMsg,
-              errorMessage: errorMsg,
-              speed_formatted: "0 B/s",
-              eta_formatted: "--",
-            };
-            if (!rafId) {
-              rafId = window.requestAnimationFrame(applyUpdate);
-            }
-          }
-        });
       } catch (e) {
         console.warn("Event listen error in popup window:", e);
       }
@@ -188,7 +200,6 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
 
     return () => {
       if (unlisten) unlisten();
-      if (unlistenError) unlistenError();
       if (rafId) window.cancelAnimationFrame(rafId);
     };
   }, [taskId]);
