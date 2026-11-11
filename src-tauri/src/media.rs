@@ -18,15 +18,21 @@ pub fn dirs_or_default_downloads() -> String {
     "Downloads".to_string()
 }
 use crate::downloader::DownloadTask;
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{command, AppHandle, Emitter, State};
+use tokio::io::AsyncWriteExt;
+
+static ENGINE_LOCK: Mutex<()> = Mutex::new(());
+static TOOL_UPDATES_CACHE: Mutex<Option<(Instant, Vec<ToolStatus>)>> = Mutex::new(None);
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -233,7 +239,7 @@ impl Default for DownloadOptions {
             proxy: String::new(),
             cookies_file: String::new(),
             cookies_browser: String::new(),
-            use_aria2c: false,
+            use_aria2c: true,
             aria2_connections: 8,
             ytdlp_discovery_args: String::new(),
             ytdlp_download_args: String::new(),
@@ -484,7 +490,34 @@ fn ensure_ffmpeg_available() -> Option<PathBuf> {
     None
 }
 
-fn ensure_ytdlp_available() -> Option<PathBuf> {
+fn replace_from_part(part: &Path, dest: &Path) -> Result<(), String> {
+    if !part.exists() {
+        return Err(format!("Downloaded part file missing: {}", part.display()));
+    }
+    let mut last_err = None;
+    for attempt in 0..6 {
+        match fs::rename(part, dest) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let code = e.raw_os_error();
+                last_err = Some(e);
+                if matches!(code, Some(32) | Some(5)) && attempt < 5 {
+                    std::thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+    let _ = fs::remove_file(part);
+    Err(format!(
+        "Failed to finalize {}: {}",
+        dest.display(),
+        last_err.map(|e| e.to_string()).unwrap_or_default()
+    ))
+}
+
+fn find_local_ytdlp() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(local) = env::var("LOCALAPPDATA") {
@@ -499,7 +532,41 @@ fn ensure_ytdlp_available() -> Option<PathBuf> {
         }
     }
 
-    if let Some(existing) = find_exe_in_augmented_path("yt-dlp") {
+    find_exe_in_augmented_path("yt-dlp")
+}
+
+fn find_local_deno() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            let p_zr = PathBuf::from(&local).join("ZR Downloader").join("bin").join("deno.exe");
+            if p_zr.exists() {
+                return Some(p_zr);
+            }
+        }
+    }
+
+    find_exe_in_augmented_path("deno")
+}
+
+fn find_local_aria2c() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            let p_zr = PathBuf::from(&local).join("ZR Downloader").join("bin").join("aria2c.exe");
+            if p_zr.exists() {
+                return Some(p_zr);
+            }
+        }
+    }
+
+    find_exe_in_augmented_path("aria2c")
+}
+
+fn ensure_ytdlp_available() -> Option<PathBuf> {
+    let _engine_guard = ENGINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some(existing) = find_local_ytdlp() {
         return Some(existing);
     }
 
@@ -524,11 +591,13 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
-            let target_dir = PathBuf::from(&local_app_data).join("GM-Downloader").join("bin");
+            let target_dir = PathBuf::from(&local_app_data).join("ZR Downloader").join("bin");
             let _ = fs::create_dir_all(&target_dir);
             let target_exe = target_dir.join("yt-dlp.exe");
+            let part_exe = target_dir.join("yt-dlp.exe.part");
+            let _ = fs::remove_file(&part_exe);
 
-            // 1. Try curl.exe
+            // 1. Try curl.exe into .part then atomic rename
             let mut curl_cmd = Command::new("curl.exe");
             curl_cmd.args([
                 "-L",
@@ -538,29 +607,35 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
                 "--max-time",
                 "180",
                 "-o",
-                target_exe.to_string_lossy().as_ref(),
+                part_exe.to_string_lossy().as_ref(),
                 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
             ]);
             curl_cmd.creation_flags(CREATE_NO_WINDOW);
             if let Ok(status) = curl_cmd.status() {
-                if status.success() && target_exe.exists() {
-                    return Some(target_exe);
+                if status.success() && part_exe.exists() {
+                    if replace_from_part(&part_exe, &target_exe).is_ok() && target_exe.exists() {
+                        return Some(target_exe);
+                    }
                 }
             }
+            let _ = fs::remove_file(&part_exe);
 
-            // 2. Try PowerShell Invoke-WebRequest fallback
+            // 2. Try PowerShell Invoke-WebRequest fallback into .part then rename
             let ps_script = format!(
                 "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -TimeoutSec 120 -Uri 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe' -OutFile '{}'",
-                target_exe.display()
+                part_exe.display().to_string().replace('\'', "''")
             );
             let mut ps_cmd = Command::new("powershell.exe");
             ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
             ps_cmd.creation_flags(CREATE_NO_WINDOW);
             if let Ok(status) = ps_cmd.status() {
-                if status.success() && target_exe.exists() {
-                    return Some(target_exe);
+                if status.success() && part_exe.exists() {
+                    if replace_from_part(&part_exe, &target_exe).is_ok() && target_exe.exists() {
+                        return Some(target_exe);
+                    }
                 }
             }
+            let _ = fs::remove_file(&part_exe);
         }
     }
 
@@ -570,6 +645,8 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
             let target_dir = PathBuf::from(&user_profile).join(".local").join("bin");
             let _ = fs::create_dir_all(&target_dir);
             let target_bin = target_dir.join("yt-dlp");
+            let part_bin = target_dir.join("yt-dlp.part");
+            let _ = fs::remove_file(&part_bin);
 
             let mut curl_cmd = Command::new("curl");
             curl_cmd.args([
@@ -580,15 +657,18 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
                 "--max-time",
                 "180",
                 "-o",
-                target_bin.to_string_lossy().as_ref(),
+                part_bin.to_string_lossy().as_ref(),
                 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
             ]);
             if let Ok(status) = curl_cmd.status() {
-                if status.success() && target_bin.exists() {
-                    let _ = Command::new("chmod").args(["+x", target_bin.to_string_lossy().as_ref()]).status();
-                    return Some(target_bin);
+                if status.success() && part_bin.exists() {
+                    let _ = Command::new("chmod").args(["+x", part_bin.to_string_lossy().as_ref()]).status();
+                    if fs::rename(&part_bin, &target_bin).is_ok() && target_bin.exists() {
+                        return Some(target_bin);
+                    }
                 }
             }
+            let _ = fs::remove_file(&part_bin);
         }
     }
 
@@ -596,17 +676,19 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
 }
 
 fn ensure_deno_available() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(local) = env::var("LOCALAPPDATA") {
-            let p_zr = PathBuf::from(&local).join("ZR Downloader").join("bin").join("deno.exe");
-            if p_zr.exists() {
-                return Some(p_zr);
-            }
-        }
-    }
+    find_local_deno()
+}
 
-    find_exe_in_augmented_path("deno")
+fn make_command_from_path(resolved: &str) -> Command {
+    let mut cmd = Command::new(resolved);
+    cmd.env("PATH", get_augmented_path());
+    cmd.env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUNBUFFERED", "1");
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    cmd
 }
 
 fn make_command(bin_name: &str) -> Command {
@@ -622,21 +704,17 @@ fn make_command(bin_name: &str) -> Command {
         ensure_deno_available()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| bin_name.to_string())
+    } else if bin_name == "aria2c" {
+        find_local_aria2c()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| bin_name.to_string())
     } else {
         find_exe_in_augmented_path(bin_name)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| bin_name.to_string())
     };
 
-    let mut cmd = Command::new(resolved);
-    cmd.env("PATH", get_augmented_path());
-    cmd.env("PYTHONIOENCODING", "utf-8");
-    cmd.env("PYTHONUNBUFFERED", "1");
-
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-
-    cmd
+    make_command_from_path(&resolved)
 }
 
 fn short_codec(c: &str) -> String {
@@ -1192,27 +1270,6 @@ pub async fn start_download(
             return;
         }
 
-        let mut cmd = make_command("yt-dlp");
-        cmd.args([
-            "--newline",
-            "--progress",
-            "--no-playlist",
-            "--progress-template",
-            "download:[ZR_PROG] %(progress._percent_str)s | %(progress.downloaded_bytes)s | %(progress.total_bytes)s | %(progress.total_bytes_estimate)s | %(progress._speed_str)s | %(progress._eta_str)s",
-        ]);
-
-        // Ensure Node or Deno JS runtime
-        if find_exe_in_augmented_path("node").is_some() {
-            cmd.args(["--js-runtimes", "node"]);
-        } else if find_exe_in_augmented_path("deno").is_some() {
-            cmd.args(["--js-runtimes", "deno"]);
-        }
-
-        // Ensure FFmpeg location is explicitly passed if found
-        if let Some(ffmpeg_path) = ensure_ffmpeg_available() {
-            cmd.arg("--ffmpeg-location").arg(ffmpeg_path.to_string_lossy().to_string());
-        }
-
         let is_subtitles_only = options.download_mode == "subtitles";
 
         // Timeframe / Clipping Setup & Filename Suffix
@@ -1315,43 +1372,72 @@ pub async fn start_download(
             || options.url.contains("kick.com")
             || options.url.contains("twitch.tv");
 
-        if is_hls || is_youtube {
+        let build_cmd = || -> Command {
+            let mut cmd = make_command("yt-dlp");
             cmd.args([
-                "-o", &out_tmpl,
-                "--windows-filenames",
+                "--newline",
+                "--progress",
                 "--no-playlist",
-                "--no-check-certificates",
-                "--retries", "10",
-                "--fragment-retries", "15",
-                "--file-access-retries", "5",
-                "-c",
-                part_flag,
+                "--progress-template",
+                "download:[ZR_PROG] %(progress._percent_str)s | %(progress.downloaded_bytes)s | %(progress.total_bytes)s | %(progress.total_bytes_estimate)s | %(progress._speed_str)s | %(progress._eta_str)s",
             ]);
-            if is_hls {
-                cmd.arg("--skip-unavailable-fragments");
-                if is_low_disk {
-                    // Zero-Temp In-Place for HLS: stream directly into destination file without duplicate .temp.mp4
+
+            // Ensure Node or Deno JS runtime
+            if find_exe_in_augmented_path("node").is_some() {
+                cmd.args(["--js-runtimes", "node"]);
+            } else if ensure_deno_available().is_some() {
+                cmd.args(["--js-runtimes", "deno"]);
+            }
+
+            // Ensure FFmpeg location is explicitly passed if found
+            if let Some(ffmpeg_path) = ensure_ffmpeg_available() {
+                cmd.arg("--ffmpeg-location").arg(ffmpeg_path.to_string_lossy().to_string());
+            }
+
+            if is_hls || is_youtube {
+                cmd.args([
+                    "-o", &out_tmpl,
+                    "--windows-filenames",
+                    "--no-playlist",
+                    "--no-check-certificates",
+                    "--retries", "10",
+                    "--fragment-retries", "15",
+                    "--file-access-retries", "5",
+                    "-c",
+                    part_flag,
+                ]);
+                if is_youtube {
                     cmd.args([
-                        "--downloader", "m3u8:ffmpeg",
-                        "--downloader-args", "ffmpeg:-c copy",
-                        "--fixup", "never",
+                        "--concurrent-fragments", "8",
+                        "--http-chunk-size", "10M",
+                        "--buffer-size", "64K",
                     ]);
                 }
+                if is_hls {
+                    cmd.arg("--skip-unavailable-fragments");
+                    if is_low_disk {
+                        // Zero-Temp In-Place for HLS: stream directly into destination file without duplicate .temp.mp4
+                        cmd.args([
+                            "--downloader", "m3u8:ffmpeg",
+                            "--downloader-args", "ffmpeg:-c copy",
+                            "--fixup", "never",
+                        ]);
+                    }
+                }
+            } else {
+                cmd.args([
+                    "-o", &out_tmpl,
+                    "--windows-filenames",
+                    "--no-playlist",
+                    "--no-check-certificates",
+                    "--concurrent-fragments", "8",
+                    "--retries", "10",
+                    "--fragment-retries", "15",
+                    "--file-access-retries", "5",
+                    "-c",
+                    part_flag,
+                ]);
             }
-        } else {
-            cmd.args([
-                "-o", &out_tmpl,
-                "--windows-filenames",
-                "--no-playlist",
-                "--no-check-certificates",
-                "--concurrent-fragments", "4",
-                "--retries", "10",
-                "--fragment-retries", "15",
-                "--file-access-retries", "5",
-                "-c",
-                part_flag,
-            ]);
-        }
         if options.overwrite_files || is_clipping_active {
             cmd.arg("--force-overwrites");
         } else {
@@ -1532,13 +1618,14 @@ pub async fn start_download(
         }
 
         // Aria2c Downloader
-        if options.use_aria2c && find_exe_in_augmented_path("aria2c").is_some() && !options.enable_clip {
-            let conns = options.aria2_connections.max(1).min(16);
+        let aria2c_found =
+            find_local_aria2c().is_some() || find_exe_in_augmented_path("aria2c").is_some();
+        if (options.use_aria2c || aria2c_found) && aria2c_found && !options.enable_clip {
             cmd.args([
                 "--downloader",
                 "aria2c",
                 "--downloader-args",
-                &format!("aria2c:-x {} -s {} -k 1M", conns, conns),
+                "aria2c:-x 16 -s 16 -k 1M",
             ]);
         }
 
@@ -1567,10 +1654,12 @@ pub async fn start_download(
             }
         }
 
-        cmd.arg(options.url.trim());
-        cmd.stdin(Stdio::null());
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+            cmd.arg(options.url.trim());
+            cmd.stdin(Stdio::null());
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+            cmd
+        };
 
         let init_p = serde_json::json!({
             "id": tid.clone(),
@@ -1588,10 +1677,34 @@ pub async fn start_download(
         let _ = app.emit("download-progress", init_p.clone());
         let _ = app.emit("ytdlp-progress", init_p);
 
-        let mut child = match cmd.spawn() {
-            Ok(c) => c,
-            Err(e) => {
-                let err_msg = format!("Failed to start yt-dlp download process: {}", e);
+        let mut spawned_child = None;
+        let mut last_spawn_err = None;
+        for attempt in 0..6 {
+            let mut cmd = build_cmd();
+            match cmd.spawn() {
+                Ok(c) => {
+                    spawned_child = Some(c);
+                    break;
+                }
+                Err(e) => {
+                    let is_locked = matches!(e.raw_os_error(), Some(32) | Some(5));
+                    last_spawn_err = Some(e);
+                    if is_locked && attempt < 5 {
+                        std::thread::sleep(Duration::from_millis(500));
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+
+        let mut child = match spawned_child {
+            Some(c) => c,
+            None => {
+                let err_detail = last_spawn_err
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "Unknown spawn error".to_string());
+                let err_msg = format!("Failed to start yt-dlp download process: {}", err_detail);
                 mark_task_error(&media_tasks, &tid, &err_msg);
                 let _ = app.emit("download-error", serde_json::json!({ "id": tid.clone(), "error": err_msg }));
                 let _ = app.emit(
@@ -2058,136 +2171,67 @@ pub async fn cancel_download(
 // Command 4: Tool Version Check & One-Click Updater (yt-dlp, Deno, FFmpeg)
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "windows")]
-fn ps_quote(s: &str) -> String {
-    s.replace('\'', "''")
-}
+fn curl_fetch_json_field(url: &str, json_path: &[&str]) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    let mut cmd = Command::new("curl.exe");
+    #[cfg(not(target_os = "windows"))]
+    let mut cmd = Command::new("curl");
 
-#[cfg(target_os = "windows")]
-fn run_powershell(script: &str) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-    let mut cmd = Command::new("powershell.exe");
-    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
+    cmd.args([
+        "-s",
+        "--max-time",
+        "4",
+        "-L",
+        "-H",
+        "User-Agent: ZR-Downloader",
+        url,
+    ]);
+    #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let out = cmd.output().map_err(|e| format!("Could not start PowerShell: {}", e))?;
-    let so = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if out.status.success() {
-        Ok(so)
-    } else {
-        let se = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if se.is_empty() { so } else { se })
+
+    let out = cmd.output().ok()?;
+    if !out.status.success() || out.stdout.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let mut cur = &val;
+    for key in json_path {
+        cur = cur.get(*key)?;
+    }
+    cur.as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn clear_tool_updates_cache() {
+    if let Ok(mut guard) = TOOL_UPDATES_CACHE.lock() {
+        *guard = None;
     }
 }
 
-#[cfg(target_os = "windows")]
-fn fetch_latest_github_tag(repo: &str) -> Option<String> {
-    let script = format!(
-        "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try {{ (Invoke-RestMethod -Uri 'https://api.github.com/repos/{}/releases/latest' -TimeoutSec 5 -Headers @{{'User-Agent'='ZR-Downloader'}}).tag_name }} catch {{ '' }}",
-        repo
-    );
-    run_powershell(&script).ok().filter(|s| !s.is_empty())
-}
-
-/// Downloads the latest official build of Deno / FFmpeg into %LOCALAPPDATA%\ZR Downloader\bin
-/// (a folder ZR already searches), so it works even when nothing is installed on the PC.
-#[cfg(target_os = "windows")]
-fn install_engine(tool: &str) -> Result<String, String> {
-    let (label, url, files): (&str, &str, &[&str]) = if tool == "deno" {
-        (
-            "Deno",
-            "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip",
-            &["deno.exe"],
-        )
+fn detect_local_ytdlp_version() -> String {
+    if let Some(exe) = find_local_ytdlp() {
+        make_command_from_path(&exe.to_string_lossy())
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if v.is_empty() { None } else { Some(v) }
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "Not Found".to_string())
     } else {
-        (
-            "FFmpeg",
-            "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
-            &["ffmpeg.exe", "ffprobe.exe"],
-        )
-    };
-    let local = env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA is not set".to_string())?;
-    let bin_dir = PathBuf::from(&local).join("ZR Downloader").join("bin");
-    fs::create_dir_all(&bin_dir).map_err(|e| format!("Cannot create {}: {}", bin_dir.display(), e))?;
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-    let tmp = env::temp_dir().join(format!("zr_engine_{}_{}", tool, stamp));
-    let names = files.iter().map(|f| format!("'{}'", f)).collect::<Vec<_>>().join(",");
-    let script = format!(
-        "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
-         $tmp='{tmp}'; $bin='{bin}'; New-Item -ItemType Directory -Force -Path $tmp | Out-Null; \
-         try {{ $zip=Join-Path $tmp 'pkg.zip'; Invoke-WebRequest -UseBasicParsing -TimeoutSec 1200 -Uri '{url}' -OutFile $zip; \
-         Expand-Archive -Force -Path $zip -DestinationPath (Join-Path $tmp 'x'); \
-         foreach ($n in @({names})) {{ $f = Get-ChildItem -Path (Join-Path $tmp 'x') -Recurse -Filter $n | Select-Object -First 1; \
-         if ($f) {{ Copy-Item -Force -LiteralPath $f.FullName -Destination $bin }} else {{ throw ($n + ' not found in the downloaded package') }} }} \
-         }} finally {{ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp }}",
-        tmp = ps_quote(&tmp.to_string_lossy()),
-        bin = ps_quote(&bin_dir.to_string_lossy()),
-        url = url,
-        names = names
-    );
-    run_powershell(&script).map_err(|e| format!("{} download failed: {}", label, e))?;
-    if bin_dir.join(files[0]).is_file() {
-        Ok(format!("{} installed/updated to the latest version successfully!", label))
-    } else {
-        Err(format!("{} download finished but {} was not found afterwards", label, files[0]))
+        "Not Found".to_string()
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-fn install_engine(tool: &str) -> Result<String, String> {
-    Err(format!(
-        "Automatic {} install is only supported on Windows. Please install it with your package manager.",
-        tool
-    ))
-}
-
-#[command]
-pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        // 1. yt-dlp installed and latest version check
-        let ytdlp_exe = ensure_ytdlp_available();
-        let ytdlp_ver = if let Some(ref exe) = ytdlp_exe {
-            make_command(&exe.to_string_lossy())
-                .arg("--version")
-                .output()
-                .ok()
-                .and_then(|o| {
-                    if o.status.success() {
-                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "Not Found".to_string())
-        } else {
-            "Not Found".to_string()
-        };
-
-        // Fetch latest version from PyPI / GitHub via PowerShell without requiring python installation
-        #[cfg(target_os = "windows")]
-        let latest_ytdlp = {
-            let ps_script = "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; try { (Invoke-RestMethod -Uri 'https://pypi.org/pypi/yt-dlp/json' -TimeoutSec 4).info.version } catch { '' }";
-            let mut ps_cmd = std::process::Command::new("powershell.exe");
-            ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", ps_script]);
-            use std::os::windows::process::CommandExt;
-            ps_cmd.creation_flags(0x08000000);
-            ps_cmd.output()
-                .ok()
-                .and_then(|o| {
-                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                    if !s.is_empty() { Some(s) } else { None }
-                })
-                .unwrap_or_else(|| ytdlp_ver.clone())
-        };
-        #[cfg(not(target_os = "windows"))]
-        let latest_ytdlp = ytdlp_ver.clone();
-
-        let has_ytdlp_update = ytdlp_ver == "Not Found" || (!latest_ytdlp.is_empty() && ytdlp_ver != latest_ytdlp);
-
-        // 2. Deno
-        let deno_ver = make_command("deno")
+fn detect_local_deno_version() -> String {
+    if let Some(exe) = find_local_deno() {
+        make_command_from_path(&exe.to_string_lossy())
             .arg("--version")
             .output()
             .ok()
@@ -2202,117 +2246,623 @@ pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
                     None
                 }
             })
-            .unwrap_or_else(|| "Not Found".to_string());
+            .unwrap_or_else(|| "Not Found".to_string())
+    } else {
+        "Not Found".to_string()
+    }
+}
 
-        // 3. FFmpeg
-        let ffmpeg_exe = ensure_ffmpeg_available();
-        let ffmpeg_ver = if let Some(ref exe) = ffmpeg_exe {
-            make_command(&exe.to_string_lossy())
-                .arg("-version")
-                .output()
-                .ok()
-                .and_then(|o| {
-                    if o.status.success() {
-                        let s = String::from_utf8_lossy(&o.stdout);
-                        s.lines()
-                            .next()
-                            .and_then(|l| l.split_whitespace().nth(2))
-                            .map(|v| v.chars().take(18).collect::<String>())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "Not Found".to_string())
-        } else {
-            "Not Found".to_string()
-        };
+fn detect_local_ffmpeg_version() -> String {
+    if let Some(exe) = ensure_ffmpeg_available() {
+        make_command_from_path(&exe.to_string_lossy())
+            .arg("-version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    let s = String::from_utf8_lossy(&o.stdout);
+                    s.lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(2))
+                        .map(|v| v.chars().take(18).collect::<String>())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "Not Found".to_string())
+    } else {
+        "Not Found".to_string()
+    }
+}
 
-        #[cfg(target_os = "windows")]
-        let latest_deno = fetch_latest_github_tag("denoland/deno").unwrap_or_default();
-        #[cfg(not(target_os = "windows"))]
-        let latest_deno = String::new();
-        let deno_missing = deno_ver == "Not Found";
-        let deno_has_update = deno_missing
-            || (!latest_deno.is_empty()
-                && latest_deno.trim_start_matches('v') != deno_ver.trim_start_matches('v'));
-        let deno_latest_display = if latest_deno.is_empty() { deno_ver.clone() } else { latest_deno.clone() };
-        let ffmpeg_missing = ffmpeg_ver == "Not Found";
+fn detect_local_aria2c_version() -> String {
+    if let Some(exe) = find_local_aria2c() {
+        make_command_from_path(&exe.to_string_lossy())
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    let s = String::from_utf8_lossy(&o.stdout);
+                    s.lines().next().map(|l| {
+                        l.split_whitespace()
+                            .nth(2)
+                            .unwrap_or_else(|| l.trim())
+                            .to_string()
+                    })
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "Not Found".to_string())
+    } else {
+        "Not Found".to_string()
+    }
+}
 
-        Ok(vec![
+fn collect_installed_tools_local() -> Vec<ToolStatus> {
+    let _ = get_augmented_path();
+    std::thread::scope(|s| {
+        let h_yt = s.spawn(detect_local_ytdlp_version);
+        let h_deno = s.spawn(detect_local_deno_version);
+        let h_ff = s.spawn(detect_local_ffmpeg_version);
+        let h_a2 = s.spawn(detect_local_aria2c_version);
+
+        vec![
             ToolStatus {
                 name: "yt-dlp".to_string(),
-                installed_version: ytdlp_ver.clone(),
-                latest_version: latest_ytdlp,
-                has_update: has_ytdlp_update,
+                installed_version: h_yt.join().unwrap_or_else(|_| "Not Found".to_string()),
+                latest_version: String::new(),
+                has_update: false,
             },
             ToolStatus {
                 name: "Deno".to_string(),
-                installed_version: deno_ver.clone(),
-                latest_version: deno_latest_display,
-                has_update: deno_has_update,
+                installed_version: h_deno.join().unwrap_or_else(|_| "Not Found".to_string()),
+                latest_version: String::new(),
+                has_update: false,
             },
             ToolStatus {
                 name: "FFmpeg".to_string(),
-                installed_version: ffmpeg_ver.clone(),
-                latest_version: "Latest build".to_string(),
-                has_update: ffmpeg_missing,
+                installed_version: h_ff.join().unwrap_or_else(|_| "Not Found".to_string()),
+                latest_version: String::new(),
+                has_update: false,
             },
-        ])
+            ToolStatus {
+                name: "aria2c".to_string(),
+                installed_version: h_a2.join().unwrap_or_else(|_| "Not Found".to_string()),
+                latest_version: String::new(),
+                has_update: false,
+            },
+        ]
+    })
+}
+
+fn emit_engine_progress(
+    app: &AppHandle,
+    tool: &str,
+    stage: &str,
+    percent: f64,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    speed_bps: f64,
+    message: &str,
+) {
+    let _ = app.emit(
+        "engine-progress",
+        serde_json::json!({
+            "tool": tool,
+            "stage": stage,
+            "percent": percent,
+            "downloadedBytes": downloaded_bytes,
+            "totalBytes": total_bytes,
+            "speedBps": speed_bps,
+            "message": message,
+        }),
+    );
+}
+
+async fn stream_download_to_part(
+    app: &AppHandle,
+    tool_label: &str,
+    url: &str,
+    part_path: &Path,
+) -> Result<u64, String> {
+    let _ = fs::remove_file(part_path);
+    let client = reqwest::Client::builder()
+        .user_agent("ZR-Downloader")
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(1200))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Network error downloading {}: {}", tool_label, e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Failed to download {}: HTTP {}",
+            tool_label,
+            resp.status()
+        ));
+    }
+
+    let total_bytes = resp.content_length().unwrap_or(0);
+    emit_engine_progress(
+        app,
+        tool_label,
+        "downloading",
+        0.0,
+        0,
+        total_bytes,
+        0.0,
+        &format!("Downloading {}...", tool_label),
+    );
+
+    let mut file = tokio::fs::File::create(part_path)
+        .await
+        .map_err(|e| format!("Cannot create {}: {}", part_path.display(), e))?;
+
+    let started = Instant::now();
+    let mut last_emit = Instant::now();
+    let mut downloaded_bytes: u64 = 0;
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = match chunk_res {
+            Ok(c) => c,
+            Err(e) => {
+                drop(file);
+                let _ = fs::remove_file(part_path);
+                return Err(format!("Download failed for {}: {}", tool_label, e));
+            }
+        };
+        if let Err(e) = file.write_all(&chunk).await {
+            drop(file);
+            let _ = fs::remove_file(part_path);
+            return Err(format!("Disk write error for {}: {}", tool_label, e));
+        }
+        downloaded_bytes += chunk.len() as u64;
+
+        if last_emit.elapsed() >= Duration::from_millis(150) {
+            let secs = started.elapsed().as_secs_f64().max(0.001);
+            let speed_bps = downloaded_bytes as f64 / secs;
+            let percent = if total_bytes > 0 {
+                (downloaded_bytes as f64 / total_bytes as f64 * 100.0).min(100.0)
+            } else {
+                0.0
+            };
+            emit_engine_progress(
+                app,
+                tool_label,
+                "downloading",
+                percent,
+                downloaded_bytes,
+                total_bytes,
+                speed_bps,
+                &format!("Downloading {}...", tool_label),
+            );
+            last_emit = Instant::now();
+        }
+    }
+
+    if let Err(e) = file.flush().await {
+        drop(file);
+        let _ = fs::remove_file(part_path);
+        return Err(format!("Failed to flush {}: {}", part_path.display(), e));
+    }
+    drop(file);
+
+    if downloaded_bytes == 0 {
+        let _ = fs::remove_file(part_path);
+        return Err(format!("{} download returned 0 bytes", tool_label));
+    }
+
+    let final_secs = started.elapsed().as_secs_f64().max(0.001);
+    let final_speed = downloaded_bytes as f64 / final_secs;
+    let final_total = total_bytes.max(downloaded_bytes);
+    emit_engine_progress(
+        app,
+        tool_label,
+        "downloading",
+        100.0,
+        downloaded_bytes,
+        final_total,
+        final_speed,
+        &format!("Downloaded {}", tool_label),
+    );
+
+    Ok(downloaded_bytes)
+}
+
+#[cfg(target_os = "windows")]
+fn extract_wanted_exes_from_zip(
+    zip_path: &Path,
+    bin_dir: &Path,
+    wanted: &[&str],
+) -> Result<(), String> {
+    let file = fs::File::open(zip_path)
+        .map_err(|e| format!("Failed to open downloaded archive {}: {}", zip_path.display(), e))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
+
+    let mut extracted: HashSet<String> = HashSet::new();
+    for idx in 0..archive.len() {
+        let mut entry = archive
+            .by_index(idx)
+            .map_err(|e| format!("Failed reading zip entry: {}", e))?;
+        if entry.is_dir() {
+            continue;
+        }
+        let matched_opt = {
+            let base_name = entry
+                .name()
+                .rsplit(&['/', '\\'][..])
+                .next()
+                .unwrap_or("");
+            wanted
+                .iter()
+                .copied()
+                .find(|w| w.eq_ignore_ascii_case(base_name))
+        };
+        let Some(target_name) = matched_opt else {
+            continue;
+        };
+        if extracted.contains(target_name) {
+            continue;
+        }
+
+        let final_exe = bin_dir.join(target_name);
+        let part_exe = bin_dir.join(format!("{}.part", target_name));
+        let _ = fs::remove_file(&part_exe);
+
+        {
+            let mut out_file = fs::File::create(&part_exe)
+                .map_err(|e| format!("Cannot create {}: {}", part_exe.display(), e))?;
+            if let Err(e) = std::io::copy(&mut entry, &mut out_file) {
+                drop(out_file);
+                let _ = fs::remove_file(&part_exe);
+                return Err(format!("Failed extracting {}: {}", target_name, e));
+            }
+            if let Err(e) = out_file.flush() {
+                drop(out_file);
+                let _ = fs::remove_file(&part_exe);
+                return Err(format!("Failed flushing {}: {}", target_name, e));
+            }
+        }
+
+        replace_from_part(&part_exe, &final_exe)?;
+        extracted.insert(target_name.to_string());
+    }
+
+    for &w in wanted {
+        if !extracted.contains(w) {
+            return Err(format!("{} not found in the downloaded package", w));
+        }
+    }
+
+    Ok(())
+}
+
+/// Downloads the latest official build of Deno / FFmpeg / aria2c into %LOCALAPPDATA%\ZR Downloader\bin
+/// (a folder ZR already searches), so it works even when nothing is installed on the PC.
+#[cfg(target_os = "windows")]
+async fn install_engine(app: AppHandle, tool: &str) -> Result<String, String> {
+    let lower = tool.to_lowercase();
+    let (label, url, files): (&str, &str, Vec<&'static str>) = if lower.contains("deno") {
+        (
+            "Deno",
+            "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip",
+            vec!["deno.exe"],
+        )
+    } else if lower.contains("aria2") {
+        (
+            "aria2c",
+            "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip",
+            vec!["aria2c.exe"],
+        )
+    } else {
+        (
+            "FFmpeg",
+            "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
+            vec!["ffmpeg.exe", "ffprobe.exe"],
+        )
+    };
+
+    let local = env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA is not set".to_string())?;
+    let bin_dir = PathBuf::from(&local).join("ZR Downloader").join("bin");
+    fs::create_dir_all(&bin_dir)
+        .map_err(|e| format!("Cannot create {}: {}", bin_dir.display(), e))?;
+    let zip_part = bin_dir.join(format!("{}.zip.part", lower));
+
+    let rt = tokio::runtime::Handle::current();
+    let app_for_task = app.clone();
+    let zip_part_for_task = zip_part.clone();
+    let bin_dir_for_task = bin_dir.clone();
+
+    let res = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let _engine_guard = ENGINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let downloaded = rt.block_on(stream_download_to_part(
+            &app_for_task,
+            label,
+            url,
+            &zip_part_for_task,
+        ))?;
+
+        emit_engine_progress(
+            &app_for_task,
+            label,
+            "extracting",
+            100.0,
+            downloaded,
+            downloaded,
+            0.0,
+            &format!("Extracting {}...", label),
+        );
+
+        let extract_res =
+            extract_wanted_exes_from_zip(&zip_part_for_task, &bin_dir_for_task, &files);
+        let _ = fs::remove_file(&zip_part_for_task);
+        extract_res?;
+
+        if !bin_dir_for_task.join(files[0]).is_file() {
+            return Err(format!(
+                "{} download finished but {} was not found afterwards",
+                label, files[0]
+            ));
+        }
+
+        clear_tool_updates_cache();
+        Ok(format!(
+            "{} installed/updated to the latest version successfully!",
+            label
+        ))
     })
     .await
-    .map_err(|e| format!("Check error: {}", e))?
+    .map_err(|e| format!("{} task error: {}", label, e))?;
+
+    match &res {
+        Ok(msg) => emit_engine_progress(&app, label, "done", 100.0, 0, 0, 0.0, msg),
+        Err(err) => emit_engine_progress(&app, label, "error", 0.0, 0, 0, 0.0, err),
+    }
+
+    res
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn install_engine(app: AppHandle, tool: &str) -> Result<String, String> {
+    let msg = format!(
+        "Automatic {} install is only supported on Windows. Please install it with your package manager.",
+        tool
+    );
+    emit_engine_progress(&app, tool, "error", 0.0, 0, 0, 0.0, &msg);
+    Err(msg)
 }
 
 #[command]
-pub async fn update_tool(tool_name: Option<String>, name: Option<String>) -> Result<String, String> {
-    let resolved = tool_name.or(name).unwrap_or_else(|| "yt-dlp".to_string());
-    tauri::async_runtime::spawn_blocking(move || {
-        let lower = resolved.to_lowercase();
-        if lower.contains("yt-dlp") {
-            // 1. Try yt-dlp -U if an executable is already available
-            if let Some(exe_path) = ensure_ytdlp_available() {
-                let out = make_command(&exe_path.to_string_lossy()).arg("-U").output();
-                if let Ok(o) = out {
-                    let stdout = String::from_utf8_lossy(&o.stdout);
-                    if o.status.success() || stdout.contains("Updated") || stdout.contains("up to date") {
-                        return Ok(format!("yt-dlp: {}", stdout.trim()));
-                    }
-                }
+pub async fn get_installed_tools() -> Result<Vec<ToolStatus>, String> {
+    tauri::async_runtime::spawn_blocking(collect_installed_tools_local)
+        .await
+        .map_err(|e| format!("Check error: {}", e))
+}
+
+#[command]
+pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
+    if let Ok(cache) = TOOL_UPDATES_CACHE.lock() {
+        if let Some((checked_at, list)) = cache.as_ref() {
+            if checked_at.elapsed() < Duration::from_secs(600) {
+                return Ok(list.clone());
             }
-
-            // 2. Direct download of latest official standalone yt-dlp.exe
-            #[cfg(target_os = "windows")]
-            {
-                if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-                    let target_dir = std::path::PathBuf::from(&local_app_data).join("ZR Downloader").join("bin");
-                    let _ = std::fs::create_dir_all(&target_dir);
-                    let target_exe = target_dir.join("yt-dlp.exe");
-
-                    let ps_script = format!(
-                        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', '{}')",
-                        target_exe.display()
-                    );
-                    let mut ps_cmd = std::process::Command::new("powershell.exe");
-                    ps_cmd.args(["-NoProfile", "-NonInteractive", "-Command", &ps_script]);
-                    use std::os::windows::process::CommandExt;
-                    ps_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-                    if let Ok(status) = ps_cmd.status() {
-                        if status.success() && target_exe.exists() {
-                            return Ok("yt-dlp updated to the latest version successfully!".to_string());
-                        }
-                    }
-                }
-            }
-
-            Ok("yt-dlp update check completed!".to_string())
-        } else if lower.contains("deno") {
-            install_engine("deno")
-        } else {
-            install_engine("ffmpeg")
         }
+    }
+
+    let list = tauri::async_runtime::spawn_blocking(move || {
+        let _ = get_augmented_path();
+        std::thread::scope(|s| {
+            let h_yt_local = s.spawn(detect_local_ytdlp_version);
+            let h_deno_local = s.spawn(detect_local_deno_version);
+            let h_ff_local = s.spawn(detect_local_ffmpeg_version);
+            let h_a2_local = s.spawn(detect_local_aria2c_version);
+
+            let h_yt_remote = s.spawn(|| {
+                curl_fetch_json_field(
+                    "https://pypi.org/pypi/yt-dlp/json",
+                    &["info", "version"],
+                )
+            });
+            let h_deno_remote = s.spawn(|| {
+                curl_fetch_json_field(
+                    "https://api.github.com/repos/denoland/deno/releases/latest",
+                    &["tag_name"],
+                )
+            });
+            let h_ff_remote = s.spawn(|| {
+                curl_fetch_json_field(
+                    "https://api.github.com/repos/yt-dlp/FFmpeg-Builds/releases/latest",
+                    &["tag_name"],
+                )
+            });
+            let h_a2_remote = s.spawn(|| {
+                curl_fetch_json_field(
+                    "https://api.github.com/repos/aria2/aria2/releases/latest",
+                    &["tag_name"],
+                )
+            });
+
+            let ytdlp_ver = h_yt_local.join().unwrap_or_else(|_| "Not Found".to_string());
+            let deno_ver = h_deno_local.join().unwrap_or_else(|_| "Not Found".to_string());
+            let ffmpeg_ver = h_ff_local.join().unwrap_or_else(|_| "Not Found".to_string());
+            let aria2_ver = h_a2_local.join().unwrap_or_else(|_| "Not Found".to_string());
+
+            let latest_ytdlp = h_yt_remote
+                .join()
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| ytdlp_ver.clone());
+            let has_ytdlp_update = ytdlp_ver == "Not Found"
+                || (!latest_ytdlp.is_empty()
+                    && latest_ytdlp != "Not Found"
+                    && ytdlp_ver != latest_ytdlp);
+
+            let latest_deno_raw = h_deno_remote.join().ok().flatten().unwrap_or_default();
+            let deno_missing = deno_ver == "Not Found";
+            let deno_has_update = deno_missing
+                || (!latest_deno_raw.is_empty()
+                    && latest_deno_raw.trim_start_matches('v')
+                        != deno_ver.trim_start_matches('v'));
+            let deno_latest_display = if latest_deno_raw.is_empty() {
+                deno_ver.clone()
+            } else {
+                latest_deno_raw
+            };
+
+            let latest_ff_raw = h_ff_remote.join().ok().flatten().unwrap_or_default();
+            let ffmpeg_missing = ffmpeg_ver == "Not Found";
+            let ffmpeg_latest_display = if latest_ff_raw.is_empty()
+                || latest_ff_raw.eq_ignore_ascii_case("latest")
+            {
+                "Latest build".to_string()
+            } else {
+                latest_ff_raw
+            };
+
+            let latest_a2_raw = h_a2_remote.join().ok().flatten().unwrap_or_default();
+            let latest_a2_clean = latest_a2_raw
+                .trim_start_matches("release-")
+                .trim_start_matches('v')
+                .to_string();
+            let aria2_missing = aria2_ver == "Not Found";
+            let aria2_has_update = aria2_missing
+                || (!latest_a2_clean.is_empty()
+                    && latest_a2_clean != aria2_ver.trim_start_matches('v'));
+            let aria2_latest_display = if latest_a2_clean.is_empty() {
+                aria2_ver.clone()
+            } else {
+                latest_a2_clean
+            };
+
+            vec![
+                ToolStatus {
+                    name: "yt-dlp".to_string(),
+                    installed_version: ytdlp_ver,
+                    latest_version: latest_ytdlp,
+                    has_update: has_ytdlp_update,
+                },
+                ToolStatus {
+                    name: "Deno".to_string(),
+                    installed_version: deno_ver,
+                    latest_version: deno_latest_display,
+                    has_update: deno_has_update,
+                },
+                ToolStatus {
+                    name: "FFmpeg".to_string(),
+                    installed_version: ffmpeg_ver,
+                    latest_version: ffmpeg_latest_display,
+                    has_update: ffmpeg_missing,
+                },
+                ToolStatus {
+                    name: "aria2c".to_string(),
+                    installed_version: aria2_ver,
+                    latest_version: aria2_latest_display,
+                    has_update: aria2_has_update,
+                },
+            ]
+        })
     })
     .await
-    .map_err(|e| format!("Update error: {}", e))?
+    .map_err(|e| format!("Check error: {}", e))?;
+
+    if let Ok(mut cache) = TOOL_UPDATES_CACHE.lock() {
+        *cache = Some((Instant::now(), list.clone()));
+    }
+
+    Ok(list)
+}
+
+#[command]
+pub async fn update_tool(
+    app: AppHandle,
+    tool_name: Option<String>,
+    name: Option<String>,
+) -> Result<String, String> {
+    let resolved = tool_name.or(name).unwrap_or_else(|| "yt-dlp".to_string());
+    let lower = resolved.to_lowercase();
+
+    if lower.contains("yt-dlp") {
+        #[cfg(target_os = "windows")]
+        let (target_dir, target_exe, url) = {
+            let local_app_data = env::var("LOCALAPPDATA")
+                .map_err(|_| "LOCALAPPDATA is not set".to_string())?;
+            let dir = PathBuf::from(&local_app_data).join("ZR Downloader").join("bin");
+            let exe = dir.join("yt-dlp.exe");
+            (
+                dir,
+                exe,
+                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
+            )
+        };
+
+        #[cfg(not(target_os = "windows"))]
+        let (target_dir, target_exe, url) = {
+            let home = env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+            let dir = PathBuf::from(&home).join(".local").join("bin");
+            let exe = dir.join("yt-dlp");
+            (
+                dir,
+                exe,
+                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp",
+            )
+        };
+
+        fs::create_dir_all(&target_dir)
+            .map_err(|e| format!("Cannot create {}: {}", target_dir.display(), e))?;
+        let part_exe = PathBuf::from(format!("{}.part", target_exe.display()));
+
+        let rt = tokio::runtime::Handle::current();
+        let app_for_task = app.clone();
+        let part_for_task = part_exe.clone();
+        let final_for_task = target_exe.clone();
+
+        let res = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+            let _engine_guard = ENGINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+            rt.block_on(stream_download_to_part(
+                &app_for_task,
+                "yt-dlp",
+                url,
+                &part_for_task,
+            ))?;
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = Command::new("chmod")
+                    .args(["+x", part_for_task.to_string_lossy().as_ref()])
+                    .status();
+            }
+
+            replace_from_part(&part_for_task, &final_for_task)?;
+            clear_tool_updates_cache();
+            Ok("yt-dlp updated to the latest version successfully!".to_string())
+        })
+        .await
+        .map_err(|e| format!("yt-dlp update task failed: {}", e))?;
+
+        match &res {
+            Ok(msg) => emit_engine_progress(&app, "yt-dlp", "done", 100.0, 0, 0, 0.0, msg),
+            Err(err) => emit_engine_progress(&app, "yt-dlp", "error", 0.0, 0, 0, 0.0, err),
+        }
+
+        res
+    } else if lower.contains("deno") {
+        install_engine(app, "deno").await
+    } else if lower.contains("aria2") {
+        install_engine(app, "aria2c").await
+    } else {
+        install_engine(app, "ffmpeg").await
+    }
 }
 
 // ---------------------------------------------------------------------------

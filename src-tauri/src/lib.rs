@@ -923,6 +923,7 @@ pub fn run() {
             media::fetch_media_info,
             media::start_download,
             media::cancel_download,
+            media::get_installed_tools,
             media::check_tool_updates,
             media::update_tool,
             media::open_folder,

@@ -230,6 +230,11 @@ export interface ToolVersionInfo {
   latestVersion: string;
   hasUpdate: boolean;
   isUpdating?: boolean;
+  progress?: number;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  speedBps?: number;
+  stage?: string;
 }
 
 export interface TorrentFileItem {
