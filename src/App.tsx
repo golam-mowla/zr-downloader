@@ -78,6 +78,21 @@ export const App: React.FC = () => {
     return (localStorage.getItem("zr-theme") as "dark" | "light") || "dark";
   });
   const [activePopupTaskIds, setActivePopupTaskIds] = useState<string[]>([]);
+  const tasksRef = useRef<DownloadTask[]>([]);
+  tasksRef.current = tasks;
+  const notifiedRef = useRef<Set<string>>(new Set());
+
+  // Small always-on-top popup (bottom-right) when a desktop download finishes.
+  const notifyCompleted = (payload: any) => {
+    if ((window as any).GMAndroidBridge) return;
+    const id = payload?.id || payload?.taskId;
+    if (!id || notifiedRef.current.has(id)) return;
+    notifiedRef.current.add(id);
+    const t: any = tasksRef.current.find((x) => x.id === id) || {};
+    const name = payload.filename || t.filename || "Download";
+    const folder = payload.save_path || payload.savePath || t.save_path || t.savePath || defaultDirRef.current || "";
+    invoke("show_completion_notice", { name, folder }).catch(() => {});
+  };
 
     const openDownloadPopup = async (task: DownloadTask) => {
     try {
@@ -165,7 +180,10 @@ export const App: React.FC = () => {
           if (aDir) setDefaultDir(aDir);
         } else {
           const dir = await invoke<string>("get_default_download_dir");
-          if (dir) setDefaultDir(dir);
+          if (dir) {
+            defaultDirRef.current = dir; // available immediately for a URL passed at app launch
+            setDefaultDir(dir);
+          }
         }
       } catch {}
 
@@ -273,6 +291,7 @@ export const App: React.FC = () => {
       const id = updated?.id || updated?.taskId || updated?.task_id;
       if (!updated || !id) return;
       updated.id = id;
+      if (updated.status === "completed") notifyCompleted(updated);
       pendingUpdates.set(id, { ...(pendingUpdates.get(id) || {}), ...updated });
       if (!rafId) {
         rafId = window.requestAnimationFrame(flushBatch);
@@ -287,6 +306,7 @@ export const App: React.FC = () => {
       const completed = event.payload;
       const id = completed?.id || completed?.taskId;
       if (!completed || !id) return;
+      notifyCompleted(completed);
       setTasks((prev) =>
         prev.map((t) =>
           t.id === id
@@ -487,6 +507,8 @@ export const App: React.FC = () => {
         }
       }
     };
+    // Store the handler: a link passed at launch (zr:// protocol) is delivered through this ref.
+    handleOpenUrlRef.current = handleOpenUrl;
     const unlistenOpenUrl = listen<any>("open-url", handleOpenUrl);
     // zr open url listener removed
 

@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for ZR Downloader (main window and download popup windows)",
-  "windows": ["main", "dl_*"],
+  "windows": ["main", "dl_*", "ntf_*"],
   "permissions": [
     "core:default",
     "core:event:default",

@@ -595,9 +595,31 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
     None
 }
 
+fn ensure_deno_available() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local) = env::var("LOCALAPPDATA") {
+            let p_zr = PathBuf::from(&local).join("ZR Downloader").join("bin").join("deno.exe");
+            if p_zr.exists() {
+                return Some(p_zr);
+            }
+        }
+    }
+
+    find_exe_in_augmented_path("deno")
+}
+
 fn make_command(bin_name: &str) -> Command {
     let resolved = if bin_name == "yt-dlp" {
         ensure_ytdlp_available()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| bin_name.to_string())
+    } else if bin_name == "ffmpeg" {
+        ensure_ffmpeg_available()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| bin_name.to_string())
+    } else if bin_name == "deno" {
+        ensure_deno_available()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| bin_name.to_string())
     } else {
@@ -2036,6 +2058,91 @@ pub async fn cancel_download(
 // Command 4: Tool Version Check & One-Click Updater (yt-dlp, Deno, FFmpeg)
 // ---------------------------------------------------------------------------
 
+#[cfg(target_os = "windows")]
+fn ps_quote(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+#[cfg(target_os = "windows")]
+fn run_powershell(script: &str) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = Command::new("powershell.exe");
+    cmd.args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().map_err(|e| format!("Could not start PowerShell: {}", e))?;
+    let so = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if out.status.success() {
+        Ok(so)
+    } else {
+        let se = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if se.is_empty() { so } else { se })
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn fetch_latest_github_tag(repo: &str) -> Option<String> {
+    let script = format!(
+        "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try {{ (Invoke-RestMethod -Uri 'https://api.github.com/repos/{}/releases/latest' -TimeoutSec 5 -Headers @{{'User-Agent'='ZR-Downloader'}}).tag_name }} catch {{ '' }}",
+        repo
+    );
+    run_powershell(&script).ok().filter(|s| !s.is_empty())
+}
+
+/// Downloads the latest official build of Deno / FFmpeg into %LOCALAPPDATA%\ZR Downloader\bin
+/// (a folder ZR already searches), so it works even when nothing is installed on the PC.
+#[cfg(target_os = "windows")]
+fn install_engine(tool: &str) -> Result<String, String> {
+    let (label, url, files): (&str, &str, &[&str]) = if tool == "deno" {
+        (
+            "Deno",
+            "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip",
+            &["deno.exe"],
+        )
+    } else {
+        (
+            "FFmpeg",
+            "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip",
+            &["ffmpeg.exe", "ffprobe.exe"],
+        )
+    };
+    let local = env::var("LOCALAPPDATA").map_err(|_| "LOCALAPPDATA is not set".to_string())?;
+    let bin_dir = PathBuf::from(&local).join("ZR Downloader").join("bin");
+    fs::create_dir_all(&bin_dir).map_err(|e| format!("Cannot create {}: {}", bin_dir.display(), e))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let tmp = env::temp_dir().join(format!("zr_engine_{}_{}", tool, stamp));
+    let names = files.iter().map(|f| format!("'{}'", f)).collect::<Vec<_>>().join(",");
+    let script = format!(
+        "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
+         $tmp='{tmp}'; $bin='{bin}'; New-Item -ItemType Directory -Force -Path $tmp | Out-Null; \
+         try {{ $zip=Join-Path $tmp 'pkg.zip'; Invoke-WebRequest -UseBasicParsing -TimeoutSec 1200 -Uri '{url}' -OutFile $zip; \
+         Expand-Archive -Force -Path $zip -DestinationPath (Join-Path $tmp 'x'); \
+         foreach ($n in @({names})) {{ $f = Get-ChildItem -Path (Join-Path $tmp 'x') -Recurse -Filter $n | Select-Object -First 1; \
+         if ($f) {{ Copy-Item -Force -LiteralPath $f.FullName -Destination $bin }} else {{ throw ($n + ' not found in the downloaded package') }} }} \
+         }} finally {{ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmp }}",
+        tmp = ps_quote(&tmp.to_string_lossy()),
+        bin = ps_quote(&bin_dir.to_string_lossy()),
+        url = url,
+        names = names
+    );
+    run_powershell(&script).map_err(|e| format!("{} download failed: {}", label, e))?;
+    if bin_dir.join(files[0]).is_file() {
+        Ok(format!("{} installed/updated to the latest version successfully!", label))
+    } else {
+        Err(format!("{} download finished but {} was not found afterwards", label, files[0]))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn install_engine(tool: &str) -> Result<String, String> {
+    Err(format!(
+        "Automatic {} install is only supported on Windows. Please install it with your package manager.",
+        tool
+    ))
+}
+
 #[command]
 pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2120,6 +2227,17 @@ pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
             "Not Found".to_string()
         };
 
+        #[cfg(target_os = "windows")]
+        let latest_deno = fetch_latest_github_tag("denoland/deno").unwrap_or_default();
+        #[cfg(not(target_os = "windows"))]
+        let latest_deno = String::new();
+        let deno_missing = deno_ver == "Not Found";
+        let deno_has_update = deno_missing
+            || (!latest_deno.is_empty()
+                && latest_deno.trim_start_matches('v') != deno_ver.trim_start_matches('v'));
+        let deno_latest_display = if latest_deno.is_empty() { deno_ver.clone() } else { latest_deno.clone() };
+        let ffmpeg_missing = ffmpeg_ver == "Not Found";
+
         Ok(vec![
             ToolStatus {
                 name: "yt-dlp".to_string(),
@@ -2130,14 +2248,14 @@ pub async fn check_tool_updates() -> Result<Vec<ToolStatus>, String> {
             ToolStatus {
                 name: "Deno".to_string(),
                 installed_version: deno_ver.clone(),
-                latest_version: deno_ver,
-                has_update: false,
+                latest_version: deno_latest_display,
+                has_update: deno_has_update,
             },
             ToolStatus {
                 name: "FFmpeg".to_string(),
                 installed_version: ffmpeg_ver.clone(),
-                latest_version: ffmpeg_ver,
-                has_update: false,
+                latest_version: "Latest build".to_string(),
+                has_update: ffmpeg_missing,
             },
         ])
     })
@@ -2188,28 +2306,9 @@ pub async fn update_tool(tool_name: Option<String>, name: Option<String>) -> Res
 
             Ok("yt-dlp update check completed!".to_string())
         } else if lower.contains("deno") {
-            let out = make_command("deno").arg("upgrade").output();
-            if let Ok(o) = out {
-                if o.status.success() {
-                    return Ok("Deno JS runtime updated successfully!".to_string());
-                }
-            }
-            Ok("Deno JS runtime is up to date!".to_string())
+            install_engine("deno")
         } else {
-            // FFmpeg
-            #[cfg(target_os = "windows")]
-            {
-                let _ = make_command("winget")
-                    .args([
-                        "upgrade",
-                        "--id",
-                        "yt-dlp.FFmpeg",
-                        "--accept-source-agreements",
-                        "--accept-package-agreements",
-                    ])
-                    .output();
-            }
-            Ok("FFmpeg updated to the latest version successfully!".to_string())
+            install_engine("ffmpeg")
         }
     })
     .await

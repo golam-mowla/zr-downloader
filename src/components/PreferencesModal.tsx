@@ -41,6 +41,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   // Core Tools Info
   const [tools, setTools] = useState<ToolVersionInfo[]>([]);
   const [checkingTools, setCheckingTools] = useState(false);
+  const [toolMessage, setToolMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
     setSavePath(defaultDir);
@@ -69,10 +70,13 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
       setTools((prev) =>
         prev.map((t) => (t.name === name ? { ...t, isUpdating: true } : t))
       );
-      await invoke("update_tool", { tool_name: name, name });
+      setToolMessage(null);
+      const msg = await invoke<string>("update_tool", { toolName: name, name });
+      setToolMessage({ ok: true, text: String(msg || `${name} is up to date`) });
       await loadToolsInfo();
-    } catch (err) {
+    } catch (err: any) {
       console.error("Update error:", err);
+      setToolMessage({ ok: false, text: String(err?.message || err || `${name} update failed`) });
     } finally {
       setTools((prev) =>
         prev.map((t) => (t.name === name ? { ...t, isUpdating: false } : t))
@@ -331,7 +335,20 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {tools.map((tool) => (
+                  {toolMessage && (
+                    <div
+                      className={`p-2.5 rounded-lg text-[12px] font-medium ${
+                        toolMessage.ok
+                          ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                          : "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300"
+                      }`}
+                    >
+                      {toolMessage.text}
+                    </div>
+                  )}
+                  {tools.map((tool) => {
+                    const missing = !tool.installedVersion || tool.installedVersion === "Not Found";
+                    return (
                     <div
                       key={tool.name}
                       className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 flex items-center justify-between"
@@ -345,7 +362,9 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center space-x-2">
-                        {tool.hasUpdate ? (
+                        {missing ? (
+                          <span className="text-red-500 text-[11.5px] font-semibold">Not Installed</span>
+                        ) : tool.hasUpdate ? (
                           <span className="text-amber-500 text-[11.5px] font-semibold">Update Available</span>
                         ) : (
                           <span className="text-emerald-600 dark:text-emerald-400 text-[11.5px] font-semibold flex items-center space-x-1">
@@ -358,11 +377,17 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                           disabled={tool.isUpdating}
                           className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-[12px] transition-colors"
                         >
-                          {tool.isUpdating ? "Updating..." : "Update"}
+                          {tool.isUpdating ? (missing ? "Installing..." : "Updating...") : missing ? "Install" : "Update"}
                         </button>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
+                  {tools.some((t) => t.isUpdating) && (
+                    <div className="text-[11.5px] text-zr-muted text-center">
+                      Downloading from the official release — FFmpeg is large (~150 MB), please keep this window open.
+                    </div>
+                  )}
                 </div>
               )}
             </div>

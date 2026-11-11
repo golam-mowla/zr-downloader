@@ -618,6 +618,44 @@ async fn ytdlp_download(
 }
 
 #[command]
+async fn show_completion_notice(app: AppHandle, name: String, folder: String) -> Result<(), String> {
+    static NOTICE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let seq = NOTICE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let label = format!("ntf_{}_{}", stamp, seq);
+    let url_str = format!(
+        "index.html?notify=true&name={}&folder={}",
+        url_encode(&name),
+        url_encode(&folder)
+    );
+    let (w, h) = (380.0_f64, 112.0_f64);
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url_str.into()))
+        .title("Download complete")
+        .inner_size(w, h)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .shadow(true);
+    if let Ok(Some(mon)) = app.primary_monitor() {
+        let scale = mon.scale_factor();
+        let size = mon.size();
+        let pos = mon.position();
+        let x = (pos.x as f64 + size.width as f64) / scale - w - 16.0;
+        let y = (pos.y as f64 + size.height as f64) / scale - h - 64.0;
+        builder = builder.position(x.max(0.0), y.max(0.0));
+    }
+    builder
+        .build()
+        .map_err(|e| format!("Notice window error: {}", e))?;
+    Ok(())
+}
+
+#[command]
 async fn open_download_window(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -807,8 +845,10 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .setup(|app| {
@@ -892,6 +932,7 @@ pub fn run() {
             ytdlp_get_info,
             ytdlp_download,
             open_download_window,
+            show_completion_notice,
             get_download_task,
             // BitTorrent Engine Commands (librqbit)
             torrent::add_torrent,
