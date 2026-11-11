@@ -509,7 +509,10 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
   const torrentParam = isTorrent ? `&isTorrent=true` : "";
   const directParam = isDirectFile ? `&isDirectFile=true` : "";
   const lowSpaceParam = lowDiskSpace ? `&lowDiskSpace=true` : "";
-  const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}${lowSpaceParam}`;
+  const referrerProtoParam = referrer ? `&referrer=${encodeURIComponent(referrer)}` : "";
+  const containerProtoParam = container ? `&container=${encodeURIComponent(container)}` : "";
+  const formatProtoParam = formatId ? `&formatid=${encodeURIComponent(formatId)}` : "";
+  const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}${lowSpaceParam}${referrerProtoParam}${containerProtoParam}${formatProtoParam}`;
 
   if (effectiveTabId) {
     try {
