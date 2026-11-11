@@ -11,8 +11,43 @@ import {
   Globe,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ToolVersionInfo } from "../types";
+
+const TOOLS_CACHE_TTL_MS = 10 * 60 * 1000;
+let lastChecked = 0;
+let cachedTools: ToolVersionInfo[] = [];
+
+interface EngineProgressPayload {
+  tool: string;
+  stage: "downloading" | "extracting" | "done" | "error";
+  percent?: number;
+  downloadedBytes?: number;
+  totalBytes?: number;
+  speedBps?: number;
+  message?: string;
+}
+
+const matchesToolName = (a: string, b: string) => {
+  const la = a.toLowerCase();
+  const lb = b.toLowerCase();
+  return (
+    la === lb ||
+    (la === "aria2" && lb === "aria2c") ||
+    (la === "aria2c" && lb === "aria2")
+  );
+};
+
+const formatBytesPair = (downloaded?: number, total?: number) => {
+  const dlMb = ((downloaded ?? 0) / (1024 * 1024)).toFixed(1);
+  if (total && total > 0) {
+    const totVal = total / (1024 * 1024);
+    const totMb = totVal >= 100 ? totVal.toFixed(0) : totVal.toFixed(1);
+    return `${dlMb} / ${totMb} MB`;
+  }
+  return `${dlMb} MB`;
+};
 
 interface PreferencesModalProps {
   isOpen: boolean;
@@ -42,6 +77,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   const [tools, setTools] = useState<ToolVersionInfo[]>([]);
   const [checkingTools, setCheckingTools] = useState(false);
   const [toolMessage, setToolMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setSavePath(defaultDir);
@@ -49,15 +85,143 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      loadToolsInfo();
+      loadToolsInfo(false);
     }
   }, [isOpen]);
 
-  const loadToolsInfo = async () => {
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    let disposed = false;
+
+    listen<EngineProgressPayload>("engine-progress", (event) => {
+      if (disposed) return;
+      const p = event.payload;
+      if (!p || !p.tool) return;
+
+      const isActive = p.stage === "downloading" || p.stage === "extracting";
+
+      setTools((prev) => {
+        const next = prev.map((t) => {
+          if (!matchesToolName(t.name, p.tool)) return t;
+          return {
+            ...t,
+            isUpdating: isActive,
+            progress: typeof p.percent === "number" ? p.percent : t.progress,
+            downloadedBytes:
+              typeof p.downloadedBytes === "number" ? p.downloadedBytes : t.downloadedBytes,
+            totalBytes:
+              typeof p.totalBytes === "number" ? p.totalBytes : t.totalBytes,
+            speedBps: typeof p.speedBps === "number" ? p.speedBps : t.speedBps,
+            stage: p.stage,
+          };
+        });
+        cachedTools = next;
+        return next;
+      });
+
+      if (p.stage === "downloading" || p.stage === "extracting") {
+        setToolErrors((prev) => {
+          const next = { ...prev };
+          for (const key of Object.keys(next)) {
+            if (matchesToolName(key, p.tool)) delete next[key];
+          }
+          return next;
+        });
+      } else if (p.stage === "done") {
+        lastChecked = 0;
+        if (p.message) {
+          setToolMessage({ ok: true, text: p.message });
+        }
+        invoke<ToolVersionInfo[]>("get_installed_tools")
+          .then((fresh) => {
+            if (disposed || !Array.isArray(fresh)) return;
+            setTools((prev) => {
+              const merged = fresh.map((item) => {
+                const old = prev.find((o) => matchesToolName(o.name, item.name));
+                const isTarget = matchesToolName(item.name, p.tool);
+                return {
+                  ...item,
+                  latestVersion: old?.latestVersion || item.latestVersion,
+                  hasUpdate: isTarget ? false : Boolean(old?.hasUpdate),
+                  isUpdating: false,
+                  stage: isTarget ? "done" : old?.stage,
+                };
+              });
+              cachedTools = merged;
+              return merged;
+            });
+          })
+          .catch(() => {});
+      } else if (p.stage === "error") {
+        const errText = p.message || `${p.tool} installation failed`;
+        setToolMessage({ ok: false, text: errText });
+        setToolErrors((prev) => ({ ...prev, [p.tool.toLowerCase()]: errText }));
+      }
+    })
+      .then((fn) => {
+        if (disposed) {
+          fn();
+        } else {
+          unlistenFn = fn;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
+  const mergeToolUpdates = (prev: ToolVersionInfo[], incoming: ToolVersionInfo[]) => {
+    const merged = incoming.map((item) => {
+      const existing = prev.find((o) => matchesToolName(o.name, item.name));
+      const active =
+        existing?.isUpdating ||
+        existing?.stage === "downloading" ||
+        existing?.stage === "extracting";
+      return {
+        ...item,
+        latestVersion: item.latestVersion || existing?.latestVersion || "",
+        hasUpdate: item.hasUpdate ?? existing?.hasUpdate ?? false,
+        isUpdating: active ? existing?.isUpdating : false,
+        progress: active ? existing?.progress : undefined,
+        downloadedBytes: active ? existing?.downloadedBytes : undefined,
+        totalBytes: active ? existing?.totalBytes : undefined,
+        speedBps: active ? existing?.speedBps : undefined,
+        stage: active ? existing?.stage : existing?.stage,
+      };
+    });
+    return merged;
+  };
+
+  const loadToolsInfo = async (force = false) => {
+    const now = Date.now();
+    if (!force && cachedTools.length > 0 && now - lastChecked < TOOLS_CACHE_TTL_MS) {
+      setTools((prev) => (prev.length > 0 ? prev : cachedTools));
+      return;
+    }
+
     try {
       setCheckingTools(true);
-      const res = await invoke<ToolVersionInfo[]>("check_tool_updates");
-      if (Array.isArray(res)) setTools(res);
+      const localRes = await invoke<ToolVersionInfo[]>("get_installed_tools");
+      if (Array.isArray(localRes)) {
+        setTools((prev) => {
+          const merged = mergeToolUpdates(prev, localRes);
+          cachedTools = merged;
+          return merged;
+        });
+      }
+
+      const remoteRes = await invoke<ToolVersionInfo[]>("check_tool_updates");
+      if (Array.isArray(remoteRes)) {
+        lastChecked = Date.now();
+        setTools((prev) => {
+          const merged = mergeToolUpdates(prev, remoteRes);
+          cachedTools = merged;
+          return merged;
+        });
+      }
     } catch {
       // fallback
     } finally {
@@ -67,19 +231,53 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
   const handleUpdateTool = async (name: string) => {
     try {
+      setToolErrors((prev) => {
+        const next = { ...prev };
+        for (const key of Object.keys(next)) {
+          if (matchesToolName(key, name)) delete next[key];
+        }
+        return next;
+      });
       setTools((prev) =>
-        prev.map((t) => (t.name === name ? { ...t, isUpdating: true } : t))
+        prev.map((t) =>
+          t.name === name
+            ? {
+                ...t,
+                isUpdating: true,
+                progress: 0,
+                downloadedBytes: 0,
+                totalBytes: 0,
+                speedBps: 0,
+                stage: "downloading",
+              }
+            : t
+        )
       );
       setToolMessage(null);
       const msg = await invoke<string>("update_tool", { toolName: name, name });
+      lastChecked = 0;
       setToolMessage({ ok: true, text: String(msg || `${name} is up to date`) });
-      await loadToolsInfo();
+      const fresh = await invoke<ToolVersionInfo[]>("get_installed_tools").catch(() => null);
+      if (Array.isArray(fresh)) {
+        setTools((prev) => {
+          const merged = mergeToolUpdates(prev, fresh).map((item) =>
+            matchesToolName(item.name, name)
+              ? { ...item, isUpdating: false, hasUpdate: false, stage: "done" }
+              : item
+          );
+          cachedTools = merged;
+          return merged;
+        });
+      }
     } catch (err: any) {
       console.error("Update error:", err);
-      setToolMessage({ ok: false, text: String(err?.message || err || `${name} update failed`) });
-    } finally {
+      const errText = String(err?.message || err || `${name} update failed`);
+      setToolMessage({ ok: false, text: errText });
+      setToolErrors((prev) => ({ ...prev, [name.toLowerCase()]: errText }));
       setTools((prev) =>
-        prev.map((t) => (t.name === name ? { ...t, isUpdating: false } : t))
+        prev.map((t) =>
+          t.name === name ? { ...t, isUpdating: false, stage: "error" } : t
+        )
       );
     }
   };
@@ -320,7 +518,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                   Core Media Engine Binaries
                 </span>
                 <button
-                  onClick={loadToolsInfo}
+                  onClick={() => loadToolsInfo(true)}
                   disabled={checkingTools}
                   className="flex items-center space-x-1.5 text-zr-accent hover:underline text-[12px] font-semibold"
                 >
@@ -348,39 +546,101 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                   )}
                   {tools.map((tool) => {
                     const missing = !tool.installedVersion || tool.installedVersion === "Not Found";
+                    const showProgress =
+                      tool.isUpdating ||
+                      tool.stage === "downloading" ||
+                      tool.stage === "extracting";
+                    const pct = Math.min(100, Math.max(0, tool.progress ?? 0));
+                    const speedMb = ((tool.speedBps ?? 0) / (1024 * 1024)).toFixed(1);
+                    const errorKey = Object.keys(toolErrors).find((k) =>
+                      matchesToolName(k, tool.name)
+                    );
+                    const rowError = errorKey ? toolErrors[errorKey] : undefined;
+
                     return (
-                    <div
-                      key={tool.name}
-                      className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 flex items-center justify-between"
-                    >
-                      <div>
-                        <div className="font-semibold text-[14px] text-zr-primary">
-                          {tool.name}
+                      <div
+                        key={tool.name}
+                        className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="font-semibold text-[14px] text-zr-primary">
+                              {tool.name}
+                            </div>
+                            <div className="text-[12px] text-zr-secondary font-mono">
+                              Installed: {tool.installedVersion || "Bundled"} &bull; Latest:{" "}
+                              {tool.latestVersion || (checkingTools ? "Checking..." : "Up to date")}
+                            </div>
+                          </div>
+                          <div className="flex items-center space-x-2">
+                            {missing ? (
+                              <span className="text-red-500 text-[11.5px] font-semibold">
+                                Not Installed
+                              </span>
+                            ) : tool.hasUpdate ? (
+                              <span className="text-amber-500 text-[11.5px] font-semibold">
+                                Update Available
+                              </span>
+                            ) : (
+                              <span className="text-emerald-600 dark:text-emerald-400 text-[11.5px] font-semibold flex items-center space-x-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Active</span>
+                              </span>
+                            )}
+                            <button
+                              onClick={() => handleUpdateTool(tool.name)}
+                              disabled={tool.isUpdating}
+                              className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-[12px] transition-colors"
+                            >
+                              {tool.isUpdating
+                                ? missing
+                                  ? "Installing..."
+                                  : "Updating..."
+                                : missing
+                                ? "Install"
+                                : "Update"}
+                            </button>
+                          </div>
                         </div>
-                        <div className="text-[12px] text-zr-secondary font-mono">
-                          Installed: {tool.installedVersion || "Bundled"} &bull; Latest: {tool.latestVersion || "Up to date"}
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        {missing ? (
-                          <span className="text-red-500 text-[11.5px] font-semibold">Not Installed</span>
-                        ) : tool.hasUpdate ? (
-                          <span className="text-amber-500 text-[11.5px] font-semibold">Update Available</span>
-                        ) : (
-                          <span className="text-emerald-600 dark:text-emerald-400 text-[11.5px] font-semibold flex items-center space-x-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Active</span>
-                          </span>
+
+                        {showProgress && (
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[11px] text-zr-secondary font-mono">
+                              <span>
+                                {tool.stage === "extracting"
+                                  ? "Extracting..."
+                                  : `Downloading... ${pct.toFixed(0)}%`}
+                              </span>
+                              <span>
+                                {formatBytesPair(tool.downloadedBytes, tool.totalBytes)}
+                                {tool.stage !== "extracting" && (tool.speedBps ?? 0) > 0
+                                  ? ` • ${speedMb} MB/s`
+                                  : ""}
+                              </span>
+                            </div>
+                            <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-150 ${
+                                  tool.stage === "extracting"
+                                    ? "bg-amber-500 animate-pulse"
+                                    : "bg-blue-600"
+                                }`}
+                                style={{
+                                  width: `${
+                                    tool.stage === "extracting" ? 100 : Math.max(2, pct)
+                                  }%`,
+                                }}
+                              />
+                            </div>
+                          </div>
                         )}
-                        <button
-                          onClick={() => handleUpdateTool(tool.name)}
-                          disabled={tool.isUpdating}
-                          className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold text-[12px] transition-colors"
-                        >
-                          {tool.isUpdating ? (missing ? "Installing..." : "Updating...") : missing ? "Install" : "Update"}
-                        </button>
+
+                        {tool.stage === "error" && rowError && (
+                          <div className="text-[11.5px] text-red-600 dark:text-red-400 font-medium">
+                            {rowError}
+                          </div>
+                        )}
                       </div>
-                    </div>
                     );
                   })}
                   {tools.some((t) => t.isUpdating) && (

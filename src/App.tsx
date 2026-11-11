@@ -81,6 +81,7 @@ export const App: React.FC = () => {
   const tasksRef = useRef<DownloadTask[]>([]);
   tasksRef.current = tasks;
   const notifiedRef = useRef<Set<string>>(new Set());
+  const recentOpenUrlsRef = useRef<Map<string, number>>(new Map());
 
   // Small always-on-top popup (bottom-right) when a desktop download finishes.
   const notifyCompleted = (payload: any) => {
@@ -339,8 +340,6 @@ export const App: React.FC = () => {
     });
 
     // 4. URL received from browser extension (via bridge / protocol)
-    let lastHandledTime = 0;
-    let lastHandledUrl = "";
     const handleOpenUrl = (event: { payload: any }) => {
       const raw = event.payload;
       let targetUrl = "";
@@ -367,12 +366,16 @@ export const App: React.FC = () => {
       }
       if (targetUrl && targetUrl.trim()) {
         const now = Date.now();
-        const urlKey = `${targetUrl.trim()}_${targetQuality}_${Boolean(raw.isDirectFile)}`;
-        if (urlKey === lastHandledUrl && now - lastHandledTime < 2500) {
-          return; // Ignore immediate duplicate event from dual emission
+        const formatIdKey = raw && typeof raw === "object" ? String(raw.formatId || raw.formatid || "") : "";
+        const urlKey = `${targetUrl.trim()}_${targetQuality}_${formatIdKey}_${Boolean(raw?.isDirectFile)}`;
+        const prevTime = recentOpenUrlsRef.current.get(urlKey);
+        if (prevTime !== undefined && now - prevTime < 5000) {
+          return; // Ignore duplicate request within 5 seconds
         }
-        lastHandledUrl = urlKey;
-        lastHandledTime = now;
+        recentOpenUrlsRef.current.set(urlKey, now);
+        for (const [k, ts] of recentOpenUrlsRef.current.entries()) {
+          if (now - ts > 10000) recentOpenUrlsRef.current.delete(k);
+        }
 
         let clean = cleanDownloadUrl(targetUrl.trim());
         if (clean.startsWith("@[") && clean.endsWith("]")) {
