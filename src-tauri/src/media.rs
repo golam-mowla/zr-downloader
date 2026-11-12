@@ -2098,7 +2098,6 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
         let is_hls = url_lower.contains("m3u8")
             || url_lower.contains("/hls/")
             || url_lower.contains("playlist.m3u8")
-            || url_lower.contains("master")
             || url_lower.contains(".mpd")
             || host_lower.contains("kick.com")
             || host_lower.contains("twitch.tv")
@@ -2175,12 +2174,12 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             }
 
             // On resume: NEVER --force-overwrites; always --no-overwrites --continue --part
-            let continue_flag = if is_resume_run || options.is_resume {
+            // For attempt_stage 0 (including HLS): use --continue to preserve partial data.
+            // For attempt_stage >= 1 (retry/fallback): use --no-continue for a clean restart.
+            let continue_flag = if is_resume_run || options.is_resume || attempt_stage == 0 {
                 "--continue"
-            } else if is_hls || attempt_stage >= 1 {
-                "--no-continue"
             } else {
-                "-c"
+                "--no-continue"
             };
             let stage_part_flag = if is_resume_run || options.is_resume {
                 "--part"
@@ -2243,7 +2242,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             }
         if is_resume_run || options.is_resume {
             cmd.arg("--no-overwrites");
-        } else if options.overwrite_files || is_clipping_active || attempt_stage >= 1 {
+        } else if (options.overwrite_files && !options.is_resume) || is_clipping_active || attempt_stage >= 1 {
             cmd.arg("--force-overwrites");
         } else {
             cmd.arg("--no-overwrites");
