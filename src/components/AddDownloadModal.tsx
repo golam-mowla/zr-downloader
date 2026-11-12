@@ -12,22 +12,44 @@ import {
   Radio,
   FileCode,
   HardDrive,
+  ListPlus,
+  AlertTriangle,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { MediaInfo, ContainerFormat, ALL_CONTAINERS } from "../types";
+import {
+  MediaInfo,
+  ContainerFormat,
+  ALL_CONTAINERS,
+  DuplicateCheckResult,
+} from "../types";
+import { expandBatchUrlInput } from "../lib/batchUrls";
+
+export interface DirectDownloadExtras {
+  autoConnections?: boolean;
+  speedLimitKb?: number;
+  priority?: string;
+  expectedChecksum?: string;
+  originPageUrl?: string;
+  postDownloadAction?: string;
+  postDownloadProgram?: string;
+  authUsername?: string;
+  authPassword?: string;
+}
 
 interface AddDownloadModalProps {
   isOpen: boolean;
   onClose: () => void;
   defaultUrl?: string;
   defaultFilename?: string;
+  defaultBatchText?: string;
   onAddDirectDownload: (
     url: string,
     savePath: string,
     filename: string,
     connections: number,
-    lowDiskSpace?: boolean
+    lowDiskSpace?: boolean,
+    extras?: DirectDownloadExtras
   ) => Promise<void>;
   onAddMediaDownload: (options: any) => Promise<void>;
   onAddTorrentDownload?: (
@@ -43,22 +65,41 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   onClose,
   defaultUrl = "",
   defaultFilename = "",
+  defaultBatchText = "",
   onAddDirectDownload,
   onAddMediaDownload,
   onAddTorrentDownload,
 }) => {
-  const [tab, setTab] = useState<"direct" | "media" | "torrent">("direct");
+  const [tab, setTab] = useState<"direct" | "media" | "batch" | "torrent">("direct");
 
   // Direct & General State
   const [url, setUrl] = useState(defaultUrl);
   const [customFilename, setCustomFilename] = useState(defaultFilename);
   const [saveFolder, setSaveFolder] = useState("");
-  const [connections, setConnections] = useState(16);
+  const [connections, setConnections] = useState(8);
+  const [autoConnections, setAutoConnections] = useState(false);
+  const [priority, setPriority] = useState<"high" | "normal" | "low">("normal");
+  const [speedLimitKb, setSpeedLimitKb] = useState(0);
+  const [expectedChecksum, setExpectedChecksum] = useState("");
+  const [postDownloadAction, setPostDownloadAction] = useState("");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [lowDiskSpace, setLowDiskSpace] = useState(() => {
     return localStorage.getItem("zr_low_disk_space") === "true";
   });
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Batch Import State
+  const [batchText, setBatchText] = useState(defaultBatchText);
+  const batchPreviewUrls = React.useMemo(() => expandBatchUrlInput(batchText), [batchText]);
+
+  // Duplicate Prompt State
+  const [duplicatePrompt, setDuplicatePrompt] = useState<{
+    mode: "direct" | "media";
+    result: DuplicateCheckResult;
+  } | null>(null);
 
   // Media (yt-dlp) State
   const [mediaInfo, setMediaInfo] = useState<MediaInfo | null>(null);
@@ -270,17 +311,93 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     }
   };
 
-  const handleDirectSubmit = async () => {
+  useEffect(() => {
+    if (isOpen && defaultBatchText) {
+      setBatchText(defaultBatchText);
+      setTab("batch");
+    }
+    if (isOpen) {
+      setDuplicatePrompt(null);
+    }
+  }, [isOpen, defaultBatchText]);
+
+  const executeDirectSubmit = async (filenameOverride?: string) => {
+    const cleanUrl = url.trim();
+    if (!cleanUrl) return;
+    await onAddDirectDownload(
+      cleanUrl,
+      saveFolder,
+      filenameOverride !== undefined ? filenameOverride : customFilename.trim(),
+      autoConnections ? 8 : connections,
+      lowDiskSpace,
+      {
+        autoConnections,
+        speedLimitKb: speedLimitKb > 0 ? speedLimitKb : 0,
+        priority,
+        expectedChecksum: expectedChecksum.trim(),
+        postDownloadAction,
+        authUsername: authUsername.trim(),
+        authPassword,
+      }
+    );
+    onClose();
+  };
+
+  const handleDirectSubmit = async (skipDuplicateCheck = false) => {
     const cleanUrl = url.trim();
     if (!cleanUrl) return;
 
     try {
       setSubmitting(true);
       setErrorMessage(null);
-      await onAddDirectDownload(cleanUrl, saveFolder, customFilename.trim(), connections, lowDiskSpace);
-      onClose();
+      if (!skipDuplicateCheck) {
+        try {
+          const dup = await invoke<DuplicateCheckResult>("check_duplicate_download", {
+            url: cleanUrl,
+            filename: customFilename.trim(),
+            saveFolder: saveFolder || null,
+            expectedSize: null,
+          });
+          if (dup?.isDuplicate) {
+            setDuplicatePrompt({ mode: "direct", result: dup });
+            setSubmitting(false);
+            return;
+          }
+        } catch {}
+      }
+      await executeDirectSubmit();
     } catch (err: any) {
       setErrorMessage(err?.message || err?.toString() || "Failed to start direct download");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleBatchSubmit = async () => {
+    if (batchPreviewUrls.length === 0) return;
+    try {
+      setSubmitting(true);
+      setErrorMessage(null);
+      for (const batchUrl of batchPreviewUrls) {
+        await onAddDirectDownload(
+          batchUrl,
+          saveFolder,
+          "",
+          autoConnections ? 8 : connections,
+          lowDiskSpace,
+          {
+            autoConnections,
+            speedLimitKb: speedLimitKb > 0 ? speedLimitKb : 0,
+            priority,
+            postDownloadAction,
+            authUsername: authUsername.trim(),
+            authPassword,
+          }
+        );
+      }
+      onClose();
+    } catch (err: any) {
+      setErrorMessage(err?.message || err?.toString() || "Batch import failed");
     } finally {
       setSubmitting(false);
     }
@@ -382,7 +499,49 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     }
   };
 
-  const handleMediaSubmit = async () => {
+  const executeMediaSubmit = async (filenameOverride?: string, forceOverwrite = false) => {
+    let cleanUrl = url.trim();
+    if (cleanUrl.startsWith("@[") && cleanUrl.endsWith("]")) {
+      cleanUrl = cleanUrl.slice(2, -1).trim();
+    }
+    if (!cleanUrl) return;
+    const isAudio = container.toLowerCase().includes("audio");
+    await onAddMediaDownload({
+      url: cleanUrl,
+      saveFolder: saveFolder || "",
+      customFilename:
+        filenameOverride !== undefined
+          ? filenameOverride
+          : customFilename.trim() || mediaInfo?.title || "",
+      downloadMode: isAudio ? "audio" : "video",
+      videoStreamId: isAudio ? "" : selectedFormatId || "best",
+      audioStreamId: selectedAudioId || "best",
+      container: container || "MP4 (Video)",
+      enableClip: Boolean(enableClip),
+      startTime: enableClip ? startTime || "00:00:00" : "00:00:00",
+      endTime: enableClip ? endTime || "00:00:10" : "00:00:10",
+      lowDiskSpace: Boolean(lowDiskSpace),
+      overwriteFiles: forceOverwrite,
+      aria2Connections: autoConnections ? 16 : Math.min(16, connections),
+      limitSpeed: speedLimitKb > 0,
+      speedLimitKb: speedLimitKb > 0 ? speedLimitKb : 0,
+      priority,
+      expectedChecksum: expectedChecksum.trim(),
+      postDownloadAction,
+      authUsername: authUsername.trim(),
+      authPassword,
+      duration: mediaInfo?.duration && mediaInfo.duration > 0 ? mediaInfo.duration : undefined,
+      proxy: "",
+      cookiesFile: "",
+      cookiesBrowser: "",
+      ytdlpDiscoveryArgs: "",
+      ytdlpDownloadArgs: "",
+      postProcessorArgs: "",
+    });
+    onClose();
+  };
+
+  const handleMediaSubmit = async (skipDuplicateCheck = false) => {
     let cleanUrl = url.trim();
     if (cleanUrl.startsWith("@[") && cleanUrl.endsWith("]")) {
       cleanUrl = cleanUrl.slice(2, -1).trim();
@@ -391,28 +550,22 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     try {
       setSubmitting(true);
       setErrorMessage(null);
-      const isAudio = container.toLowerCase().includes("audio");
-      await onAddMediaDownload({
-        url: cleanUrl,
-        saveFolder: saveFolder || "",
-        customFilename: customFilename.trim() || mediaInfo?.title || "",
-        downloadMode: isAudio ? "audio" : "video",
-        videoStreamId: isAudio ? "" : (selectedFormatId || "best"),
-        audioStreamId: selectedAudioId || "best",
-        container: container || "MP4 (Video)",
-        enableClip: Boolean(enableClip),
-        startTime: enableClip ? (startTime || "00:00:00") : "00:00:00",
-        endTime: enableClip ? (endTime || "00:00:10") : "00:00:10",
-        lowDiskSpace: Boolean(lowDiskSpace),
-        duration: mediaInfo?.duration && mediaInfo.duration > 0 ? mediaInfo.duration : undefined,
-        proxy: "",
-        cookiesFile: "",
-        cookiesBrowser: "",
-        ytdlpDiscoveryArgs: "",
-        ytdlpDownloadArgs: "",
-        postProcessorArgs: "",
-      });
-      onClose();
+      if (!skipDuplicateCheck) {
+        try {
+          const dup = await invoke<DuplicateCheckResult>("check_duplicate_download", {
+            url: cleanUrl,
+            filename: customFilename.trim() || mediaInfo?.title || "",
+            saveFolder: saveFolder || null,
+            expectedSize: null,
+          });
+          if (dup?.isDuplicate) {
+            setDuplicatePrompt({ mode: "media", result: dup });
+            setSubmitting(false);
+            return;
+          }
+        } catch {}
+      }
+      await executeMediaSubmit();
     } catch (err: any) {
       setErrorMessage(err?.message || err?.toString() || "Failed to start media download");
     } finally {
@@ -478,39 +631,50 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         </div>
 
         {/* Tab Selection */}
-        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-5 transition-colors">
+        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-4 overflow-x-auto transition-colors">
           <button
             onClick={() => setTab("direct")}
-            className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-2 border-b-2 transition-all ${
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
               tab === "direct"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Zap className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-            <span>Direct File (Multi-Threaded)</span>
+            <span>Direct File</span>
           </button>
           <button
             onClick={() => setTab("media")}
-            className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-2 border-b-2 transition-all ${
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
               tab === "media"
                 ? "border-purple-600 dark:border-purple-400 text-purple-600 dark:text-purple-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Film className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-            <span>Social & Video (yt-dlp)</span>
+            <span>Social & Video</span>
+          </button>
+          <button
+            onClick={() => setTab("batch")}
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+              tab === "batch"
+                ? "border-emerald-600 dark:border-emerald-400 text-emerald-600 dark:text-emerald-400"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
+            }`}
+          >
+            <ListPlus className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>Batch Import</span>
           </button>
           <button
             onClick={() => setTab("torrent")}
-            className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-2 border-b-2 transition-all ${
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
               tab === "torrent"
                 ? "border-orange-500 text-orange-500"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Radio className="w-4 h-4 text-orange-500" />
-            <span>BitTorrent (Magnet / .torrent)</span>
+            <span>BitTorrent</span>
           </button>
         </div>
 
@@ -523,8 +687,93 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             </div>
           )}
 
-          {/* URL / Path Input with Actions */}
-          <div className="space-y-1.5">
+          {duplicatePrompt && (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/40 space-y-2.5">
+              <div className="flex items-start space-x-2">
+                <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                <div className="text-[12.5px] text-zr-primary">
+                  <div className="font-semibold">Duplicate Download Detected</div>
+                  <div className="text-zr-secondary mt-0.5">{duplicatePrompt.result.reason}</div>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDuplicatePrompt(null);
+                    onClose();
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-[12px] font-semibold text-zr-secondary hover:text-zr-primary"
+                >
+                  Skip
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const suggested = duplicatePrompt.result.suggestedFilename;
+                    const mode = duplicatePrompt.mode;
+                    setDuplicatePrompt(null);
+                    setCustomFilename(suggested);
+                    if (mode === "direct") await executeDirectSubmit(suggested);
+                    else await executeMediaSubmit(suggested, false);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[12px] font-semibold"
+                >
+                  Rename ({duplicatePrompt.result.suggestedFilename})
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const mode = duplicatePrompt.mode;
+                    setDuplicatePrompt(null);
+                    if (mode === "direct") await executeDirectSubmit();
+                    else await executeMediaSubmit(undefined, true);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[12px] font-semibold"
+                >
+                  Overwrite
+                </button>
+              </div>
+            </div>
+          )}
+
+          {tab === "batch" ? (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-[12.5px] font-medium text-zr-secondary">
+                  URLs or Patterns (e.g. https://example.com/file[001-100].zip)
+                </label>
+                <textarea
+                  rows={5}
+                  value={batchText}
+                  onChange={(e) => setBatchText(e.target.value)}
+                  placeholder={"https://example.com/archive[001-010].zip\nhttps://example.com/another-file.iso"}
+                  className="w-full px-3 py-2 rounded-lg text-[12.5px] font-mono border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden"
+                />
+              </div>
+              <div className="rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 p-3 space-y-1.5">
+                <div className="flex justify-between text-[12px] font-semibold text-zr-primary">
+                  <span>Expanded Preview List</span>
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    {batchPreviewUrls.length} URL{batchPreviewUrls.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="max-h-32 overflow-y-auto space-y-0.5 font-mono text-[11px] text-zr-secondary">
+                  {batchPreviewUrls.slice(0, 50).map((u, idx) => (
+                    <div key={idx} className="truncate">
+                      {idx + 1}. {u}
+                    </div>
+                  ))}
+                  {batchPreviewUrls.length > 50 && (
+                    <div className="text-zr-muted italic">
+                      ...and {batchPreviewUrls.length - 50} more URLs
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="text-[13px] font-medium text-zr-secondary">
                 {tab === "torrent" ? "Magnet Link or .torrent File Path" : "Target Download URL"}
@@ -595,6 +844,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
               )}
             </div>
           </div>
+          )}
 
           {/* Save Destination Folder */}
           <div className="space-y-1.5">
@@ -662,38 +912,158 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             </div>
           )}
 
-          {/* Direct Mode Specifics: Simultaneous Segments */}
-          {tab === "direct" && (
+          {/* Direct & Batch Mode Specifics: Simultaneous Segments (4/8/16/24/32 + Auto) */}
+          {(tab === "direct" || tab === "batch") && (
             <div className="space-y-2 pt-2 border-t border-zr">
               <div className="flex items-center justify-between text-[13px]">
                 <span className="font-medium text-zr-secondary">
-                  Simultaneous Download Segments (Threads)
+                  Simultaneous Connections
                 </span>
                 <span className="font-semibold tabular-nums text-zr-accent">
-                  {connections} Parallel Connections
+                  {autoConnections ? "Auto (8 -> 32)" : `${connections} Connections`}
                 </span>
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                {[4, 8, 12, 16].map((num) => (
+              <div className="grid grid-cols-6 gap-1.5">
+                {[4, 8, 16, 24, 32].map((num) => (
                   <button
                     key={num}
                     type="button"
-                    onClick={() => setConnections(num)}
-                    className={`py-2 rounded-lg text-[13px] font-semibold border transition-colors ${
-                      connections === num
+                    title={num > 16 ? "some servers may block" : `${num} connections`}
+                    onClick={() => {
+                      setAutoConnections(false);
+                      setConnections(num);
+                    }}
+                    className={`py-2 rounded-lg text-[12.5px] font-semibold border transition-colors ${
+                      !autoConnections && connections === num
                         ? "bg-blue-600 border-blue-600 text-white"
                         : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
                     }`}
                   >
-                    {num} Threads
+                    {num}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  title="Start 8, +4 every 5s while speed grows >10%, cap 32"
+                  onClick={() => {
+                    setAutoConnections(true);
+                    setConnections(8);
+                  }}
+                  className={`py-2 rounded-lg text-[12.5px] font-semibold border transition-colors ${
+                    autoConnections
+                      ? "bg-blue-600 border-blue-600 text-white"
+                      : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
+                  }`}
+                >
+                  Auto
+                </button>
               </div>
-              <p className="text-[12px] text-zr-muted">
-                Splits file into concurrent HTTP Range slices for maximum bandwidth saturation.
-              </p>
+              {(autoConnections || connections > 16) && (
+                <p
+                  className="text-[11.5px] text-amber-600 dark:text-amber-400 flex items-center space-x-1.5"
+                  title="some servers may block"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span>Warning: &gt;16 connections — some servers may block excessive segments.</span>
+                </p>
+              )}
+            </div>
+          )}
 
-              
+          {/* Optional Advanced Settings: Priority, Task Speed Limit, Checksum (MD5/SHA-256), Auth, Post-Download Action */}
+          {tab !== "torrent" && (
+            <div className="pt-2 border-t border-zr space-y-2">
+              <button
+                type="button"
+                onClick={() => setShowAdvanced((v) => !v)}
+                className="text-[12px] font-semibold text-zr-accent hover:underline"
+              >
+                {showAdvanced
+                  ? "Hide Advanced (Checksum, Priority, Task Limit, Auth & Post-Action)"
+                  : "+ Advanced (Checksum, Priority, Task Limit, Auth & Post-Action)"}
+              </button>
+              {showAdvanced && (
+                <div className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5 text-[12px]">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-zr-secondary font-medium block mb-1">
+                        Queue Priority
+                      </label>
+                      <select
+                        value={priority}
+                        onChange={(e) =>
+                          setPriority(e.target.value as "high" | "normal" | "low")
+                        }
+                        className="w-full px-2.5 py-1.5 rounded border border-zr bg-zr-surface text-zr-primary"
+                      >
+                        <option value="high">High</option>
+                        <option value="normal">Normal</option>
+                        <option value="low">Low</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-zr-secondary font-medium block mb-1">
+                        Per-Task Speed Limit (KB/s, 0 = default)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={speedLimitKb}
+                        onChange={(e) =>
+                          setSpeedLimitKb(Math.max(0, parseInt(e.target.value, 10) || 0))
+                        }
+                        className="w-full px-2.5 py-1.5 rounded border border-zr bg-zr-surface text-zr-primary font-mono"
+                      />
+                    </div>
+                  </div>
+                  {tab !== "batch" && (
+                    <div>
+                      <label className="text-zr-secondary font-medium block mb-1">
+                        Expected MD5 / SHA-256 Checksum (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        value={expectedChecksum}
+                        onChange={(e) => setExpectedChecksum(e.target.value)}
+                        placeholder="Optional hex MD5 (32 chars) or SHA-256 (64 chars)..."
+                        className="w-full px-2.5 py-1.5 rounded border border-zr bg-zr-surface text-zr-primary font-mono"
+                      />
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={authUsername}
+                      onChange={(e) => setAuthUsername(e.target.value)}
+                      placeholder="HTTP Basic Auth Username (optional)"
+                      className="px-2.5 py-1.5 rounded border border-zr bg-zr-surface text-zr-primary"
+                    />
+                    <input
+                      type="password"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="HTTP Basic Auth Password (optional)"
+                      className="px-2.5 py-1.5 rounded border border-zr bg-zr-surface text-zr-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-zr-secondary font-medium block mb-1">
+                      Post-Download Action Override
+                    </label>
+                    <select
+                      value={postDownloadAction}
+                      onChange={(e) => setPostDownloadAction(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded border border-zr bg-zr-surface text-zr-primary"
+                    >
+                      <option value="">Use Global Setting</option>
+                      <option value="none">Do Nothing</option>
+                      <option value="open_file">Open Downloaded File</option>
+                      <option value="open_folder">Open Folder</option>
+                      <option value="defender_scan">Scan with Windows Defender</option>
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -841,7 +1211,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           {tab === "direct" ? (
             <button
               type="button"
-              onClick={() => handleDirectSubmit()}
+              onClick={() => handleDirectSubmit(false)}
               disabled={submitting || !url.trim()}
               className="flex items-center space-x-2 px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[13px] shadow-xs transition-colors disabled:opacity-60"
             >
@@ -851,6 +1221,20 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 <Download className="w-4 h-4" />
               )}
               <span>Start High-Speed Download</span>
+            </button>
+          ) : tab === "batch" ? (
+            <button
+              type="button"
+              onClick={handleBatchSubmit}
+              disabled={submitting || batchPreviewUrls.length === 0}
+              className="flex items-center space-x-2 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[13px] shadow-xs transition-colors disabled:opacity-60"
+            >
+              {submitting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <ListPlus className="w-4 h-4" />
+              )}
+              <span>Start All ({batchPreviewUrls.length})</span>
             </button>
           ) : tab === "torrent" ? (
             <button
@@ -869,7 +1253,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           ) : (
             <button
               type="button"
-              onClick={handleMediaSubmit}
+              onClick={() => handleMediaSubmit(false)}
               disabled={submitting || !url.trim()}
               className="flex items-center space-x-2 px-5 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-semibold text-[13px] shadow-xs transition-colors disabled:opacity-60"
             >

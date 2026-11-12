@@ -1,10 +1,14 @@
 pub mod downloader;
 pub mod media;
 pub mod queue;
+pub mod scheduler;
+pub mod settings;
 pub mod torrent;
 
 use downloader::{DownloadTask, EngineState, UrlMetadata};
 use media::{AppUrlState, DownloadState};
+use scheduler::{SchedulerConfig, SchedulerState};
+use settings::{AppSettings, SettingsState};
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -169,29 +173,68 @@ fn save_all_tasks_sync(app: &AppHandle) {
 #[command]
 async fn probe_http_url(
     state: State<'_, EngineState>,
+    settings_state: State<'_, SettingsState>,
     url: String,
+    auth_username: Option<String>,
+    auth_password: Option<String>,
 ) -> Result<UrlMetadata, String> {
-    downloader::probe_url(&state.client, &url).await
+    let client = state.current_client().await;
+    let app_settings = settings_state.get().await;
+    let site_auth = settings::find_credentials_for_url(&app_settings, &url)
+        .map(|(u, p)| (u.to_string(), p.to_string()));
+    let explicit_user = auth_username.unwrap_or_default();
+    let explicit_pass = auth_password.unwrap_or_default();
+    let auth_ref = if !explicit_user.trim().is_empty() {
+        Some((explicit_user.trim(), explicit_pass.as_str()))
+    } else {
+        site_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str()))
+    };
+    downloader::probe_url_with_auth(&client, &url, auth_ref).await
 }
 
+#[allow(clippy::too_many_arguments)]
 #[command]
 async fn start_http_download(
     app: AppHandle,
     state: State<'_, EngineState>,
+    settings_state: State<'_, SettingsState>,
     url: String,
     filename: Option<String>,
     save_folder: Option<String>,
     chunk_count: Option<usize>,
     low_disk_space: Option<bool>,
+    auto_connections: Option<bool>,
+    speed_limit_kb: Option<u64>,
+    priority: Option<String>,
+    expected_checksum: Option<String>,
+    origin_page_url: Option<String>,
+    post_download_action: Option<String>,
+    post_download_program: Option<String>,
+    auth_username: Option<String>,
+    auth_password: Option<String>,
 ) -> Result<String, String> {
-    let meta = downloader::probe_url(&state.client, &url).await.unwrap_or(UrlMetadata {
-        url: url.clone(),
-        filename: "download.bin".to_string(),
-        total_size: None,
-        supports_ranges: false,
-        content_type: None,
-        category: "docs".to_string(),
-    });
+    let app_settings = settings_state.get().await;
+    let client = state.current_client().await;
+    let site_auth = settings::find_credentials_for_url(&app_settings, &url)
+        .map(|(u, p)| (u.to_string(), p.to_string()));
+    let u_val = auth_username.clone().unwrap_or_default();
+    let p_val = auth_password.clone().unwrap_or_default();
+    let auth_ref = if !u_val.trim().is_empty() {
+        Some((u_val.trim(), p_val.as_str()))
+    } else {
+        site_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str()))
+    };
+
+    let meta = downloader::probe_url_with_auth(&client, &url, auth_ref)
+        .await
+        .unwrap_or(UrlMetadata {
+            url: url.clone(),
+            filename: "download.bin".to_string(),
+            total_size: None,
+            supports_ranges: false,
+            content_type: None,
+            category: "docs".to_string(),
+        });
 
     let mut resolved_name = filename
         .filter(|n| !n.trim().is_empty())
@@ -228,17 +271,35 @@ async fn start_http_download(
     let resolved_folder = save_folder
         .filter(|f| !f.trim().is_empty())
         .unwrap_or_else(|| {
-            dirs_or_default_downloads()
+            if !app_settings.default_download_dir.trim().is_empty() {
+                app_settings.default_download_dir.clone()
+            } else {
+                dirs_or_default_downloads()
+            }
         });
 
-    let save_path = PathBuf::from(&resolved_folder).join(&resolved_name).to_string_lossy().to_string();
+    let save_path = PathBuf::from(&resolved_folder)
+        .join(&resolved_name)
+        .to_string_lossy()
+        .to_string();
     let total_bytes = meta.total_size.unwrap_or(0);
+    let is_auto = auto_connections.unwrap_or_else(|| app_settings.connection_mode == "auto");
+    let default_conns = app_settings.default_connections.clamp(1, 32);
     let chunks = if !meta.supports_ranges || total_bytes == 0 {
         1
+    } else if is_auto {
+        8
     } else {
-        chunk_count.unwrap_or(if total_bytes > 2 * 1024 * 1024 { 8 } else { 1 }).clamp(1, 32)
+        chunk_count
+            .unwrap_or(if total_bytes > 2 * 1024 * 1024 {
+                default_conns
+            } else {
+                1
+            })
+            .clamp(1, 32)
     };
-    let category = downloader::detect_category_with_mime(&resolved_name, meta.content_type.as_deref());
+    let category =
+        downloader::detect_category_with_mime(&resolved_name, meta.content_type.as_deref());
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -258,11 +319,22 @@ async fn start_http_download(
         category,
         chunk_count: chunks,
         is_resumable: meta.supports_ranges,
-        low_disk_space: low_disk_space.unwrap_or(false),
+        low_disk_space: low_disk_space.unwrap_or(app_settings.low_disk_space),
         chunks: Vec::new(),
         speed_history: Vec::new(),
         error_message: None,
         created_at: now,
+        priority: priority.unwrap_or_else(|| "normal".to_string()),
+        queue_order: chrono::Utc::now().timestamp_millis(),
+        auto_connections: is_auto && meta.supports_ranges && total_bytes > 2 * 1024 * 1024,
+        speed_limit_kb: speed_limit_kb.unwrap_or(0),
+        expected_checksum: expected_checksum.unwrap_or_default(),
+        origin_page_url: origin_page_url.unwrap_or_default(),
+        post_download_action: post_download_action.unwrap_or_default(),
+        post_download_program: post_download_program.unwrap_or_default(),
+        auth_username: u_val,
+        auth_password: p_val,
+        ..Default::default()
     };
 
     queue::enqueue_download(app, state.inner().clone(), task).await
@@ -329,7 +401,8 @@ async fn resume_http_download(
         }
     }
 
-    // Hydrate from adjacent .zr_sparse_meta_<id>.json and verify Range support before resuming
+    // Hydrate from adjacent .zr_sparse_meta_<id>.json and verify Range support before resuming.
+    // Requirement A: If server does NOT support resume when partial bytes exist, error instead of restarting from 0%.
     let maybe_task = {
         let tasks = state.tasks.read().await;
         tasks.get(&task_id).cloned()
@@ -338,21 +411,30 @@ async fn resume_http_download(
     if let Some(mut task) = maybe_task {
         downloader::hydrate_task_from_sparse_meta(&mut task).await;
         if task.downloaded_bytes > 0 {
-            let probe_supports_range = match downloader::probe_url(&state.client, &task.url).await {
+            let client = state.current_client().await;
+            let probe_supports_range = match downloader::probe_url(&client, &task.url).await {
                 Ok(meta) => meta.supports_ranges,
                 Err(_) => task.is_resumable,
             };
             if !probe_supports_range {
-                let meta_path = downloader::sparse_meta_path_for(&task.save_path, &task.id);
-                let _ = std::fs::remove_file(meta_path);
-                if let Some(parent) = Path::new(&task.save_path).parent() {
-                    let tmp_dir = parent.join(format!(".zr_tmp_{}", task.id));
-                    let _ = std::fs::remove_dir_all(tmp_dir);
-                }
+                let msg = "Server does not support resume".to_string();
                 task.is_resumable = false;
-                task.chunk_count = 1;
-                task.downloaded_bytes = 0;
-                task.percent = 0.0;
+                task.status = "error".to_string();
+                task.speed_bps = 0;
+                task.speed_formatted = "0 B/s".to_string();
+                task.eta_formatted = "--".to_string();
+                task.error_message = Some(msg.clone());
+                {
+                    let mut tasks = state.tasks.write().await;
+                    tasks.insert(task_id.clone(), task.clone());
+                }
+                let _ = app.emit(
+                    "download-error",
+                    serde_json::json!({ "id": task_id, "error": msg }),
+                );
+                let _ = app.emit("download-progress", task);
+                save_all_tasks(&app).await;
+                return Err("Server does not support resume".to_string());
             }
         }
         let mut tasks = state.tasks.write().await;
@@ -424,8 +506,461 @@ async fn get_all_downloads(
             }
         }
     }
-    list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    list.sort_by(|a, b| {
+        a.queue_order
+            .cmp(&b.queue_order)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+    });
     Ok(list)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DuplicateCheckResult {
+    is_duplicate: bool,
+    reason: String,
+    existing_task_id: Option<String>,
+    existing_path: Option<String>,
+    suggested_filename: String,
+}
+
+fn build_unique_filename(folder: &str, filename: &str) -> String {
+    let dir = Path::new(folder);
+    let path = dir.join(filename);
+    if !path.exists() {
+        return filename.to_string();
+    }
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download");
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    for i in 1..1000 {
+        let candidate = if ext.is_empty() {
+            format!("{} ({})", stem, i)
+        } else {
+            format!("{} ({}).{}", stem, i, ext)
+        };
+        if !dir.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    format!("{}_{}", chrono::Utc::now().timestamp(), filename)
+}
+
+#[command]
+async fn get_app_settings(state: State<'_, SettingsState>) -> Result<AppSettings, String> {
+    Ok(state.get().await)
+}
+
+#[command]
+async fn save_app_settings(
+    app: AppHandle,
+    settings_state: State<'_, SettingsState>,
+    engine_state: State<'_, EngineState>,
+    new_settings: AppSettings,
+) -> Result<AppSettings, String> {
+    let mut normalized = new_settings;
+    normalized.max_active_downloads = normalized.max_active_downloads.clamp(1, 10);
+    normalized.default_connections = normalized.default_connections.clamp(1, 32);
+    settings_state.save(normalized.clone()).await?;
+    engine_state.apply_settings(&normalized).await;
+    let _ = settings::apply_start_with_windows(normalized.start_with_windows);
+    let _ = app.emit("app-settings-updated", normalized.clone());
+    queue::process_queue(&app).await;
+    Ok(normalized)
+}
+
+#[command]
+async fn toggle_global_speed_limit(
+    app: AppHandle,
+    settings_state: State<'_, SettingsState>,
+    engine_state: State<'_, EngineState>,
+    enabled: bool,
+) -> Result<AppSettings, String> {
+    let mut current = settings_state.get().await;
+    current.speed_limit_enabled = enabled;
+    settings_state.save(current.clone()).await?;
+    engine_state.apply_settings(&current).await;
+    let _ = app.emit("app-settings-updated", current.clone());
+    Ok(current)
+}
+
+#[command]
+async fn get_scheduler_config(state: State<'_, SchedulerState>) -> Result<SchedulerConfig, String> {
+    Ok(state.get().await)
+}
+
+#[command]
+async fn save_scheduler_config(
+    app: AppHandle,
+    state: State<'_, SchedulerState>,
+    config: SchedulerConfig,
+) -> Result<(), String> {
+    state.save(config.clone()).await?;
+    let _ = app.emit("scheduler-config-updated", config);
+    Ok(())
+}
+
+#[command]
+async fn cancel_scheduled_shutdown(state: State<'_, SchedulerState>) -> Result<(), String> {
+    scheduler::cancel_os_shutdown(state.inner())
+}
+
+#[command]
+async fn pause_all_downloads_cmd(app: AppHandle) -> Result<(), String> {
+    queue::pause_all_downloads(&app).await;
+    Ok(())
+}
+
+#[command]
+async fn resume_all_downloads_cmd(app: AppHandle) -> Result<(), String> {
+    queue::resume_scheduled_queue(&app).await;
+    Ok(())
+}
+
+#[command]
+async fn set_task_priority(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    task_id: String,
+    priority: String,
+) -> Result<(), String> {
+    let norm = match priority.trim().to_lowercase().as_str() {
+        "high" => "high".to_string(),
+        "low" => "low".to_string(),
+        _ => "normal".to_string(),
+    };
+    {
+        let mut tasks = state.tasks.write().await;
+        if let Some(t) = tasks.get_mut(&task_id) {
+            t.priority = norm.clone();
+            let _ = app.emit("download-progress", t.clone());
+        }
+    }
+    {
+        let mut mtasks = download_state.tasks.lock().unwrap();
+        if let Some(t) = mtasks.get_mut(&task_id) {
+            t.priority = norm.clone();
+            let _ = app.emit("download-progress", t.clone());
+        }
+        let mut mopts = download_state.task_options.lock().unwrap();
+        if let Some(o) = mopts.get_mut(&task_id) {
+            o.priority = norm;
+        }
+    }
+    save_all_tasks(&app).await;
+    queue::process_queue(&app).await;
+    Ok(())
+}
+
+#[command]
+async fn reorder_tasks(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    ordered_ids: Vec<String>,
+) -> Result<(), String> {
+    {
+        let mut tasks = state.tasks.write().await;
+        for (idx, tid) in ordered_ids.iter().enumerate() {
+            if let Some(t) = tasks.get_mut(tid) {
+                t.queue_order = (idx as i64) + 1;
+            }
+        }
+    }
+    {
+        let mut mtasks = download_state.tasks.lock().unwrap();
+        let mut mopts = download_state.task_options.lock().unwrap();
+        for (idx, tid) in ordered_ids.iter().enumerate() {
+            let order_val = (idx as i64) + 1;
+            if let Some(t) = mtasks.get_mut(tid) {
+                t.queue_order = order_val;
+            }
+            if let Some(o) = mopts.get_mut(tid) {
+                o.queue_order = order_val;
+            }
+        }
+    }
+    save_all_tasks(&app).await;
+    queue::process_queue(&app).await;
+    Ok(())
+}
+
+#[command]
+async fn update_task_connections(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    task_id: String,
+    connections: usize,
+    auto_connections: bool,
+) -> Result<(), String> {
+    let clamped = connections.clamp(1, 32);
+    {
+        let mut tasks = state.tasks.write().await;
+        if let Some(t) = tasks.get_mut(&task_id) {
+            t.chunk_count = clamped;
+            t.auto_connections = auto_connections;
+            let _ = app.emit("download-progress", t.clone());
+        }
+    }
+    {
+        let mut mtasks = download_state.tasks.lock().unwrap();
+        if let Some(t) = mtasks.get_mut(&task_id) {
+            t.chunk_count = clamped;
+            t.auto_connections = auto_connections;
+            let _ = app.emit("download-progress", t.clone());
+        }
+        let mut mopts = download_state.task_options.lock().unwrap();
+        if let Some(o) = mopts.get_mut(&task_id) {
+            o.aria2_connections = (clamped as u32).clamp(1, 16);
+        }
+    }
+    save_all_tasks(&app).await;
+    Ok(())
+}
+
+#[command]
+async fn set_task_speed_limit(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    task_id: String,
+    speed_limit_kb: u64,
+) -> Result<(), String> {
+    state.set_task_speed_limit(&task_id, speed_limit_kb).await;
+    {
+        let mut tasks = state.tasks.write().await;
+        if let Some(t) = tasks.get_mut(&task_id) {
+            t.speed_limit_kb = speed_limit_kb;
+            let _ = app.emit("download-progress", t.clone());
+        }
+    }
+    {
+        let mut mtasks = download_state.tasks.lock().unwrap();
+        if let Some(t) = mtasks.get_mut(&task_id) {
+            t.speed_limit_kb = speed_limit_kb;
+            let _ = app.emit("download-progress", t.clone());
+        }
+        let mut mopts = download_state.task_options.lock().unwrap();
+        if let Some(o) = mopts.get_mut(&task_id) {
+            o.limit_speed = speed_limit_kb > 0;
+            o.speed_limit_kb = speed_limit_kb as u32;
+        }
+    }
+    save_all_tasks(&app).await;
+    Ok(())
+}
+
+#[command]
+async fn check_duplicate_download(
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    settings_state: State<'_, SettingsState>,
+    url: String,
+    filename: String,
+    save_folder: Option<String>,
+    expected_size: Option<u64>,
+) -> Result<DuplicateCheckResult, String> {
+    let norm_url = url.trim().to_string();
+    let app_settings = settings_state.get().await;
+    let folder = save_folder
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            if !app_settings.default_download_dir.trim().is_empty() {
+                app_settings.default_download_dir.clone()
+            } else {
+                dirs_or_default_downloads()
+            }
+        });
+    let suggested = build_unique_filename(&folder, &filename);
+
+    {
+        let tasks = state.tasks.read().await;
+        for t in tasks.values() {
+            let same_url = !norm_url.is_empty() && t.url.trim() == norm_url;
+            let same_file_size = !filename.is_empty()
+                && t.filename.eq_ignore_ascii_case(filename.trim())
+                && expected_size.map(|sz| sz > 0 && sz == t.total_bytes).unwrap_or(false);
+            if same_url || same_file_size {
+                return Ok(DuplicateCheckResult {
+                    is_duplicate: true,
+                    reason: if same_url {
+                        "This URL is already in your download list.".to_string()
+                    } else {
+                        "A file with the same name and size already exists in the list.".to_string()
+                    },
+                    existing_task_id: Some(t.id.clone()),
+                    existing_path: Some(t.save_path.clone()),
+                    suggested_filename: suggested,
+                });
+            }
+        }
+    }
+
+    {
+        let mtasks = download_state.tasks.lock().unwrap();
+        for t in mtasks.values() {
+            let same_url = !norm_url.is_empty() && t.url.trim() == norm_url;
+            let same_file_size = !filename.is_empty()
+                && t.filename.eq_ignore_ascii_case(filename.trim())
+                && expected_size.map(|sz| sz > 0 && sz == t.total_bytes).unwrap_or(false);
+            if same_url || same_file_size {
+                return Ok(DuplicateCheckResult {
+                    is_duplicate: true,
+                    reason: if same_url {
+                        "This URL is already in your download list.".to_string()
+                    } else {
+                        "A file with the same name and size already exists in the list.".to_string()
+                    },
+                    existing_task_id: Some(t.id.clone()),
+                    existing_path: Some(t.save_path.clone()),
+                    suggested_filename: suggested,
+                });
+            }
+        }
+    }
+
+    if !filename.trim().is_empty() {
+        let candidate_path = Path::new(&folder).join(filename.trim());
+        if candidate_path.exists() {
+            let existing_sz = std::fs::metadata(&candidate_path).map(|m| m.len()).unwrap_or(0);
+            let matches_size = expected_size.map(|sz| sz > 0 && sz == existing_sz).unwrap_or(true);
+            if matches_size {
+                return Ok(DuplicateCheckResult {
+                    is_duplicate: true,
+                    reason: format!(
+                        "'{}' already exists in the target folder.",
+                        filename.trim()
+                    ),
+                    existing_task_id: None,
+                    existing_path: Some(candidate_path.to_string_lossy().to_string()),
+                    suggested_filename: suggested,
+                });
+            }
+        }
+    }
+
+    Ok(DuplicateCheckResult {
+        is_duplicate: false,
+        reason: String::new(),
+        existing_task_id: None,
+        existing_path: None,
+        suggested_filename: suggested,
+    })
+}
+
+#[command]
+async fn export_download_list(
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    file_path: String,
+) -> Result<usize, String> {
+    let mut merged: HashMap<String, PersistedTask> = HashMap::new();
+    {
+        let http_tasks = state.tasks.read().await;
+        for (id, t) in http_tasks.iter() {
+            merged.insert(
+                id.clone(),
+                PersistedTask {
+                    task: t.clone(),
+                    options: None,
+                    is_media: false,
+                },
+            );
+        }
+    }
+    {
+        let mtasks = download_state.tasks.lock().unwrap();
+        let mopts = download_state.task_options.lock().unwrap();
+        for (id, t) in mtasks.iter() {
+            merged.insert(
+                id.clone(),
+                PersistedTask {
+                    task: t.clone(),
+                    options: mopts.get(id).cloned(),
+                    is_media: true,
+                },
+            );
+        }
+    }
+    let mut entries: Vec<PersistedTask> = merged.into_values().collect();
+    entries.sort_by(|a, b| a.task.queue_order.cmp(&b.task.queue_order));
+    let count = entries.len();
+    let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
+    std::fs::write(&file_path, json).map_err(|e| e.to_string())?;
+    Ok(count)
+}
+
+#[command]
+async fn import_download_list(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    download_state: State<'_, DownloadState>,
+    file_path: String,
+) -> Result<usize, String> {
+    let raw = std::fs::read_to_string(&file_path).map_err(|e| e.to_string())?;
+    let mut imported_count = 0usize;
+    if let Ok(entries) = serde_json::from_str::<Vec<PersistedTask>>(&raw) {
+        for mut entry in entries {
+            if matches!(
+                entry.task.status.as_str(),
+                "downloading" | "connecting" | "queued" | "assembling"
+            ) {
+                entry.task.status = "paused".to_string();
+                entry.task.speed_bps = 0;
+                entry.task.speed_formatted = "0 B/s".to_string();
+                entry.task.eta_formatted = "--".to_string();
+            }
+            if entry.is_media || entry.options.is_some() {
+                download_state
+                    .tasks
+                    .lock()
+                    .unwrap()
+                    .insert(entry.task.id.clone(), entry.task.clone());
+                if let Some(opts) = entry.options {
+                    download_state
+                        .task_options
+                        .lock()
+                        .unwrap()
+                        .insert(entry.task.id.clone(), opts);
+                }
+            } else {
+                state
+                    .tasks
+                    .write()
+                    .await
+                    .insert(entry.task.id.clone(), entry.task.clone());
+            }
+            imported_count += 1;
+        }
+    } else if let Ok(tasks_only) = serde_json::from_str::<Vec<DownloadTask>>(&raw) {
+        let mut map = state.tasks.write().await;
+        for mut t in tasks_only {
+            if matches!(
+                t.status.as_str(),
+                "downloading" | "connecting" | "queued" | "assembling"
+            ) {
+                t.status = "paused".to_string();
+            }
+            map.insert(t.id.clone(), t);
+            imported_count += 1;
+        }
+    } else {
+        return Err("Invalid download list JSON file".to_string());
+    }
+    save_all_tasks(&app).await;
+    Ok(imported_count)
+}
+
+#[command]
+async fn read_text_file_content(file_path: String) -> Result<String, String> {
+    std::fs::read_to_string(&file_path).map_err(|e| e.to_string())
 }
 
 #[command]
@@ -901,6 +1436,7 @@ async fn open_download_window(
                         speed_history: Vec::new(),
                         error_message: None,
                         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                        ..Default::default()
                     };
                     tasks_lock.insert(task_id.clone(), t);
                     spawn_save_all_tasks(&app);
@@ -929,6 +1465,7 @@ async fn open_download_window(
                     speed_history: Vec::new(),
                     error_message: None,
                     created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                    ..Default::default()
                 };
                 engine_tasks.insert(task_id.clone(), t);
                 drop(engine_tasks);
@@ -1051,18 +1588,70 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                save_all_tasks_sync(window.app_handle());
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    save_all_tasks_sync(window.app_handle());
+                    if window.label() == "main" {
+                        let close_to_tray = window
+                            .app_handle()
+                            .try_state::<SettingsState>()
+                            .map(|s| s.get_blocking().close_to_tray)
+                            .unwrap_or(true);
+                        if close_to_tray {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
+                    }
                 }
+                tauri::WindowEvent::Resized(_) => {
+                    if window.label() == "main" && window.is_minimized().unwrap_or(false) {
+                        let min_to_tray = window
+                            .app_handle()
+                            .try_state::<SettingsState>()
+                            .map(|s| s.get_blocking().minimize_to_tray)
+                            .unwrap_or(false);
+                        if min_to_tray {
+                            let _ = window.hide();
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .setup(|app| {
+            // Initialize SettingsState & SchedulerState from app_data_dir
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("zr-downloader"));
+            let settings_state = SettingsState::load_or_default(app_data_dir.clone());
+            let initial_settings = settings_state.get_blocking();
+            let scheduler_state = SchedulerState::load_or_default(app_data_dir);
+
+            {
+                let engine_state = app.state::<EngineState>();
+                let es = engine_state.inner().clone();
+                let init_s = initial_settings.clone();
+                tauri::async_runtime::block_on(async move {
+                    es.apply_settings(&init_s).await;
+                });
+            }
+
+            app.manage(settings_state);
+            app.manage(scheduler_state);
+
             // Load persisted download tasks from tasks.json BEFORE the UI loads
             {
                 let mut persisted = read_persisted_tasks_file(app.handle());
+                // Migrate legacy queue_order == 0 so drag reordering & priority queue stay consistent
+                let needs_order_seed = persisted.iter().all(|p| p.task.queue_order == 0);
+                if needs_order_seed {
+                    persisted.sort_by(|a, b| b.task.created_at.cmp(&a.task.created_at));
+                    for (idx, p) in persisted.iter_mut().enumerate() {
+                        p.task.queue_order = (idx as i64) + 1;
+                    }
+                }
+
                 let engine_state = app.state::<EngineState>();
                 let download_state = app.state::<DownloadState>();
                 let mut http_to_insert = Vec::new();
@@ -1121,15 +1710,63 @@ pub fn run() {
                 }
             });
 
+            // Start Scheduler Loop (window schedule + when finished actions)
+            scheduler::start_scheduler_loop(app.handle().clone());
+
+            // Start Clipboard Monitor Loop
+            let clip_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut last_seen = String::new();
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(1200));
+                loop {
+                    interval.tick().await;
+                    let enabled = clip_handle
+                        .try_state::<SettingsState>()
+                        .map(|s| s.get_blocking().clipboard_monitor)
+                        .unwrap_or(false);
+                    if !enabled {
+                        continue;
+                    }
+                    let txt_opt = tokio::task::spawn_blocking(|| {
+                        arboard::Clipboard::new()
+                            .ok()
+                            .and_then(|mut cb| cb.get_text().ok())
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    if let Some(raw_text) = txt_opt {
+                        let trimmed = raw_text.trim().to_string();
+                        if !trimmed.is_empty()
+                            && trimmed != last_seen
+                            && !trimmed.contains(char::is_whitespace)
+                            && (trimmed.starts_with("http://")
+                                || trimmed.starts_with("https://")
+                                || trimmed.starts_with("magnet:?"))
+                        {
+                            last_seen = trimmed.clone();
+                            let _ = clip_handle.emit(
+                                "clipboard-link-detected",
+                                serde_json::json!({ "url": trimmed }),
+                            );
+                        }
+                    }
+                }
+            });
+
             #[cfg(target_os = "windows")]
             register_windows_protocols();
 
             // Setup System Tray
-            if let (Ok(show_i), Ok(quit_i)) = (
+            if let (Ok(show_i), Ok(pause_all_i), Ok(resume_all_i), Ok(quit_i)) = (
                 MenuItem::with_id(app, "show", "Open ZR Downloader", true, None::<&str>),
+                MenuItem::with_id(app, "pause_all", "Pause All Downloads", true, None::<&str>),
+                MenuItem::with_id(app, "resume_all", "Resume All Downloads", true, None::<&str>),
                 MenuItem::with_id(app, "quit", "Exit ZR Downloader", true, None::<&str>),
             ) {
-                if let Ok(tray_menu) = Menu::with_items(app, &[&show_i, &quit_i]) {
+                if let Ok(tray_menu) =
+                    Menu::with_items(app, &[&show_i, &pause_all_i, &resume_all_i, &quit_i])
+                {
                     if let Some(icon) = app.default_window_icon() {
                         let _ = TrayIconBuilder::new()
                             .tooltip("ZR Downloader")
@@ -1144,6 +1781,18 @@ pub fn run() {
                                             let _ = window.unminimize();
                                             let _ = window.set_focus();
                                         }
+                                    }
+                                    "pause_all" => {
+                                        let app_c = app.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            queue::pause_all_downloads(&app_c).await;
+                                        });
+                                    }
+                                    "resume_all" => {
+                                        let app_c = app.clone();
+                                        tauri::async_runtime::spawn(async move {
+                                            queue::resume_scheduled_queue(&app_c).await;
+                                        });
                                     }
                                     "quit" => {
                                         save_all_tasks_sync(app);
@@ -1180,6 +1829,23 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Settings, Scheduler, Queue & Utility Commands
+            get_app_settings,
+            save_app_settings,
+            toggle_global_speed_limit,
+            get_scheduler_config,
+            save_scheduler_config,
+            cancel_scheduled_shutdown,
+            pause_all_downloads_cmd,
+            resume_all_downloads_cmd,
+            set_task_priority,
+            reorder_tasks,
+            update_task_connections,
+            set_task_speed_limit,
+            check_duplicate_download,
+            export_download_list,
+            import_download_list,
+            read_text_file_content,
             // HTTP Downloader Commands
             probe_http_url,
             start_http_download,

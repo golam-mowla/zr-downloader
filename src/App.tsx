@@ -15,11 +15,12 @@ import { Toolbar } from "./components/Toolbar";
 import { TopBar } from "./components/TopBar";
 import { DownloadTableView } from "./components/DownloadTableView";
 import { DownloadItemCard } from "./components/DownloadItemCard";
-import { AddDownloadModal } from "./components/AddDownloadModal";
+import { AddDownloadModal, DirectDownloadExtras } from "./components/AddDownloadModal";
 import { PreferencesModal } from "./components/PreferencesModal";
 import { DownloadStatusDialog } from "./components/DownloadStatusDialog";
 import { TorrentDetailsDrawer } from "./components/TorrentDetailsDrawer";
-import { DownloadTask } from "./types";
+import { DownloadTask, AppSettings } from "./types";
+import { extractUrlsFromText } from "./lib/batchUrls";
 
 function cleanDownloadUrl(url: string): string {
   if (!url) return url;
@@ -71,9 +72,14 @@ export const App: React.FC = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [modalInitialUrl, setModalInitialUrl] = useState("");
   const [modalInitialFilename, setModalInitialFilename] = useState("");
+  const [modalBatchText, setModalBatchText] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [defaultDir, setDefaultDir] = useState("D:\\Downloads");
   const [bridgeOnline, setBridgeOnline] = useState(true);
+  const [speedLimitEnabled, setSpeedLimitEnabled] = useState(false);
+  const [speedLimitLabel, setSpeedLimitLabel] = useState("5 MB/s");
+  const [clipboardNoticeUrl, setClipboardNoticeUrl] = useState<string | null>(null);
+  const [shutdownSeconds, setShutdownSeconds] = useState<number | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     return (localStorage.getItem("zr-theme") as "dark" | "light") || "dark";
   });
@@ -84,6 +90,60 @@ export const App: React.FC = () => {
   tasksRef.current = tasks;
   const notifiedRef = useRef<Set<string>>(new Set());
   const recentOpenUrlsRef = useRef<Map<string, number>>(new Map());
+
+  const applySettingsSummary = (s: AppSettings) => {
+    setSpeedLimitEnabled(Boolean(s.speedLimitEnabled));
+    setSpeedLimitLabel(`${s.speedLimitValue || 5} ${s.speedLimitUnit === "KB" ? "KB/s" : "MB/s"}`);
+    if (s.defaultDownloadDir) setDefaultDir(s.defaultDownloadDir);
+  };
+
+  useEffect(() => {
+    if ((window as any).GMAndroidBridge) return;
+    invoke<AppSettings>("get_app_settings")
+      .then((res) => {
+        if (res) applySettingsSummary(res);
+      })
+      .catch(() => {});
+
+    let unlistenClip: (() => void) | undefined;
+    let unlistenSettings: (() => void) | undefined;
+    let unlistenShutdown: (() => void) | undefined;
+
+    listen<{ url?: string }>("clipboard-link-detected", (ev) => {
+      const detected = ev.payload?.url?.trim();
+      if (detected) {
+        setClipboardNoticeUrl(detected);
+      }
+    }).then((fn) => {
+      unlistenClip = fn;
+    });
+
+    listen<AppSettings>("app-settings-updated", (ev) => {
+      if (ev.payload) applySettingsSummary(ev.payload);
+    }).then((fn) => {
+      unlistenSettings = fn;
+    });
+
+    listen<{ seconds?: number }>("scheduler-shutdown-countdown", (ev) => {
+      setShutdownSeconds(ev.payload?.seconds ?? 30);
+    }).then((fn) => {
+      unlistenShutdown = fn;
+    });
+
+    return () => {
+      unlistenClip?.();
+      unlistenSettings?.();
+      unlistenShutdown?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (shutdownSeconds === null || shutdownSeconds <= 0) return;
+    const timer = window.setTimeout(() => {
+      setShutdownSeconds((prev) => (prev !== null && prev > 1 ? prev - 1 : null));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [shutdownSeconds]);
 
   // Small always-on-top popup (bottom-right) when a desktop download finishes.
   const notifyCompleted = (payload: any) => {
@@ -936,7 +996,8 @@ export const App: React.FC = () => {
     savePath: string,
     filename: string,
     connections: number,
-    lowDiskSpace?: boolean
+    lowDiskSpace?: boolean,
+    extras?: DirectDownloadExtras
   ) => {
     try {
       const isLowSpace = lowDiskSpace !== undefined
@@ -996,6 +1057,15 @@ export const App: React.FC = () => {
         filename: cleanDirectFn || null,
         chunkCount: connections,
         lowDiskSpace: isLowSpace,
+        autoConnections: extras?.autoConnections ?? null,
+        speedLimitKb: extras?.speedLimitKb ?? null,
+        priority: extras?.priority ?? null,
+        expectedChecksum: extras?.expectedChecksum ?? null,
+        originPageUrl: extras?.originPageUrl ?? null,
+        postDownloadAction: extras?.postDownloadAction ?? null,
+        postDownloadProgram: extras?.postDownloadProgram ?? null,
+        authUsername: extras?.authUsername ?? null,
+        authPassword: extras?.authPassword ?? null,
       });
       const updated = await invoke<DownloadTask[]>("get_all_downloads");
       setTasks(updated);
@@ -1005,6 +1075,47 @@ export const App: React.FC = () => {
       }
     } catch (e) {
       console.error("Direct download failed to start:", e);
+    }
+  };
+
+  const handleToggleGlobalSpeedLimit = async () => {
+    try {
+      const updated = await invoke<AppSettings>("toggle_global_speed_limit", {
+        enabled: !speedLimitEnabled,
+      });
+      if (updated) applySettingsSummary(updated);
+    } catch (e) {
+      console.error("Failed to toggle speed limit:", e);
+    }
+  };
+
+  const handleChangePriority = async (taskId: string, priority: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === taskId ? { ...t, priority } : t)));
+    try {
+      await invoke("set_task_priority", { taskId, priority });
+    } catch (e) {
+      console.error("Failed to set priority:", e);
+    }
+  };
+
+  const handleReorderTasks = async (orderedIds: string[]) => {
+    setTasks((prev) => {
+      const map = new Map(prev.map((t) => [t.id, t]));
+      const reordered: DownloadTask[] = [];
+      for (const id of orderedIds) {
+        const item = map.get(id);
+        if (item) {
+          reordered.push(item);
+          map.delete(id);
+        }
+      }
+      for (const rest of map.values()) reordered.push(rest);
+      return reordered;
+    });
+    try {
+      await invoke("reorder_tasks", { orderedIds });
+    } catch (e) {
+      console.error("Failed to reorder tasks:", e);
     }
   };
 
@@ -1265,35 +1376,100 @@ export const App: React.FC = () => {
     defaultDirRef.current = defaultDir;
   });
 
-  // Native window drag-and-drop listener for .torrent files
+  // Drag-and-drop listener for .torrent files, .txt link lists, or URL strings
   useEffect(() => {
+    const openDroppedLinks = (urls: string[]) => {
+      if (urls.length === 1) {
+        setModalInitialUrl(urls[0]);
+        setModalBatchText("");
+        setIsAddModalOpen(true);
+      } else if (urls.length > 1) {
+        setModalInitialUrl("");
+        setModalBatchText(urls.join("\n"));
+        setIsAddModalOpen(true);
+      }
+    };
+
     const handleDragOver = (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
     };
 
-    const handleDrop = (e: DragEvent) => {
+    const handleDrop = async (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
+
+      const droppedText =
+        e.dataTransfer?.getData("text/uri-list") ||
+        e.dataTransfer?.getData("text/plain") ||
+        "";
+      if (droppedText.trim()) {
+        const urls = extractUrlsFromText(droppedText);
+        if (urls.length > 0) {
+          openDroppedLinks(urls);
+          return;
+        }
+      }
+
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const path = (file as any).path || file.name;
-          if (path && (path.toLowerCase().endsWith(".torrent") || path.toLowerCase().includes(".torrent"))) {
+          if (path && path.toLowerCase().endsWith(".torrent")) {
             setModalInitialUrl(path);
             setIsAddModalOpen(true);
-            break;
+            return;
+          }
+          if (file.name.toLowerCase().endsWith(".txt")) {
+            const content = await file.text().catch(() => "");
+            const urls = extractUrlsFromText(content);
+            if (urls.length > 0) {
+              openDroppedLinks(urls);
+              return;
+            }
           }
         }
       }
     };
+
+    let unlistenNativeDrop: (() => void) | undefined;
+    if (!(window as any).GMAndroidBridge) {
+      getCurrentWindow()
+        .onDragDropEvent(async (event) => {
+          if (event.payload.type !== "drop") return;
+          for (const path of event.payload.paths) {
+            if (path.toLowerCase().endsWith(".torrent")) {
+              setModalInitialUrl(path);
+              setIsAddModalOpen(true);
+              return;
+            }
+            if (path.toLowerCase().endsWith(".txt")) {
+              try {
+                const content = await invoke<string>("read_text_file_content", {
+                  filePath: path,
+                });
+                const urls = extractUrlsFromText(content);
+                if (urls.length > 0) {
+                  openDroppedLinks(urls);
+                  return;
+                }
+              } catch {}
+            }
+          }
+        })
+        .then((fn) => {
+          unlistenNativeDrop = fn;
+        })
+        .catch(() => {});
+    }
 
     window.addEventListener("dragover", handleDragOver);
     window.addEventListener("drop", handleDrop);
     return () => {
       window.removeEventListener("dragover", handleDragOver);
       window.removeEventListener("drop", handleDrop);
+      unlistenNativeDrop?.();
     };
   }, []);
 
@@ -1416,6 +1592,7 @@ export const App: React.FC = () => {
           onAddUrl={() => {
             setModalInitialUrl("");
             setModalInitialFilename("");
+            setModalBatchText("");
             setIsAddModalOpen(true);
           }}
           onResumeSelected={() => selectedTaskId && handleResume(selectedTaskId)}
@@ -1426,6 +1603,7 @@ export const App: React.FC = () => {
           onOpenMediaGrabber={() => {
             setModalInitialUrl("");
             setModalInitialFilename("");
+            setModalBatchText("");
             setIsAddModalOpen(true);
           }}
           onOpenSettings={() => setIsSettingsOpen(true)}
@@ -1433,6 +1611,9 @@ export const App: React.FC = () => {
           hasSelected={Boolean(selectedTaskId)}
           hasActive={activeCount > 0}
           hasCompleted={statusCounts.completed > 0}
+          speedLimitEnabled={speedLimitEnabled}
+          speedLimitLabel={speedLimitLabel}
+          onToggleSpeedLimit={handleToggleGlobalSpeedLimit}
           theme={theme}
         />
 
@@ -1545,6 +1726,8 @@ export const App: React.FC = () => {
               onDelete={handleDelete}
               onOpenFile={handleOpenFile}
               onOpenFolder={handleOpenFolder}
+              onChangePriority={handleChangePriority}
+              onReorderTasks={handleReorderTasks}
               theme={theme}
               windowWidth={windowWidth}
             />
@@ -1611,9 +1794,11 @@ export const App: React.FC = () => {
           setIsAddModalOpen(false);
           setModalInitialUrl("");
           setModalInitialFilename("");
+          setModalBatchText("");
         }}
         defaultUrl={modalInitialUrl}
         defaultFilename={modalInitialFilename}
+        defaultBatchText={modalBatchText}
         onAddDirectDownload={handleAddDirectDownload}
         onAddMediaDownload={handleAddMediaDownload}
         onAddTorrentDownload={handleAddTorrentDownload}
@@ -1626,6 +1811,10 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
         defaultDir={defaultDir}
         onChangeDefaultDir={setDefaultDir}
+        onSettingsSaved={applySettingsSummary}
+        onListImported={() =>
+          invoke<DownloadTask[]>("get_all_downloads").then(setTasks).catch(() => {})
+        }
         theme={theme}
       />
 
@@ -1693,6 +1882,83 @@ export const App: React.FC = () => {
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50"
               >
                 Delete file too
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clipboard Monitor Notice */}
+      {clipboardNoticeUrl && (
+        <div
+          className={`fixed bottom-4 right-4 z-[90] max-w-sm rounded-xl border p-3.5 shadow-2xl ${
+            theme === "dark"
+              ? "bg-slate-900 border-slate-700 text-slate-100"
+              : "bg-white border-slate-200 text-slate-800"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="text-xs font-bold text-blue-500 uppercase tracking-wide">
+                Download Link Detected
+              </div>
+              <div className="text-[11px] opacity-80 mt-1 break-all line-clamp-2 font-mono">
+                {clipboardNoticeUrl}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2 mt-3">
+            <button
+              type="button"
+              onClick={() => setClipboardNoticeUrl(null)}
+              className="px-2.5 py-1 rounded text-xs font-medium border border-zr hover:bg-slate-500/10"
+            >
+              Dismiss
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setModalInitialUrl(clipboardNoticeUrl);
+                setModalInitialFilename("");
+                setModalBatchText("");
+                setIsAddModalOpen(true);
+                setClipboardNoticeUrl(null);
+              }}
+              className="px-3 py-1 rounded text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              Download
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 30-second Scheduled Shutdown Cancel Dialog */}
+      {shutdownSeconds !== null && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div
+            className={`w-full max-w-md rounded-xl border p-5 shadow-2xl ${
+              theme === "dark"
+                ? "bg-slate-900 border-red-800/60 text-slate-100"
+                : "bg-white border-red-200 text-slate-900"
+            }`}
+          >
+            <h3 className="text-base font-bold text-red-500">
+              Scheduled System Shutdown
+            </h3>
+            <p className="text-xs opacity-80 mt-2">
+              All scheduled downloads finished. Windows will shut down in{" "}
+              <span className="font-bold text-sm">{shutdownSeconds}</span> seconds.
+            </p>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={async () => {
+                  await invoke("cancel_scheduled_shutdown").catch(() => {});
+                  setShutdownSeconds(null);
+                }}
+                className="px-4 py-2 rounded-lg text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition-colors"
+              >
+                Cancel Shutdown
               </button>
             </div>
           </div>
