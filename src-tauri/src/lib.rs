@@ -385,7 +385,7 @@ async fn remove_http_download(
 ) -> Result<(), String> {
     let ds_tasks = download_state.tasks.clone();
     let ds_opts = download_state.task_options.clone();
-    let _ = media::cancel_download(app.clone(), download_state, Some(task_id.clone())).await;
+    let _ = media::cancel_download(app.clone(), download_state.clone(), Some(task_id.clone())).await;
     let removed_media = {
         let mut m_tasks = ds_tasks.lock().unwrap();
         m_tasks.remove(&task_id)
