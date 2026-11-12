@@ -501,6 +501,7 @@ export const App: React.FC = () => {
               usePartFiles: !Boolean(raw.lowDiskSpace || raw.low_disk_space || localStorage.getItem("zr_low_disk_space") === "true"),
               lowDiskSpace: Boolean(raw.lowDiskSpace || raw.low_disk_space || localStorage.getItem("zr_low_disk_space") === "true"),
               concurrentConnections: 8,
+              referer: typeof raw.referrer === "string" ? raw.referrer : (typeof raw.referer === "string" ? raw.referer : ""),
             });
           }
         } else {
@@ -731,39 +732,44 @@ export const App: React.FC = () => {
           console.warn("resume_torrent error:", e);
         }
       } else if (task && isMediaTask(task, id)) {
-        // Resume media task via start_download with saved task options
+        // Resume media task using saved options on backend, falling back to start_download
         try {
-          const opts = task.options || {
-            taskId: task.id,
-            url: task.url,
-            saveFolder: task.save_path || task.savePath || defaultDirRef.current,
-            customFilename: task.filename,
-            downloadMode: task.category === "audio" ? "audio" : "video",
-            container: task.category === "audio" ? "MP3 (Audio)" : "MP4 (Video)",
-            videoStreamId: "best",
-            audioStreamId: "ba",
-            audioBitrate: "Best",
-            enableSubtitles: false,
-            subtitleLang: "en",
-            subtitleFormat: "srt",
-            subtitleSaveMode: "separate",
-            enableClip: false,
-            startTime: "",
-            endTime: "",
-            preciseCut: false,
-            maxActiveDownloads: 3,
-            overwriteFiles: false,
-            includeMediaId: false,
-            includeAutoSubtitles: false,
-            includeSuperRes: false,
-            preferredVideoCodec: "default",
-            preferredAudioCodec: "default",
-            preferredSubtitleFormat: "default",
-            preferredFps: "default",
-          };
-          await invoke("start_download", { options: opts });
-        } catch (e) {
-          console.error("start_download resume error:", e);
+          await invoke("resume_media_download", { taskId: id });
+        } catch (resumeErr) {
+          console.warn("resume_media_download fallback to start_download:", resumeErr);
+          try {
+            const opts = task.options || {
+              taskId: task.id,
+              url: task.url,
+              saveFolder: task.save_path || task.savePath || defaultDirRef.current,
+              customFilename: task.filename,
+              downloadMode: task.category === "audio" ? "audio" : "video",
+              container: task.category === "audio" ? "MP3 (Audio)" : "MP4 (Video)",
+              videoStreamId: "best",
+              audioStreamId: "ba",
+              audioBitrate: "Best",
+              enableSubtitles: false,
+              subtitleLang: "en",
+              subtitleFormat: "srt",
+              subtitleSaveMode: "separate",
+              enableClip: false,
+              startTime: "",
+              endTime: "",
+              preciseCut: false,
+              maxActiveDownloads: 3,
+              overwriteFiles: false,
+              includeMediaId: false,
+              includeAutoSubtitles: false,
+              includeSuperRes: false,
+              preferredVideoCodec: "default",
+              preferredAudioCodec: "default",
+              preferredSubtitleFormat: "default",
+              preferredFps: "default",
+            };
+            await invoke("start_download", { options: opts });
+          } catch (e) {
+            console.error("start_download resume error:", e);
+          }
         }
       } else {
         await invoke("resume_http_download", { taskId: id });

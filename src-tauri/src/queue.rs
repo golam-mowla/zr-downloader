@@ -13,6 +13,7 @@ pub async fn enqueue_download(
         tasks.insert(task_id.clone(), task.clone());
     }
     let _ = app.emit("download-progress", task);
+    crate::spawn_save_all_tasks(&app);
     process_queue(app, state);
     Ok(task_id)
 }
@@ -44,6 +45,7 @@ pub async fn pause_download(
     if let Some(task) = updated_task {
         let _ = app.emit("download-progress", task);
     }
+    crate::spawn_save_all_tasks(&app);
     process_queue(app, state);
     Ok(())
 }
@@ -67,8 +69,14 @@ pub async fn resume_download(
             None
         }
     };
-    if let Some(task) = updated_task {
+    if let Some(mut task) = updated_task {
+        downloader::hydrate_task_from_sparse_meta(&mut task).await;
+        {
+            let mut tasks = state.tasks.write().await;
+            tasks.insert(task.id.clone(), task.clone());
+        }
         let _ = app.emit("download-progress", task);
+        crate::spawn_save_all_tasks(&app);
         process_queue(app, state);
     }
     Ok(())
@@ -100,12 +108,13 @@ pub async fn cancel_download(
     if let Some(task) = updated_task {
         let _ = app.emit("download-progress", task);
     }
+    crate::spawn_save_all_tasks(&app);
     process_queue(app, state);
     Ok(())
 }
 
 pub async fn remove_download(
-    _app: AppHandle,
+    app: AppHandle,
     state: EngineState,
     task_id: String,
     delete_file: bool,
@@ -120,14 +129,23 @@ pub async fn remove_download(
         let mut tasks = state.tasks.write().await;
         tasks.remove(&task_id)
     };
-    if delete_file {
-        if let Some(task) = removed {
+    if let Some(task) = removed {
+        let meta_path = downloader::sparse_meta_path_for(&task.save_path, &task.id);
+        let _ = std::fs::remove_file(meta_path);
+        if let Some(parent) = Path::new(&task.save_path).parent() {
+            let tmp_dir = parent.join(format!(".zr_tmp_{}", task.id));
+            if tmp_dir.exists() {
+                let _ = std::fs::remove_dir_all(tmp_dir);
+            }
+        }
+        if delete_file {
             let path = Path::new(&task.save_path);
             if path.exists() {
                 let _ = std::fs::remove_file(path);
             }
         }
     }
+    crate::spawn_save_all_tasks(&app);
     Ok(())
 }
 

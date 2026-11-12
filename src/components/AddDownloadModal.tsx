@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   X,
   Zap,
@@ -72,6 +72,21 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
   // Torrent State
   const [sequential, setSequential] = useState(false);
+
+  const lastInspectedUrl = useRef("");
+  const inspectSeq = useRef(0);
+
+  const shouldAutoInspectUrl = (rawUrl: string): boolean => {
+    let clean = rawUrl.trim();
+    if (clean.startsWith("@[") && clean.endsWith("]")) {
+      clean = clean.slice(2, -1).trim();
+    }
+    if (!/^https?:\/\//i.test(clean)) return false;
+    const lower = clean.toLowerCase();
+    if (lower.startsWith("magnet:") || lower.includes(".torrent")) return false;
+    if (/\.(zip|rar|7z|exe|msi|iso|pdf|apk)(\?|#|$)/i.test(lower)) return false;
+    return true;
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -180,6 +195,25 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     fetchDefaultDir();
   }, []);
 
+  // Auto-inspect URL when modal is open and URL changes (600 ms debounce)
+  useEffect(() => {
+    if (!isOpen) {
+      lastInspectedUrl.current = "";
+      return;
+    }
+    const cleanUrl = url.trim();
+    if (!shouldAutoInspectUrl(cleanUrl)) return;
+    if (cleanUrl === lastInspectedUrl.current || isFetchingMedia) return;
+
+    const timer = window.setTimeout(() => {
+      if (cleanUrl === lastInspectedUrl.current || isFetchingMedia) return;
+      lastInspectedUrl.current = cleanUrl;
+      void handleFetchMediaInfo(cleanUrl);
+    }, 600);
+
+    return () => window.clearTimeout(timer);
+  }, [url, isOpen]);
+
   if (!isOpen) return null;
 
   const handlePasteClipboard = async () => {
@@ -188,6 +222,10 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       if (text && text.trim()) {
         const clean = text.trim();
         handleUrlChange(clean);
+        if (shouldAutoInspectUrl(clean)) {
+          lastInspectedUrl.current = clean;
+          void handleFetchMediaInfo(clean);
+        }
       }
     } catch (e) {
       console.error("Paste clipboard error:", e);
@@ -248,12 +286,14 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     }
   };
 
-  const handleFetchMediaInfo = async () => {
-    let cleanUrl = url.trim();
+  const handleFetchMediaInfo = async (overrideUrl?: string) => {
+    let cleanUrl = (overrideUrl ?? url).trim();
     if (cleanUrl.startsWith("@[") && cleanUrl.endsWith("]")) {
       cleanUrl = cleanUrl.slice(2, -1).trim();
     }
     if (!cleanUrl) return;
+    lastInspectedUrl.current = cleanUrl;
+    const seq = ++inspectSeq.current;
     try {
       setIsFetchingMedia(true);
       setErrorMessage(null);
@@ -283,6 +323,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           parsed = await invoke("ytdlp_get_info", { url: cleanUrl });
         }
       }
+
+      if (inspectSeq.current !== seq) return;
 
       if (typeof parsed === "string") {
         try { parsed = JSON.parse(parsed); } catch {}
@@ -331,9 +373,12 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       if (videoStreams.length > 0) setSelectedFormatId(videoStreams[0].id);
       if (audioStreams.length > 0) setSelectedAudioId(audioStreams[0].id);
     } catch (err: any) {
+      if (inspectSeq.current !== seq) return;
       setErrorMessage("Could not inspect stream. You can still click 'Download Media' directly: " + (err?.message || err?.toString() || "Stream check failed"));
     } finally {
-      setIsFetchingMedia(false);
+      if (inspectSeq.current === seq) {
+        setIsFetchingMedia(false);
+      }
     }
   };
 
@@ -359,6 +404,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         startTime: enableClip ? (startTime || "00:00:00") : "00:00:00",
         endTime: enableClip ? (endTime || "00:00:10") : "00:00:10",
         lowDiskSpace: Boolean(lowDiskSpace),
+        duration: mediaInfo?.duration && mediaInfo.duration > 0 ? mediaInfo.duration : undefined,
         proxy: "",
         cookiesFile: "",
         cookiesBrowser: "",
@@ -509,6 +555,17 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 type="text"
                 value={url}
                 onChange={(e) => handleUrlChange(e.target.value)}
+                onPaste={(e) => {
+                  const pasted = e.clipboardData.getData("text")?.trim();
+                  if (pasted) {
+                    e.preventDefault();
+                    handleUrlChange(pasted);
+                    if (shouldAutoInspectUrl(pasted)) {
+                      lastInspectedUrl.current = pasted;
+                      void handleFetchMediaInfo(pasted);
+                    }
+                  }
+                }}
                 placeholder={
                   tab === "direct"
                     ? "Paste direct link (.zip, .exe, .mkv, .iso, .pdf)..."
@@ -522,7 +579,10 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
               {tab === "media" && (
                 <button
                   type="button"
-                  onClick={handleFetchMediaInfo}
+                  onClick={() => {
+                    lastInspectedUrl.current = "";
+                    void handleFetchMediaInfo();
+                  }}
                   disabled={isFetchingMedia || !url.trim()}
                   className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-[13px] font-semibold flex items-center space-x-1.5 transition-colors disabled:opacity-60"
                 >

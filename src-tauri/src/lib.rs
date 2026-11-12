@@ -21,6 +21,146 @@ use std::process::Command;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct PersistedTask {
+    task: DownloadTask,
+    #[serde(default)]
+    options: Option<media::DownloadOptions>,
+    #[serde(default)]
+    is_media: bool,
+}
+
+static LAST_SAVED_TASKS_JSON: std::sync::OnceLock<Mutex<String>> = std::sync::OnceLock::new();
+
+fn tasks_file_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("tasks.json"))
+}
+
+fn read_persisted_tasks_file(app: &AppHandle) -> Vec<PersistedTask> {
+    let Some(path) = tasks_file_path(app) else {
+        return Vec::new();
+    };
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<PersistedTask>>(&content).unwrap_or_default()
+}
+
+fn write_persisted_tasks_if_changed(app: &AppHandle, snapshot: &[PersistedTask]) {
+    let Some(target) = tasks_file_path(app) else {
+        return;
+    };
+    let Ok(json) = serde_json::to_string_pretty(snapshot) else {
+        return;
+    };
+    let cache = LAST_SAVED_TASKS_JSON.get_or_init(|| Mutex::new(String::new()));
+    if let Ok(mut prev) = cache.lock() {
+        if *prev == json && target.exists() {
+            return;
+        }
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp_path = target.with_extension("json.tmp");
+        if std::fs::write(&tmp_path, json.as_bytes()).is_ok() {
+            if std::fs::rename(&tmp_path, &target).is_err() {
+                let _ = std::fs::copy(&tmp_path, &target);
+                let _ = std::fs::remove_file(&tmp_path);
+            }
+            *prev = json;
+        }
+    }
+}
+
+pub async fn save_all_tasks(app: &AppHandle) {
+    let engine_state = app.state::<EngineState>();
+    let download_state = app.state::<DownloadState>();
+
+    let mut merged: HashMap<String, PersistedTask> = HashMap::new();
+    {
+        let http_tasks = engine_state.tasks.read().await;
+        for (id, t) in http_tasks.iter() {
+            merged.insert(
+                id.clone(),
+                PersistedTask {
+                    task: t.clone(),
+                    options: None,
+                    is_media: false,
+                },
+            );
+        }
+    }
+    {
+        let media_tasks = download_state.tasks.lock().unwrap();
+        let media_opts = download_state.task_options.lock().unwrap();
+        for (id, t) in media_tasks.iter() {
+            let opts = media_opts.get(id).cloned();
+            merged.insert(
+                id.clone(),
+                PersistedTask {
+                    task: t.clone(),
+                    options: opts,
+                    is_media: true,
+                },
+            );
+        }
+    }
+
+    let mut list: Vec<PersistedTask> = merged.into_values().collect();
+    list.sort_by(|a, b| b.task.created_at.cmp(&a.task.created_at));
+    write_persisted_tasks_if_changed(app, &list);
+}
+
+pub fn spawn_save_all_tasks(app: &AppHandle) {
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        save_all_tasks(&handle).await;
+    });
+}
+
+fn save_all_tasks_sync(app: &AppHandle) {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        // Inside an async runtime worker: try non-blocking read to avoid nested block_on panic
+        let engine_state = app.state::<EngineState>();
+        let download_state = app.state::<DownloadState>();
+        let mut merged: HashMap<String, PersistedTask> = HashMap::new();
+        if let Ok(http_tasks) = engine_state.tasks.try_read() {
+            for (id, t) in http_tasks.iter() {
+                merged.insert(
+                    id.clone(),
+                    PersistedTask {
+                        task: t.clone(),
+                        options: None,
+                        is_media: false,
+                    },
+                );
+            }
+        }
+        {
+            let media_tasks = download_state.tasks.lock().unwrap();
+            let media_opts = download_state.task_options.lock().unwrap();
+            for (id, t) in media_tasks.iter() {
+                merged.insert(
+                    id.clone(),
+                    PersistedTask {
+                        task: t.clone(),
+                        options: media_opts.get(id).cloned(),
+                        is_media: true,
+                    },
+                );
+            }
+        }
+        let mut list: Vec<PersistedTask> = merged.into_values().collect();
+        list.sort_by(|a, b| b.task.created_at.cmp(&a.task.created_at));
+        write_persisted_tasks_if_changed(app, &list);
+    } else {
+        tauri::async_runtime::block_on(save_all_tasks(app));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HTTP Downloader Commands
 // ---------------------------------------------------------------------------
@@ -134,8 +274,10 @@ async fn pause_http_download(
     download_state: State<'_, DownloadState>,
     task_id: String,
 ) -> Result<(), String> {
-    let _ = media::cancel_download(download_state, Some(task_id.clone())).await;
-    queue::pause_download(app, state.inner().clone(), task_id).await
+    let _ = media::cancel_download(app.clone(), download_state, Some(task_id.clone())).await;
+    let res = queue::pause_download(app.clone(), state.inner().clone(), task_id).await;
+    save_all_tasks(&app).await;
+    res
 }
 
 #[command]
@@ -146,19 +288,76 @@ async fn resume_http_download(
     task_id: String,
 ) -> Result<(), String> {
     // 1. Check if this is a media (yt-dlp) task with saved options
-    let maybe_opts = {
+    let has_media_opts = {
         let opts_lock = download_state.task_options.lock().unwrap();
-        opts_lock.get(&task_id).cloned()
+        opts_lock.contains_key(&task_id)
     };
 
-    if let Some(mut opts) = maybe_opts {
-        opts.task_id = Some(task_id.clone());
-        download_state.cancelled_tasks.lock().unwrap().insert(task_id.clone(), false);
-        let _ = media::start_download(app, download_state, opts).await;
+    if has_media_opts {
+        media::resume_media_download(app, download_state, task_id)
+            .await
+            .map(|_| ())?;
         return Ok(());
     }
 
-    // 2. Otherwise it's an HTTP engine task
+    // 2. HTTP task: ensure task exists in EngineState (rebuild from tasks.json if needed)
+    let exists_in_memory = {
+        let tasks = state.tasks.read().await;
+        tasks.contains_key(&task_id)
+    };
+    if !exists_in_memory {
+        let persisted = read_persisted_tasks_file(&app);
+        if let Some(entry) = persisted.into_iter().find(|p| p.task.id == task_id) {
+            if let Some(opts) = entry.options {
+                {
+                    let mut t_lock = download_state.tasks.lock().unwrap();
+                    t_lock.insert(task_id.clone(), entry.task);
+                }
+                {
+                    let mut o_lock = download_state.task_options.lock().unwrap();
+                    o_lock.insert(task_id.clone(), opts);
+                }
+                media::resume_media_download(app, download_state, task_id)
+                    .await
+                    .map(|_| ())?;
+                return Ok(());
+            } else {
+                let mut tasks = state.tasks.write().await;
+                tasks.insert(task_id.clone(), entry.task);
+            }
+        }
+    }
+
+    // Hydrate from adjacent .zr_sparse_meta_<id>.json and verify Range support before resuming
+    let maybe_task = {
+        let tasks = state.tasks.read().await;
+        tasks.get(&task_id).cloned()
+    };
+
+    if let Some(mut task) = maybe_task {
+        downloader::hydrate_task_from_sparse_meta(&mut task).await;
+        if task.downloaded_bytes > 0 {
+            let probe_supports_range = match downloader::probe_url(&state.client, &task.url).await {
+                Ok(meta) => meta.supports_ranges,
+                Err(_) => task.is_resumable,
+            };
+            if !probe_supports_range {
+                let meta_path = downloader::sparse_meta_path_for(&task.save_path, &task.id);
+                let _ = std::fs::remove_file(meta_path);
+                if let Some(parent) = Path::new(&task.save_path).parent() {
+                    let tmp_dir = parent.join(format!(".zr_tmp_{}", task.id));
+                    let _ = std::fs::remove_dir_all(tmp_dir);
+                }
+                task.is_resumable = false;
+                task.chunk_count = 1;
+                task.downloaded_bytes = 0;
+                task.percent = 0.0;
+            }
+        }
+        let mut tasks = state.tasks.write().await;
+        tasks.insert(task_id.clone(), task);
+    }
+
     queue::resume_download(app, state.inner().clone(), task_id).await
 }
 
@@ -169,8 +368,10 @@ async fn cancel_http_download(
     download_state: State<'_, DownloadState>,
     task_id: String,
 ) -> Result<(), String> {
-    let _ = media::cancel_download(download_state, Some(task_id.clone())).await;
-    queue::cancel_download(app, state.inner().clone(), task_id).await
+    let _ = media::cancel_download(app.clone(), download_state, Some(task_id.clone())).await;
+    let res = queue::cancel_download(app.clone(), state.inner().clone(), task_id).await;
+    save_all_tasks(&app).await;
+    res
 }
 
 #[command]
@@ -181,8 +382,28 @@ async fn remove_http_download(
     task_id: String,
     delete_file: Option<bool>,
 ) -> Result<(), String> {
-    let _ = media::cancel_download(download_state, Some(task_id.clone())).await;
-    queue::remove_download(app, state.inner().clone(), task_id, delete_file.unwrap_or(false)).await
+    let ds_tasks = download_state.tasks.clone();
+    let ds_opts = download_state.task_options.clone();
+    let _ = media::cancel_download(app.clone(), download_state, Some(task_id.clone())).await;
+    let removed_media = {
+        let mut m_tasks = ds_tasks.lock().unwrap();
+        m_tasks.remove(&task_id)
+    };
+    {
+        let mut m_opts = ds_opts.lock().unwrap();
+        m_opts.remove(&task_id);
+    }
+    if delete_file.unwrap_or(false) {
+        if let Some(ref mt) = removed_media {
+            let p = Path::new(&mt.save_path);
+            if p.exists() && p.is_file() {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+    let res = queue::remove_download(app.clone(), state.inner().clone(), task_id, delete_file.unwrap_or(false)).await;
+    save_all_tasks(&app).await;
+    res
 }
 
 #[command]
@@ -383,8 +604,6 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
     None
 }
 
-static FORMATS_CACHE: std::sync::OnceLock<Mutex<HashMap<String, (std::time::Instant, String)>>> = std::sync::OnceLock::new();
-
 async fn start_local_bridge(app_handle: AppHandle) {
     let mut listener = None;
     for _ in 0..15 {
@@ -436,32 +655,18 @@ async fn start_local_bridge(app_handle: AppHandle) {
                         let (status_line, body) = if target.trim().is_empty() {
                             ("400 Bad Request", "{\"error\":\"missing_url\"}".to_string())
                         } else {
-                            let cache = FORMATS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-                            let cached = cache.lock().ok().and_then(|m| {
-                                m.get(&target).and_then(|(t, body)| {
-                                    if t.elapsed() < std::time::Duration::from_secs(600) { Some(body.clone()) } else { None }
-                                })
-                            });
-                            if let Some(body) = cached {
-                                ("200 OK", body)
-                            } else {
-                                match tokio::time::timeout(
-                                    std::time::Duration::from_secs(60),
-                                    media::fetch_media_info(target.clone(), None, None, None, None),
-                                )
-                                .await
-                                {
-                                    Ok(Ok(info)) => {
-                                        let body = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
-                                        if let Ok(mut m) = cache.lock() {
-                                            if m.len() > 64 { m.clear(); }
-                                            m.insert(target.clone(), (std::time::Instant::now(), body.clone()));
-                                        }
-                                        ("200 OK", body)
-                                    }
-                                    Ok(Err(e)) => ("502 Bad Gateway", serde_json::json!({ "error": e }).to_string()),
-                                    Err(_) => ("504 Gateway Timeout", "{\"error\":\"timeout\"}".to_string()),
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(60),
+                                media::fetch_media_info(target.clone(), None, None, None, None),
+                            )
+                            .await
+                            {
+                                Ok(Ok(info)) => {
+                                    let body = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
+                                    ("200 OK", body)
                                 }
+                                Ok(Err(e)) => ("502 Bad Gateway", serde_json::json!({ "error": e }).to_string()),
+                                Err(_) => ("504 Gateway Timeout", "{\"error\":\"timeout\"}".to_string()),
                             }
                         };
                         let resp = format!(
@@ -699,6 +904,7 @@ async fn open_download_window(
                         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                     };
                     tasks_lock.insert(task_id.clone(), t);
+                    spawn_save_all_tasks(&app);
                 }
             }
         } else {
@@ -726,6 +932,8 @@ async fn open_download_window(
                     created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
                 };
                 engine_tasks.insert(task_id.clone(), t);
+                drop(engine_tasks);
+                spawn_save_all_tasks(&app);
             }
         }
     }
@@ -845,6 +1053,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                save_all_tasks_sync(window.app_handle());
                 if window.label() == "main" {
                     api.prevent_close();
                     let _ = window.hide();
@@ -852,6 +1061,67 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // Load persisted download tasks from tasks.json BEFORE the UI loads
+            {
+                let mut persisted = read_persisted_tasks_file(app.handle());
+                let engine_state = app.state::<EngineState>();
+                let download_state = app.state::<DownloadState>();
+                let mut http_to_insert = Vec::new();
+                for entry in &mut persisted {
+                    if matches!(
+                        entry.task.status.as_str(),
+                        "downloading" | "connecting" | "queued" | "assembling"
+                    ) {
+                        entry.task.status = "paused".to_string();
+                        entry.task.speed_bps = 0;
+                        entry.task.speed_formatted = "0 B/s".to_string();
+                        entry.task.eta_formatted = "--".to_string();
+                    }
+                    if entry.is_media || entry.options.is_some() {
+                        download_state
+                            .tasks
+                            .lock()
+                            .unwrap()
+                            .insert(entry.task.id.clone(), entry.task.clone());
+                        if let Some(ref opts) = entry.options {
+                            download_state
+                                .task_options
+                                .lock()
+                                .unwrap()
+                                .insert(entry.task.id.clone(), opts.clone());
+                        }
+                    } else {
+                        http_to_insert.push(entry.task.clone());
+                    }
+                }
+                if !http_to_insert.is_empty() {
+                    let es = engine_state.inner().clone();
+                    tauri::async_runtime::block_on(async move {
+                        let mut map = es.tasks.write().await;
+                        for mut t in http_to_insert {
+                            downloader::hydrate_task_from_sparse_meta(&mut t).await;
+                            map.insert(t.id.clone(), t);
+                        }
+                    });
+                }
+                if let Ok(initial_json) = serde_json::to_string_pretty(&persisted) {
+                    let cache = LAST_SAVED_TASKS_JSON.get_or_init(|| Mutex::new(String::new()));
+                    if let Ok(mut prev) = cache.lock() {
+                        *prev = initial_json;
+                    }
+                }
+            }
+
+            // Periodic 2-second persistence loop (only writes if serialized JSON changed)
+            let save_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                loop {
+                    interval.tick().await;
+                    save_all_tasks(&save_handle).await;
+                }
+            });
+
             #[cfg(target_os = "windows")]
             register_windows_protocols();
 
@@ -877,6 +1147,7 @@ pub fn run() {
                                         }
                                     }
                                     "quit" => {
+                                        save_all_tasks_sync(app);
                                         app.exit(0);
                                     }
                                     _ => {}
@@ -922,6 +1193,7 @@ pub fn run() {
             // Media Downloader Commands
             media::fetch_media_info,
             media::start_download,
+            media::resume_media_download,
             media::cancel_download,
             media::get_installed_tools,
             media::check_tool_updates,
@@ -944,6 +1216,14 @@ pub fn run() {
             torrent::get_torrent_peers,
             torrent::get_torrent_pieces
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ZR Downloader");
+        .build(tauri::generate_context!())
+        .expect("error while building ZR Downloader")
+        .run(|app_handle, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                save_all_tasks_sync(app_handle);
+            }
+        });
 }
