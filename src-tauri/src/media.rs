@@ -2143,7 +2143,7 @@ pub async fn start_download(
             // Video Containers: Video (Generic), MP4 (Video), WEBM (Video), MKV (Video), MOV (Video), AVI (Video), TS (Video)
             if !container_upper.starts_with("VIDEO (GENERIC)") && !container_upper.is_empty() {
                 if container_upper.starts_with("MP4") {
-                    if !use_ffmpeg_hls_fallback {
+                    if attempt_stage != 2 {
                         cmd.args(["--merge-output-format", "mp4"]);
                     }
                 } else if container_upper.starts_with("WEBM") {
@@ -2254,7 +2254,7 @@ pub async fn start_download(
             && aria2c_found
             && !options.enable_clip
             && !is_hls
-            && !use_ffmpeg_hls_fallback
+            && attempt_stage != 2
         {
             cmd.args([
                 "--downloader",
@@ -2270,7 +2270,7 @@ pub async fn start_download(
                 "--ppa",
                 &format!("ffmpeg:-threads {}", options.ffmpeg_threads),
             ]);
-            if !use_ffmpeg_hls_fallback {
+            if attempt_stage != 2 {
                 cmd.args([
                     "--downloader-args",
                     &format!("ffmpeg:-threads {}", options.ffmpeg_threads),
