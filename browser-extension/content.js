@@ -158,7 +158,8 @@
       else if (q.includes("360")) val = 360;
       else if (q.includes("240")) val = 240;
       else if (q.includes("144")) val = 144;
-      if (q.includes("60") || q.includes("50")) val += 0.5;
+      if (/premium/i.test(q)) val += 0.8;
+      else if (q.includes("60") || q.includes("50")) val += 0.5;
       return val;
     }
     return [...qualitiesList].sort((a, b) => getQualityWeight(b) - getQualityWeight(a));
@@ -605,31 +606,57 @@
   const ZR_FORMAT_HOSTS =
     /(youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|tiktok\.com|twitter\.com|x\.com|vimeo\.com|dailymotion\.com|reddit\.com|twitch\.tv|kick\.com)/i;
 
+  function canonicalizePageUrl(rawUrl) {
+    try {
+      const u = new URL(rawUrl);
+      const host = u.hostname.toLowerCase();
+      if (host.includes("youtube.com") && u.pathname === "/watch" && u.searchParams.get("v")) {
+        return `https://www.youtube.com/watch?v=${u.searchParams.get("v")}`;
+      }
+      if (host === "youtu.be") {
+        const vid = u.pathname.replace(/^\/+/, "").split("/")[0];
+        if (vid) return `https://www.youtube.com/watch?v=${vid}`;
+      }
+    } catch {}
+    return rawUrl;
+  }
+
+  function isStreamPremium(st) {
+    if (!st) return false;
+    return Boolean(st.isPremium) || /premium/i.test(st.formatNote || st.label || "") || String(st.id) === "616" || String(st.id) === "356";
+  }
+
   function fetchRealFormats(pageUrl) {
-    const hit = zrFormatsCache.get(pageUrl);
+    const cacheKey = canonicalizePageUrl(pageUrl);
+    const hit = zrFormatsCache.get(cacheKey);
     if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.promise;
     const promise = new Promise((resolve) => {
       try {
-        chrome.runtime.sendMessage({ action: "GET_FORMATS", url: pageUrl }, (resp) => {
+        chrome.runtime.sendMessage({ action: "GET_FORMATS", url: cacheKey }, (resp) => {
           if (chrome.runtime.lastError || !resp || !resp.ok || !resp.info) {
-            zrFormatsCache.delete(pageUrl);
+            zrFormatsCache.delete(cacheKey);
             resolve(null);
             return;
           }
           resolve(resp.info);
         });
       } catch (e) {
-        zrFormatsCache.delete(pageUrl);
+        zrFormatsCache.delete(cacheKey);
         resolve(null);
       }
     });
-    zrFormatsCache.set(pageUrl, { t: Date.now(), promise });
+    zrFormatsCache.set(cacheKey, { t: Date.now(), promise });
     return promise;
   }
 
   function prefetchFormatsForPage() {
     try {
-      if (ZR_FORMAT_HOSTS.test(location.hostname)) fetchRealFormats(location.href);
+      if (ZR_FORMAT_HOSTS.test(location.hostname)) {
+        if (location.hostname.includes("youtube.com") && !location.pathname.startsWith("/watch") && !location.pathname.startsWith("/shorts")) {
+          return;
+        }
+        fetchRealFormats(location.href);
+      }
     } catch (e) {}
   }
 
@@ -641,22 +668,31 @@
     const shortTitle = getShortTitle(cleanTitle, 28);
     const dur = durStr || formatDurationForList(info.duration);
 
-    // One row per (height, fps): prefer MP4, then the largest stream
+    // One row per (height, fps, isPremium): prefer MP4, then largest stream, keeping Premium distinct
     const best = new Map();
     const score = (x) => (x.ext === "mp4" ? 1e13 : 0) + (x.filesize || 0);
     streams.forEach((st) => {
       const fps = st.fps && st.fps > 30 ? st.fps : 30;
-      const key = `${st.height}_${fps}`;
+      const premSuffix = isStreamPremium(st) ? "_prem" : "";
+      const key = `${st.height}_${fps}${premSuffix}`;
       const cur = best.get(key);
       if (!cur || score(st) > score(cur)) best.set(key, st);
     });
     const rows = Array.from(best.values()).sort(
-      (a, b) => b.height - a.height || (b.fps || 0) - (a.fps || 0)
+      (a, b) =>
+        b.height - a.height ||
+        (isStreamPremium(b) ? 1 : 0) - (isStreamPremium(a) ? 1 : 0) ||
+        (b.fps || 0) - (a.fps || 0)
     );
 
     const options = [];
     rows.forEach((st) => {
-      const hd = st.height >= 720 ? `${st.height}p HD` : `${st.height}p`;
+      const prem = isStreamPremium(st);
+      const hd = prem
+        ? `${st.height}p Premium HD`
+        : st.height >= 720
+        ? `${st.height}p HD`
+        : `${st.height}p`;
       const fpsInfo = st.fps && st.fps > 30 ? ` ${st.fps}fps` : "";
       const sizeInfo = st.filesize ? `, ${formatBytes(st.filesize)}` : "";
       options.push({
@@ -664,7 +700,8 @@
         fullLabel: `${cleanTitle}, MP4 file, ${dur}quality ${hd}${fpsInfo}${sizeInfo}`,
         shortTitle,
         formatDisplay: `${hd}${fpsInfo} • ${(st.ext || "mp4").toUpperCase()}${st.filesize ? " • " + formatBytes(st.filesize) : ""}`,
-        quality: `${st.height}p`,
+        quality: prem ? `${st.height}p Premium` : `${st.height}p`,
+        isPremium: prem,
         formatId: st.id,
         url: pageUrl,
         container: "MP4",
@@ -828,9 +865,9 @@
 
     const options = [];
 
-    // 0. REAL formats straight from yt-dlp via the ZR app (accurate like IDM). Falls back to the
-    //    legacy detection below when ZR is offline or the site is not supported.
+    // 0. REAL formats straight from yt-dlp via the ZR app (fast 250ms cache hit check; live-upgrades open menu)
     let realOptions = null;
+    let pendingRealFormats = null;
     {
       const hasDirectSniffed = sniffedStreams.some((st) => !st.isAudio && st.contentLength > 50000);
       const knownHost = ZR_FORMAT_HOSTS.test(hostname);
@@ -840,12 +877,15 @@
         if (hostname.includes("youtube.com") && !/[?&]v=/.test(pageUrl) && !pageUrl.includes("youtu.be/")) {
           pageUrl = window.location.href;
         }
+        const formatsPromise = fetchRealFormats(pageUrl);
         const info = await Promise.race([
-          fetchRealFormats(pageUrl),
-          new Promise((r) => setTimeout(() => r(null), 30000)),
+          formatsPromise,
+          new Promise((r) => setTimeout(() => r(undefined), 250)),
         ]);
         if (!stillOpen()) return;
-        if (info) {
+        if (info === undefined) {
+          pendingRealFormats = { promise: formatsPromise, pageUrl, title, durStr };
+        } else if (info) {
           const built = buildRealFormatOptions(info, pageUrl, title, durStr);
           if (built.length) realOptions = built;
         }
@@ -1200,160 +1240,77 @@
 
     if (!stillOpen()) return;
 
-    // Fill the already-open panel
-    const dropdown = shell;
-    dropdown.innerHTML = "";
-    Object.assign(dropdown.style, {
-      position: "fixed",
-      zIndex: "2147483647",
-      background: "#ffffff",
-      border: "1px solid #717171",
-      boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
-      borderRadius: "2px",
-      minWidth: "380px",
-      maxWidth: "640px",
-      fontFamily: 'Tahoma, "Segoe UI", Arial, sans-serif',
-      fontSize: "12px",
-      color: "#0f172a",
-      direction: "ltr",
-      userSelect: "none",
-      overflow: "hidden",
-    });
-
-    // Top Header: "Download all"
-    const header = document.createElement("div");
-    header.innerText = "Download all";
-    Object.assign(header.style, {
-      padding: "6px 12px",
-      fontWeight: "700",
-      fontSize: "12px",
-      color: "#1e293b",
-      background: "#f1f5f9",
-      borderBottom: "1px solid #cbd5e1",
-      cursor: "pointer",
-    });
-    header.addEventListener("mouseenter", () => {
-      header.style.background = "#e2e8f0";
-    });
-    header.addEventListener("mouseleave", () => {
-      header.style.background = "#f1f5f9";
-    });
-    header.addEventListener("click", (e) => {
-      e.stopPropagation();
-      hideDropdown();
-      showToast(
-        "ZR Downloader 🚀",
-        `Starting Best Quality download in ZR Downloader...`,
-        "success"
-      );
-      const isLowSpace = Boolean(cachedLowDiskSpace);
-      const payload = {
-        action: "SEND_TO_ZR",
-        url: stripRangeParams(options[0]?.url || mediaTarget.url),
-        filename: mediaTarget.title,
-        quality: "Best",
-        autoStart: true,
-        lowDiskSpace: isLowSpace,
-      };
-      try {
-        chrome.runtime.sendMessage(payload, () => {
-          if (chrome.runtime.lastError) {
-            chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
-          }
-        });
-      } catch (err) {
-        try {
-          chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
-        } catch {}
-      }
-    });
-    dropdown.appendChild(header);
-
-    // Format list
-    const list = document.createElement("div");
-    list.style.maxHeight = "360px";
-    list.style.overflowY = "auto";
-
-    options.forEach((opt, idx) => {
-      const item = document.createElement("div");
-      item.title = opt.fullLabel || opt.label;
-      Object.assign(item.style, {
-        padding: "6px 14px",
+    const renderDropdownPanel = (optionsToRender, isRefreshing) => {
+      if (!stillOpen()) return;
+      // Fill the already-open panel
+      const dropdown = shell;
+      dropdown.innerHTML = "";
+      Object.assign(dropdown.style, {
+        position: "fixed",
+        zIndex: "2147483647",
+        background: "#ffffff",
+        border: "1px solid #717171",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.35)",
+        borderRadius: "2px",
+        minWidth: "380px",
+        maxWidth: "640px",
+        fontFamily: 'Tahoma, "Segoe UI", Arial, sans-serif',
         fontSize: "12px",
         color: "#0f172a",
+        direction: "ltr",
+        userSelect: "none",
+        overflow: "hidden",
+      });
+
+      // Top Header: "Download all"
+      const header = document.createElement("div");
+      Object.assign(header.style, {
+        padding: "6px 12px",
+        fontWeight: "700",
+        fontSize: "12px",
+        color: "#1e293b",
+        background: "#f1f5f9",
+        borderBottom: "1px solid #cbd5e1",
         cursor: "pointer",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        gap: "10px",
-        borderBottom: "1px solid #f1f5f9",
-        transition: "background 0.08s ease, color 0.08s ease",
+        gap: "8px",
       });
-
-      const titleSpan = document.createElement("span");
-      titleSpan.innerText = `${idx + 1}. ${opt.shortTitle || getShortTitle(opt.filename || mediaTarget.title, 24)}`;
-      Object.assign(titleSpan.style, {
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        flex: "1",
-        minWidth: "0",
-        maxWidth: "250px",
+      const headerTitle = document.createElement("span");
+      headerTitle.innerText = "Download all";
+      header.appendChild(headerTitle);
+      if (isRefreshing) {
+        const syncBadge = document.createElement("span");
+        syncBadge.innerText = "Checking exact sizes…";
+        Object.assign(syncBadge.style, {
+          fontSize: "10px",
+          fontWeight: "500",
+          color: "#64748b",
+        });
+        header.appendChild(syncBadge);
+      }
+      header.addEventListener("mouseenter", () => {
+        header.style.background = "#e2e8f0";
       });
-
-      const formatSpan = document.createElement("span");
-      formatSpan.innerText = opt.formatDisplay || opt.quality;
-      Object.assign(formatSpan.style, {
-        whiteSpace: "nowrap",
-        fontWeight: "700",
-        fontSize: "11px",
-        padding: "2px 8px",
-        borderRadius: "4px",
-        background: "rgba(37, 99, 235, 0.08)",
-        color: "#2563eb",
-        flexShrink: "0",
+      header.addEventListener("mouseleave", () => {
+        header.style.background = "#f1f5f9";
       });
-
-      item.appendChild(titleSpan);
-      item.appendChild(formatSpan);
-
-      item.addEventListener("mouseenter", () => {
-        item.style.background = "#2563eb";
-        item.style.color = "#ffffff";
-        formatSpan.style.background = "rgba(255, 255, 255, 0.25)";
-        formatSpan.style.color = "#ffffff";
-      });
-      item.addEventListener("mouseleave", () => {
-        item.style.background = "transparent";
-        item.style.color = "#0f172a";
-        formatSpan.style.background = "rgba(37, 99, 235, 0.08)";
-        formatSpan.style.color = "#2563eb";
-      });
-
-      item.addEventListener("click", (e) => {
+      header.addEventListener("click", (e) => {
         e.stopPropagation();
-        e.preventDefault();
         hideDropdown();
-        if (activeGrabberButton) {
-          activeGrabberButton.style.display = "none";
-        }
         showToast(
           "ZR Downloader 🚀",
-          `Starting ${opt.quality} download in ZR Downloader...`,
+          `Starting Best Quality download in ZR Downloader...`,
           "success"
         );
         const isLowSpace = Boolean(cachedLowDiskSpace);
         const payload = {
           action: "SEND_TO_ZR",
-          url: stripRangeParams(opt.url || mediaTarget.url),
-          filename: opt.filename || mediaTarget.title,
-          quality: opt.quality,
-          formatId: opt.formatId || "",
+          url: stripRangeParams(optionsToRender[0]?.url || mediaTarget.url),
+          filename: mediaTarget.title,
+          quality: "Best",
           autoStart: true,
-          container:
-            opt.container || (opt.quality === "Audio" ? "MP3" : "MP4"),
-          referrer: window.location.href,
-          isDirectFile: Boolean(opt.isDirectFile),
           lowDiskSpace: isLowSpace,
         };
         try {
@@ -1368,31 +1325,157 @@
           } catch {}
         }
       });
+      dropdown.appendChild(header);
 
-      list.appendChild(item);
-    });
+      // Format list
+      const list = document.createElement("div");
+      list.style.maxHeight = "360px";
+      list.style.overflowY = "auto";
 
-    dropdown.appendChild(list);
+      optionsToRender.forEach((opt, idx) => {
+        const item = document.createElement("div");
+        item.title = opt.fullLabel || opt.label;
+        Object.assign(item.style, {
+          padding: "6px 14px",
+          fontSize: "12px",
+          color: "#0f172a",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "10px",
+          borderBottom: "1px solid #f1f5f9",
+          transition: "background 0.08s ease, color 0.08s ease",
+        });
 
-    // Position directly beneath the grabber button
-    const btnRect = anchorBtn.getBoundingClientRect();
-    const top = Math.min(window.innerHeight - 200, btnRect.bottom + 2);
-    if (btnRect.left < window.innerWidth / 2) {
-      dropdown.style.left = `${Math.max(8, btnRect.left)}px`;
-      dropdown.style.right = "auto";
-    } else {
-      dropdown.style.right = `${Math.max(
-        8,
-        window.innerWidth - btnRect.right
-      )}px`;
-      dropdown.style.left = "auto";
+        const titleSpan = document.createElement("span");
+        titleSpan.innerText = `${idx + 1}. ${opt.shortTitle || getShortTitle(opt.filename || mediaTarget.title, 24)}`;
+        Object.assign(titleSpan.style, {
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          flex: "1",
+          minWidth: "0",
+          maxWidth: "250px",
+        });
+
+        const isPremBadge = Boolean(opt.isPremium || /premium/i.test(opt.quality || opt.formatDisplay || ""));
+        const formatSpan = document.createElement("span");
+        formatSpan.innerText = opt.formatDisplay || opt.quality;
+        Object.assign(formatSpan.style, {
+          whiteSpace: "nowrap",
+          fontWeight: "700",
+          fontSize: "11px",
+          padding: "2px 8px",
+          borderRadius: "4px",
+          background: isPremBadge ? "rgba(217, 119, 6, 0.14)" : "rgba(37, 99, 235, 0.08)",
+          color: isPremBadge ? "#b45309" : "#2563eb",
+          flexShrink: "0",
+        });
+
+        item.appendChild(titleSpan);
+        item.appendChild(formatSpan);
+
+        item.addEventListener("mouseenter", () => {
+          item.style.background = "#2563eb";
+          item.style.color = "#ffffff";
+          formatSpan.style.background = "rgba(255, 255, 255, 0.25)";
+          formatSpan.style.color = "#ffffff";
+        });
+        item.addEventListener("mouseleave", () => {
+          item.style.background = "transparent";
+          item.style.color = "#0f172a";
+          formatSpan.style.background = isPremBadge
+            ? "rgba(217, 119, 6, 0.14)"
+            : "rgba(37, 99, 235, 0.08)";
+          formatSpan.style.color = isPremBadge ? "#b45309" : "#2563eb";
+        });
+
+        item.addEventListener("click", (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          hideDropdown();
+          if (activeGrabberButton) {
+            activeGrabberButton.style.display = "none";
+          }
+          showToast(
+            "ZR Downloader 🚀",
+            `Starting ${opt.quality} download in ZR Downloader...`,
+            "success"
+          );
+          const isLowSpace = Boolean(cachedLowDiskSpace);
+          const payload = {
+            action: "SEND_TO_ZR",
+            url: stripRangeParams(opt.url || mediaTarget.url),
+            filename: opt.filename || mediaTarget.title,
+            quality: opt.quality,
+            formatId: opt.formatId || "",
+            autoStart: true,
+            container:
+              opt.container || (opt.quality === "Audio" ? "MP3" : "MP4"),
+            referrer: window.location.href,
+            isDirectFile: Boolean(opt.isDirectFile),
+            lowDiskSpace: isLowSpace,
+          };
+          try {
+            chrome.runtime.sendMessage(payload, () => {
+              if (chrome.runtime.lastError) {
+                chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+              }
+            });
+          } catch (err) {
+            try {
+              chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+            } catch {}
+          }
+        });
+
+        list.appendChild(item);
+      });
+
+      dropdown.appendChild(list);
+
+      // Position directly beneath the grabber button
+      const btnRect = anchorBtn.getBoundingClientRect();
+      const top = Math.min(window.innerHeight - 200, btnRect.bottom + 2);
+      if (btnRect.left < window.innerWidth / 2) {
+        dropdown.style.left = `${Math.max(8, btnRect.left)}px`;
+        dropdown.style.right = "auto";
+      } else {
+        dropdown.style.right = `${Math.max(
+          8,
+          window.innerWidth - btnRect.right
+        )}px`;
+        dropdown.style.left = "auto";
+      }
+      dropdown.style.top = `${top}px`;
+
+      if (!dropdown.isConnected) {
+        (document.fullscreenElement || document.webkitFullscreenElement || document.body).appendChild(dropdown);
+      }
+      activeDropdown = dropdown;
+    };
+
+    renderDropdownPanel(options, Boolean(pendingRealFormats));
+
+    if (pendingRealFormats) {
+      pendingRealFormats.promise.then((lateInfo) => {
+        if (!stillOpen()) return;
+        if (lateInfo) {
+          const lateBuilt = buildRealFormatOptions(
+            lateInfo,
+            pendingRealFormats.pageUrl,
+            pendingRealFormats.title,
+            pendingRealFormats.durStr
+          );
+          if (lateBuilt.length) {
+            renderDropdownPanel(lateBuilt, false);
+            return;
+          }
+        }
+        renderDropdownPanel(options, false);
+      });
     }
-    dropdown.style.top = `${top}px`;
-
-    if (!dropdown.isConnected) {
-      (document.fullscreenElement || document.webkitFullscreenElement || document.body).appendChild(dropdown);
-    }
-    activeDropdown = dropdown;
   }
 
   // ---------------------------------------------------------------------------
@@ -1908,4 +1991,10 @@
       setTimeout(() => toast.remove(), 300);
     }, 3500);
   }
+
+  // Proactively warm format cache on page load and YouTube SPA navigation
+  setTimeout(prefetchFormatsForPage, 300);
+  window.addEventListener("yt-navigate-finish", () => setTimeout(prefetchFormatsForPage, 150));
+  window.addEventListener("yt-page-data-updated", () => setTimeout(prefetchFormatsForPage, 150));
+  window.addEventListener("popstate", () => setTimeout(prefetchFormatsForPage, 150));
 })();

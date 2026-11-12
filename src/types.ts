@@ -234,6 +234,8 @@ export interface MediaStream {
   acodec?: string;
   filesize?: string | number;
   hasAudio?: boolean;
+  formatNote?: string;
+  isPremium?: boolean;
 }
 
 export interface SubtitleTrack {

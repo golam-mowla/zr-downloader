@@ -1208,7 +1208,14 @@ async fn start_local_bridge(app_handle: AppHandle) {
                         } else {
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(60),
-                                media::fetch_media_info(target.clone(), None, None, None, None),
+                                media::fetch_media_info_with_app(
+                                    Some(handle.clone()),
+                                    target.clone(),
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                ),
                             )
                             .await
                             {
@@ -1360,8 +1367,31 @@ fn get_pending_url(state: State<'_, AppUrlState>) -> Option<serde_json::Value> {
 }
 
 #[command]
-async fn ytdlp_get_info(url: String) -> Result<media::MediaInfo, String> {
-    media::fetch_media_info(url, None, None, None, None).await
+async fn ytdlp_get_info(app: AppHandle, url: String) -> Result<media::MediaInfo, String> {
+    media::fetch_media_info_with_app(Some(app), url, None, None, None, None).await
+}
+
+#[command]
+async fn read_clipboard_link() -> Result<Option<String>, String> {
+    let txt_opt = tokio::task::spawn_blocking(|| {
+        arboard::Clipboard::new()
+            .ok()
+            .and_then(|mut cb| cb.get_text().ok())
+    })
+    .await
+    .ok()
+    .flatten();
+
+    if let Some(txt) = txt_opt {
+        let trimmed = txt.trim();
+        let low = trimmed.to_lowercase();
+        let valid_scheme =
+            low.starts_with("http://") || low.starts_with("https://") || low.starts_with("magnet:?");
+        if valid_scheme && trimmed.len() >= 10 && !trimmed.chars().any(|c| c.is_whitespace()) {
+            return Ok(Some(trimmed.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 #[command]
@@ -1864,6 +1894,7 @@ pub fn run() {
             export_download_list,
             import_download_list,
             read_text_file_content,
+            read_clipboard_link,
             // HTTP Downloader Commands
             probe_http_url,
             start_http_download,

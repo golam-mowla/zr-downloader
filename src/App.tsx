@@ -94,6 +94,31 @@ export const App: React.FC = () => {
   const deletedIdsRef = useRef<Set<string>>(new Set());
   const notifiedRef = useRef<Set<string>>(new Set());
   const recentOpenUrlsRef = useRef<Map<string, number>>(new Map());
+  const lastHandledClipRef = useRef<string>("");
+  const lastProgressBarRef = useRef<{ status: ProgressBarStatus; progress: number }>({
+    status: ProgressBarStatus.None,
+    progress: -1,
+  });
+
+  const checkClipboardForAutoInspect = async () => {
+    try {
+      const clipUrl = await invoke<string | null>("read_clipboard_link");
+      if (!clipUrl) return;
+      const trimmed = clipUrl.trim();
+      if (!trimmed || trimmed === lastHandledClipRef.current) return;
+      if (tasksRef.current.some((t) => t.url === trimmed)) {
+        lastHandledClipRef.current = trimmed;
+        return;
+      }
+      lastHandledClipRef.current = trimmed;
+      setModalInitialUrl(trimmed);
+      setModalInitialFilename("");
+      setModalBatchText("");
+      setIsAddModalOpen(true);
+    } catch {
+      // Clipboard read not available or empty
+    }
+  };
 
   const applySettingsSummary = (s: AppSettings) => {
     setSpeedLimitEnabled(Boolean(s.speedLimitEnabled));
@@ -267,10 +292,18 @@ export const App: React.FC = () => {
         const pending = await invoke<any>("get_pending_url");
         if (pending) {
           handleOpenUrlRef.current(pending);
+        } else {
+          await checkClipboardForAutoInspect();
         }
       } catch {}
     };
     loadInitialData();
+
+    const onWindowFocus = () => {
+      void checkClipboardForAutoInspect();
+    };
+    window.addEventListener("focus", onWindowFocus);
+    return () => window.removeEventListener("focus", onWindowFocus);
   }, []);
 
   // Listen to Tauri backend events with high-performance requestAnimationFrame batching
@@ -462,6 +495,7 @@ export const App: React.FC = () => {
         }
       }
       if (targetUrl && targetUrl.trim()) {
+        lastHandledClipRef.current = targetUrl.trim();
         const now = Date.now();
         const formatIdKey = raw && typeof raw === "object" ? String(raw.formatId || raw.formatid || "") : "";
         const urlKey = `${targetUrl.trim()}_${targetQuality}_${formatIdKey}_${Boolean(raw?.isDirectFile)}`;
@@ -702,6 +736,15 @@ export const App: React.FC = () => {
       const activePaused = tasks.filter((t) => t.status === "paused");
       const activeErrors = tasks.filter((t) => t.status === "error");
 
+      const applyProgressBar = (status: ProgressBarStatus, progress: number) => {
+        const prev = lastProgressBarRef.current;
+        if (prev.status === status && prev.progress === progress) return;
+        lastProgressBarRef.current = { status, progress };
+        win.setProgressBar(
+          status === ProgressBarStatus.None ? { status } : { status, progress }
+        ).catch(() => {});
+      };
+
       if (activeDownloading.length > 0) {
         let totalBytes = 0;
         let downloadedBytes = 0;
@@ -727,24 +770,13 @@ export const App: React.FC = () => {
           overallPercent = Math.min(100, Math.max(0, totalPercent / activeDownloading.length));
         }
 
-        win.setProgressBar({
-          status: ProgressBarStatus.Normal,
-          progress: Math.round(overallPercent),
-        }).catch(() => {});
+        applyProgressBar(ProgressBarStatus.Normal, Math.round(overallPercent));
       } else if (activePaused.length > 0 && activeDownloading.length === 0) {
-        win.setProgressBar({
-          status: ProgressBarStatus.Paused,
-          progress: 50,
-        }).catch(() => {});
+        applyProgressBar(ProgressBarStatus.Paused, 50);
       } else if (activeErrors.length > 0 && activeDownloading.length === 0) {
-        win.setProgressBar({
-          status: ProgressBarStatus.Error,
-          progress: 100,
-        }).catch(() => {});
+        applyProgressBar(ProgressBarStatus.Error, 100);
       } else {
-        win.setProgressBar({
-          status: ProgressBarStatus.None,
-        }).catch(() => {});
+        applyProgressBar(ProgressBarStatus.None, 0);
       }
     } catch {
       // Non-tauri context fallback
@@ -1501,6 +1533,7 @@ export const App: React.FC = () => {
   // Category counts
   const handleCopyLink = async (url: string) => {
     if (!url) return;
+    lastHandledClipRef.current = url.trim();
     try {
       await navigator.clipboard.writeText(url);
     } catch (err) {
