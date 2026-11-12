@@ -354,12 +354,98 @@ pub async fn probe_url(client: &reqwest::Client, url: &str) -> Result<UrlMetadat
     })
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SparseResumeMeta {
+    #[serde(default)]
+    pub chunk_count: usize,
+    #[serde(default)]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub supports_ranges: bool,
+    #[serde(default)]
+    pub chunks: HashMap<usize, u64>,
+}
+
+pub fn sparse_meta_path_for(save_path: &str, task_id: &str) -> PathBuf {
+    let target_dest = PathBuf::from(save_path);
+    let target_parent = target_dest
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(std::env::temp_dir);
+    target_parent.join(format!(".zr_sparse_meta_{}.json", task_id))
+}
+
+pub fn read_sparse_meta(content: &str) -> Option<SparseResumeMeta> {
+    if let Ok(meta) = serde_json::from_str::<SparseResumeMeta>(content) {
+        if !meta.chunks.is_empty() || meta.chunk_count > 0 || meta.total_bytes > 0 {
+            return Some(meta);
+        }
+    }
+    if let Ok(map) = serde_json::from_str::<HashMap<usize, u64>>(content) {
+        return Some(SparseResumeMeta {
+            chunk_count: map.len().max(1),
+            total_bytes: 0,
+            supports_ranges: true,
+            chunks: map,
+        });
+    }
+    None
+}
+
+/// Enrich a persisted HTTP `DownloadTask` from its adjacent `.zr_sparse_meta_<id>.json`
+/// (and `.zr_tmp_<id>/chunk_*.part` sizes if present) before resuming.
+pub async fn hydrate_task_from_sparse_meta(task: &mut DownloadTask) {
+    let meta_path = sparse_meta_path_for(&task.save_path, &task.id);
+    if let Ok(content) = fs::read_to_string(&meta_path).await {
+        if let Some(meta) = read_sparse_meta(&content) {
+            if task.total_bytes == 0 && meta.total_bytes > 0 {
+                task.total_bytes = meta.total_bytes;
+            }
+            if meta.chunk_count > 0 {
+                task.chunk_count = meta.chunk_count;
+            }
+            if meta.supports_ranges {
+                task.is_resumable = true;
+            }
+            let sum: u64 = meta.chunks.values().copied().sum();
+            if sum > 0 {
+                task.downloaded_bytes = sum.max(task.downloaded_bytes);
+                if task.total_bytes > 0 {
+                    task.percent = ((task.downloaded_bytes as f64 / task.total_bytes as f64) * 100.0).min(100.0);
+                }
+            }
+        }
+    }
+}
+
+async fn write_sparse_meta_file(
+    path: &PathBuf,
+    chunk_count: usize,
+    total_bytes: u64,
+    supports_ranges: bool,
+    trackers: &[Arc<AtomicU64>],
+) {
+    let mut chunks = HashMap::new();
+    for (idx, trk) in trackers.iter().enumerate() {
+        chunks.insert(idx, trk.load(Ordering::Relaxed));
+    }
+    let meta = SparseResumeMeta {
+        chunk_count,
+        total_bytes,
+        supports_ranges,
+        chunks,
+    };
+    if let Ok(json_str) = serde_json::to_string(&meta) {
+        let _ = fs::write(path, json_str).await;
+    }
+}
+
 pub async fn execute_multithreaded_download(
     app: AppHandle,
     state: EngineState,
     task_id: String,
 ) -> Result<(), String> {
-    let (url, _filename, save_path, total_bytes, mut chunk_count, is_resumable, low_disk_space) = {
+    let (url, _filename, save_path, mut total_bytes, mut chunk_count, is_resumable, low_disk_space) = {
         let tasks = state.tasks.read().await;
         let task = tasks.get(&task_id).ok_or("Task not found")?;
         (
@@ -373,27 +459,54 @@ pub async fn execute_multithreaded_download(
         )
     };
 
-    // If total_bytes is 0 (unknown size) or ranges unsupported, force single stream
-    if total_bytes == 0 || !is_resumable || chunk_count <= 1 {
-        chunk_count = 1;
-        // Update task's chunk_count so UI doesn't render 16 fake parallel streams
-        let mut tasks = state.tasks.write().await;
-        if let Some(t) = tasks.get_mut(&task_id) {
-            t.chunk_count = 1;
-            let _ = app.emit("download-progress", t.clone());
-            let _ = app.emit("zr://progress", t.clone());
-        }
-    }
-
     let target_dest = PathBuf::from(&save_path);
     let target_parent = target_dest
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::env::temp_dir());
+        .unwrap_or_else(std::env::temp_dir);
     let _ = fs::create_dir_all(&target_parent).await;
 
     let temp_dir = target_parent.join(format!(".zr_tmp_{}", task_id));
     let state_file_path = target_parent.join(format!(".zr_sparse_meta_{}.json", task_id));
+
+    // Load saved sparse/range metadata if present on disk
+    let mut sparse_saved: HashMap<usize, u64> = HashMap::new();
+    if is_resumable && state_file_path.exists() {
+        if let Ok(content) = fs::read_to_string(&state_file_path).await {
+            if let Some(meta) = read_sparse_meta(&content) {
+                if total_bytes == 0 && meta.total_bytes > 0 {
+                    total_bytes = meta.total_bytes;
+                }
+                if meta.chunk_count > 1 && chunk_count <= 1 {
+                    chunk_count = meta.chunk_count;
+                }
+                sparse_saved = meta.chunks;
+            }
+        }
+    }
+
+    // If non-resumable or unknown total size, force clean single stream from byte 0
+    if total_bytes == 0 || !is_resumable || chunk_count <= 1 {
+        chunk_count = 1;
+        if !is_resumable {
+            sparse_saved.clear();
+            let _ = fs::remove_file(&state_file_path).await;
+            let _ = fs::remove_dir_all(&temp_dir).await;
+        }
+        let mut tasks = state.tasks.write().await;
+        if let Some(t) = tasks.get_mut(&task_id) {
+            t.chunk_count = 1;
+            if total_bytes > 0 && t.total_bytes == 0 {
+                t.total_bytes = total_bytes;
+            }
+            if !is_resumable {
+                t.downloaded_bytes = 0;
+                t.percent = 0.0;
+            }
+            let _ = app.emit("download-progress", t.clone());
+            let _ = app.emit("zr://progress", t.clone());
+        }
+    }
 
     if !low_disk_space {
         fs::create_dir_all(&temp_dir).await.map_err(|e| e.to_string())?;
@@ -434,9 +547,8 @@ pub async fn execute_multithreaded_download(
     };
 
     let mut chunk_ranges: Vec<(usize, u64, u64)> = Vec::new();
-    if total_bytes == 0 || chunk_count <= 1 {
-        // Single unbounded stream or whole file (end = total_bytes or 0 for unknown)
-        chunk_ranges.push((0, 0, if total_bytes > 0 { total_bytes.saturating_sub(1) } else { 0 }));
+    if total_bytes == 0 || !is_resumable || chunk_count <= 1 {
+        chunk_ranges.push((0, 0, if total_bytes > 0 && is_resumable { total_bytes.saturating_sub(1) } else { 0 }));
     } else {
         for i in 0..chunk_count {
             let start = i as u64 * chunk_size;
@@ -449,23 +561,21 @@ pub async fn execute_multithreaded_download(
         }
     }
 
-    let mut sparse_saved: HashMap<usize, u64> = HashMap::new();
-    if low_disk_space && state_file_path.exists() {
-        if let Ok(content) = fs::read_to_string(&state_file_path).await {
-            if let Ok(map) = serde_json::from_str::<HashMap<usize, u64>>(&content) {
-                sparse_saved = map;
-            }
-        }
-    }
-
     let mut initial_downloaded = 0u64;
     let mut chunk_trackers: Vec<Arc<AtomicU64>> = Vec::new();
     for (index, _, _) in &chunk_ranges {
-        let c_down = if low_disk_space {
+        let c_down = if !is_resumable {
+            0
+        } else if low_disk_space {
             *sparse_saved.get(index).unwrap_or(&0u64)
         } else {
             let part_file_path = temp_dir.join(format!("chunk_{}.part", index));
-            fs::metadata(&part_file_path).await.map(|m| m.len()).unwrap_or(0)
+            let disk_len = fs::metadata(&part_file_path).await.map(|m| m.len()).unwrap_or(0);
+            if disk_len > 0 {
+                disk_len
+            } else {
+                *sparse_saved.get(index).unwrap_or(&0u64)
+            }
         };
         initial_downloaded += c_down;
         chunk_trackers.push(Arc::new(AtomicU64::new(c_down)));
@@ -570,10 +680,13 @@ pub async fn execute_multithreaded_download(
                     }
                 }
 
+                let mut sent_range = false;
                 if end > 0 {
                     req = req.header(RANGE, format!("bytes={}-{}", chunk_start, end));
+                    sent_range = true;
                 } else if chunk_start > 0 {
                     req = req.header(RANGE, format!("bytes={}-", chunk_start));
+                    sent_range = true;
                 }
 
                 let send_res = req.send().await;
@@ -582,6 +695,13 @@ pub async fn execute_multithreaded_download(
                         if r.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
                             let _ = file.flush().await;
                             return Ok::<(), String>(());
+                        }
+                        if sent_range
+                            && (chunk_start > 0 || chunk_count > 1)
+                            && r.status() == reqwest::StatusCode::OK
+                        {
+                            // Server ignored Range header and sent full stream from byte 0
+                            return Err("RANGE_NOT_SUPPORTED".to_string());
                         }
                         if !r.status().is_success() && r.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                             if retries < MAX_RETRIES {
@@ -694,14 +814,15 @@ pub async fn execute_multithreaded_download(
                 }
                 _ = tokio::time::sleep(Duration::from_millis(300)) => {
                     ticks += 1;
-                    if low_disk_space && ticks % 4 == 0 {
-                        let mut map: HashMap<usize, u64> = HashMap::new();
-                        for (idx, trk) in monitor_trackers.iter().enumerate() {
-                            map.insert(idx, trk.load(Ordering::Relaxed));
-                        }
-                        if let Ok(json_str) = serde_json::to_string(&map) {
-                            let _ = fs::write(&monitor_state_path, json_str).await;
-                        }
+                    if ticks % 4 == 0 {
+                        write_sparse_meta_file(
+                            &monitor_state_path,
+                            chunk_count,
+                            total_bytes,
+                            is_resumable,
+                            &monitor_trackers,
+                        )
+                        .await;
                     }
 
                     let current_downloaded = monitor_downloaded.load(Ordering::Relaxed);
@@ -766,6 +887,39 @@ pub async fn execute_multithreaded_download(
     let _ = cancel_tx.send(());
 
     if !chunk_errors.is_empty() {
+        if chunk_errors.iter().any(|e| e == "RANGE_NOT_SUPPORTED") {
+            let _ = fs::remove_file(&state_file_path).await;
+            let _ = fs::remove_dir_all(&temp_dir).await;
+            if low_disk_space {
+                let _ = fs::remove_file(&target_dest).await;
+            }
+            {
+                let mut tasks = state.tasks.write().await;
+                if let Some(t) = tasks.get_mut(&task_id) {
+                    t.is_resumable = false;
+                    t.chunk_count = 1;
+                    t.downloaded_bytes = 0;
+                    t.percent = 0.0;
+                    t.speed_bps = 0;
+                    t.speed_formatted = "Restarting...".to_string();
+                    t.error_message = None;
+                    let _ = app.emit("download-progress", t.clone());
+                    let _ = app.emit("zr://progress", t.clone());
+                }
+            }
+            crate::spawn_save_all_tasks(&app);
+            return Box::pin(execute_multithreaded_download(app, state, task_id)).await;
+        }
+
+        write_sparse_meta_file(
+            &state_file_path,
+            chunk_count,
+            total_bytes,
+            is_resumable,
+            &chunk_trackers,
+        )
+        .await;
+
         let is_user_paused = is_paused.load(Ordering::Relaxed)
             || chunk_errors.iter().any(|e| e == "Cancelled" || e.contains("cancel"));
 
@@ -779,6 +933,7 @@ pub async fn execute_multithreaded_download(
                 let _ = app.emit("download-progress", t.clone());
                 let _ = app.emit("zr://progress", t.clone());
             }
+            crate::spawn_save_all_tasks(&app);
             return Ok(());
         }
 
@@ -794,14 +949,12 @@ pub async fn execute_multithreaded_download(
             let _ = app.emit("download-progress", t.clone());
             let _ = app.emit("zr://progress", t.clone());
         }
+        crate::spawn_save_all_tasks(&app);
         return Err(err_msg);
     }
 
-    if low_disk_space {
-        // --- Zero-Temp Direct In-Place: Destination file already complete! ---
-        // 0 extra temporary disk space used! 20 GB file takes strictly 20 GB!
-        let _ = fs::remove_file(&state_file_path).await;
-    } else {
+    let _ = fs::remove_file(&state_file_path).await;
+    if !low_disk_space {
         // --- IDM-Style High-Performance Assembly Phase ---
         {
             let mut tasks = state.tasks.write().await;
@@ -893,6 +1046,7 @@ pub async fn execute_multithreaded_download(
             let _ = app.emit("zr://progress", t.clone());
         }
     }
+    crate::spawn_save_all_tasks(&app);
 
     Ok(())
 }
