@@ -282,7 +282,7 @@ pub async fn process_queue(app: &AppHandle) {
             let state_c = eng.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = downloader::execute_multithreaded_download(app_c.clone(), state_c, tid).await;
-                process_queue(&app_c).await;
+                kick_queue(app_c);
             });
         }
     }
@@ -290,6 +290,15 @@ pub async fn process_queue(app: &AppHandle) {
     for tid in media_to_start {
         crate::media::launch_media_worker(app.clone(), tid);
     }
+}
+
+/// Non-async launcher to trigger queue progression without creating recursive `async fn` cycles.
+pub fn kick_queue(app: AppHandle) {
+    let fut: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+        Box::pin(async move {
+            process_queue(&app).await;
+        });
+    tauri::async_runtime::spawn(fut);
 }
 
 pub async fn count_active_and_queued(app: &AppHandle) -> (usize, usize) {

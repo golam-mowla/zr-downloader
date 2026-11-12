@@ -1396,9 +1396,7 @@ pub async fn execute_multithreaded_download(
                     let _ = app.emit("zr://progress", t.clone());
                 }
                 crate::spawn_save_all_tasks(&app);
-                tauri::async_runtime::spawn(async move {
-                    crate::queue::process_queue(&app).await;
-                });
+                crate::queue::kick_queue(app);
                 return Err("Server does not support resume".to_string());
             }
 
@@ -1446,9 +1444,7 @@ pub async fn execute_multithreaded_download(
                 let _ = app.emit("zr://progress", t.clone());
             }
             crate::spawn_save_all_tasks(&app);
-            tauri::async_runtime::spawn(async move {
-                crate::queue::process_queue(&app).await;
-            });
+            crate::queue::kick_queue(app);
             return Ok(());
         }
 
@@ -1470,9 +1466,7 @@ pub async fn execute_multithreaded_download(
             }
         }
         crate::spawn_save_all_tasks(&app);
-        tauri::async_runtime::spawn(async move {
-            crate::queue::process_queue(&app).await;
-        });
+        crate::queue::kick_queue(app);
         return Err(err_msg);
     }
 
@@ -1645,9 +1639,7 @@ pub async fn execute_multithreaded_download(
         );
     });
 
-    tauri::async_runtime::spawn(async move {
-        crate::queue::process_queue(&app).await;
-    });
+    crate::queue::kick_queue(app);
 
     Ok(())
 }
