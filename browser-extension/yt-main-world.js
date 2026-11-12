@@ -25,13 +25,31 @@
       } catch (e) {}
     }
 
-    if (!resp && (!qualityLevels || qualityLevels.length === 0)) {
+    let qualityData = [];
+    if (player && typeof player.getAvailableQualityData === "function") {
+      try {
+        const qd = player.getAvailableQualityData();
+        if (Array.isArray(qd)) qualityData = qd;
+      } catch (e) {}
+    }
+
+    if (!resp && (!qualityLevels || qualityLevels.length === 0) && qualityData.length === 0) {
       return null;
     }
 
     // Extract actual available video qualities from adaptiveFormats & formats
     const qualities = new Set();
     const streamMeta = {}; // label -> { height, width, bitrate, size, fps }
+
+    if (qualityData.length > 0) {
+      for (const item of qualityData) {
+        if (!item) continue;
+        const lbl = item.qualityLabel || "";
+        if (/premium/i.test(lbl)) {
+          qualities.add(lbl.trim());
+        }
+      }
+    }
 
     if (resp && resp.streamingData) {
       const allStreams = [
@@ -60,8 +78,15 @@
       }
     }
 
-    // Fallback: If streamingData wasn't present, map availableQualityLevels
-    if (qualities.size === 0 && Array.isArray(qualityLevels) && qualityLevels.length > 0) {
+    // Fallback: If streamingData wasn't present, map getAvailableQualityData / availableQualityLevels
+    if (qualities.size === 0 && qualityData.length > 0) {
+      for (const item of qualityData) {
+        if (item && item.qualityLabel && item.quality !== "auto") {
+          qualities.add(String(item.qualityLabel).trim());
+        }
+      }
+    }
+    if ((qualities.size === 0 || qualities.size <= 2) && Array.isArray(qualityLevels) && qualityLevels.length > 0) {
       const qMap = {
         highres: "4K 2160p",
         hd2880: "2880p",

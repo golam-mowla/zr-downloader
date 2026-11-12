@@ -64,6 +64,10 @@ pub struct MediaStream {
     pub filesize: Option<u64>,
     #[serde(rename = "hasAudio")]
     pub has_audio: Option<bool>,
+    #[serde(rename = "formatNote")]
+    pub format_note: Option<String>,
+    #[serde(rename = "isPremium")]
+    pub is_premium: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1060,18 +1064,199 @@ fn emit_ffmpeg_progress_update(
 // Command 1: Fetch Media Info (Parallel Attempts + 10-Min Cache)
 // ---------------------------------------------------------------------------
 
+static INFLIGHT_INSPECTS: std::sync::OnceLock<
+    std::sync::Mutex<HashMap<String, tokio::sync::watch::Receiver<bool>>>,
+> = std::sync::OnceLock::new();
+
+struct InflightInspectGuard {
+    key: String,
+    tx: tokio::sync::watch::Sender<bool>,
+}
+
+impl Drop for InflightInspectGuard {
+    fn drop(&mut self) {
+        if let Some(lock) = INFLIGHT_INSPECTS.get() {
+            if let Ok(mut guard) = lock.lock() {
+                guard.remove(&self.key);
+            }
+        }
+        let _ = self.tx.send(true);
+    }
+}
+
+/// Normalize YouTube watch/short links to a canonical `watch?v=<id>` URL so mix/playlist/timestamp
+/// params don't bypass the format cache or force extra playlist extraction overhead.
+pub fn canonicalize_inspect_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_lowercase();
+    if let Some(idx) = lower.find("youtu.be/") {
+        let rest = &trimmed[idx + 9..];
+        let vid = rest.split(['?', '#', '&', '/']).next().unwrap_or("").trim();
+        if !vid.is_empty() {
+            return format!("https://www.youtube.com/watch?v={}", vid);
+        }
+    }
+    if lower.contains("youtube.com/watch") {
+        if let Some(q_idx) = trimmed.find('?') {
+            let query = &trimmed[q_idx + 1..];
+            for pair in query.split('#').next().unwrap_or(query).split('&') {
+                if let Some(vid) = pair.strip_prefix("v=") {
+                    let clean_vid = vid.trim();
+                    if !clean_vid.is_empty() {
+                        return format!("https://www.youtube.com/watch?v={}", clean_vid);
+                    }
+                }
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+fn is_cookie_db_error(msg: &str) -> bool {
+    let low = msg.to_lowercase();
+    low.contains("could not copy")
+        || low.contains("cookie")
+        || low.contains("dpapi")
+        || low.contains("sqlite")
+        || low.contains("decrypt")
+}
+
+async fn run_ytdlp_inspect_once(
+    target_url: String,
+    extractor_arg: Option<&'static str>,
+    cookies_browser: Option<String>,
+    cookies_file: Option<String>,
+    proxy: Option<String>,
+    discovery_args: Option<String>,
+) -> Result<std::process::Output, String> {
+    let has_browser_cookie = cookies_browser
+        .as_deref()
+        .map(|b| b != "None" && !b.trim().is_empty())
+        .unwrap_or(false);
+
+    for attempt_without_browser in [false, true] {
+        if attempt_without_browser && !has_browser_cookie {
+            break;
+        }
+        let u = target_url.clone();
+        let cb = if attempt_without_browser {
+            None
+        } else {
+            cookies_browser.clone()
+        };
+        let cf = cookies_file.clone();
+        let pr = proxy.clone();
+        let da = discovery_args.clone();
+
+        let output = tauri::async_runtime::spawn_blocking(move || {
+            let mut cmd = make_command("yt-dlp");
+            cmd.args([
+                "--dump-single-json",
+                "--no-playlist",
+                "--no-check-certificates",
+                "--no-warnings",
+                "--no-write-comments",
+                "--skip-unavailable-fragments",
+                "--socket-timeout",
+                "15",
+                "--extractor-retries",
+                "1",
+            ]);
+
+            if find_exe_in_augmented_path("deno").is_some() || ensure_deno_available().is_some() {
+                cmd.args(["--js-runtimes", "deno"]);
+            } else if find_exe_in_augmented_path("node").is_some() {
+                cmd.args(["--js-runtimes", "node"]);
+            }
+
+            if let Some(arg) = extractor_arg {
+                cmd.args(["--extractor-args", arg]);
+            }
+
+            if let Some(ref browser) = cb {
+                if browser != "None" && !browser.trim().is_empty() {
+                    cmd.args(["--cookies-from-browser", &browser.to_lowercase()]);
+                }
+            }
+            if let Some(ref file) = cf {
+                if !file.trim().is_empty() && PathBuf::from(file).exists() {
+                    cmd.args(["--cookies", file]);
+                }
+            }
+            if let Some(ref proxy_url) = pr {
+                if !proxy_url.trim().is_empty() {
+                    cmd.args(["--proxy", proxy_url.trim()]);
+                }
+            }
+            if let Some(ref extra) = da {
+                for arg in extra.split_whitespace() {
+                    if !arg.is_empty() {
+                        cmd.arg(arg);
+                    }
+                }
+            }
+
+            cmd.arg(&u);
+            cmd.output().map_err(|e| format!("Could not launch yt-dlp: {}", e))
+        })
+        .await
+        .map_err(|e| format!("Task join error: {}", e))??;
+
+        if output.status.success() {
+            return Ok(output);
+        }
+
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let combined = format!("{}\n{}", err.trim(), out.trim());
+        if !attempt_without_browser && has_browser_cookie && is_cookie_db_error(&combined) {
+            continue;
+        }
+
+        let final_err = if combined.trim().is_empty() {
+            "Failed to fetch metadata. Please verify the link or network connection.".to_string()
+        } else {
+            combined.trim().to_string()
+        };
+        return Err(format!("yt-dlp fetch failed: {}", final_err));
+    }
+
+    Err("yt-dlp fetch failed".to_string())
+}
+
 #[command]
 pub async fn fetch_media_info(
+    app: AppHandle,
     url: String,
     cookies_browser: Option<String>,
     cookies_file: Option<String>,
     proxy: Option<String>,
     discovery_args: Option<String>,
 ) -> Result<MediaInfo, String> {
-    let clean_url = url.trim().to_string();
-    if clean_url.is_empty() {
+    fetch_media_info_with_app(
+        Some(app),
+        url,
+        cookies_browser,
+        cookies_file,
+        proxy,
+        discovery_args,
+    )
+    .await
+}
+
+pub async fn fetch_media_info_with_app(
+    app: Option<AppHandle>,
+    url: String,
+    cookies_browser: Option<String>,
+    cookies_file: Option<String>,
+    proxy: Option<String>,
+    discovery_args: Option<String>,
+) -> Result<MediaInfo, String> {
+    let raw_trimmed = url.trim();
+    if raw_trimmed.is_empty() {
         return Err("URL cannot be empty".to_string());
     }
+    let clean_url = canonicalize_inspect_url(raw_trimmed);
 
     // Return cached result if fresh (< 10 minutes)
     if let Ok(mut guard) = FORMATS_CACHE.lock() {
@@ -1085,96 +1270,116 @@ pub async fn fetch_media_info(
         }
     }
 
-    let url_low = clean_url.to_lowercase();
-    let attempts: Vec<Option<&'static str>> =
-        if url_low.contains("youtube.com") || url_low.contains("youtu.be") {
-            vec![
-                None,
-                Some("youtube:player_client=ios,web"),
-                Some("youtube:player_client=android,web"),
-            ]
-        } else {
-            vec![None]
-        };
-
-    let mut attempt_futs = Vec::with_capacity(attempts.len());
-    for extractor_arg in attempts {
-        let u = clean_url.clone();
-        let cb = cookies_browser.clone();
-        let cf = cookies_file.clone();
-        let pr = proxy.clone();
-        let da = discovery_args.clone();
-        attempt_futs.push(Box::pin(async move {
-            let output = tauri::async_runtime::spawn_blocking(move || {
-                let mut cmd = make_command("yt-dlp");
-                cmd.args([
-                    "--dump-single-json",
-                    "--no-playlist",
-                    "--no-check-certificates",
-                    "--no-warnings",
-                    "--socket-timeout",
-                    "10",
-                    "--extractor-retries",
-                    "1",
-                ]);
-
-                if find_exe_in_augmented_path("node").is_some() {
-                    cmd.args(["--js-runtimes", "node"]);
-                } else if find_exe_in_augmented_path("deno").is_some() {
-                    cmd.args(["--js-runtimes", "deno"]);
-                }
-
-                if let Some(arg) = extractor_arg {
-                    cmd.args(["--extractor-args", arg]);
-                }
-
-                if let Some(ref browser) = cb {
-                    if browser != "None" && !browser.trim().is_empty() {
-                        cmd.args(["--cookies-from-browser", &browser.to_lowercase()]);
+    // Deduplicate concurrent inspections for the same canonical URL so multiple callers
+    // (prefetch + click + modal) await one yt-dlp process instead of spawning extras.
+    let existing_rx = {
+        let lock = INFLIGHT_INSPECTS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        lock.lock()
+            .ok()
+            .and_then(|map| map.get(&clean_url).cloned())
+    };
+    if let Some(mut rx) = existing_rx {
+        if !*rx.borrow() {
+            let _ = tokio::time::timeout(Duration::from_secs(45), rx.changed()).await;
+        }
+        if let Ok(guard) = FORMATS_CACHE.lock() {
+            if let Some(map) = guard.as_ref() {
+                if let Some((ts, cached)) = map.get(&clean_url) {
+                    if ts.elapsed() < Duration::from_secs(600) {
+                        return Ok(cached.clone());
                     }
                 }
-                if let Some(ref file) = cf {
-                    if !file.trim().is_empty() && PathBuf::from(file).exists() {
-                        cmd.args(["--cookies", file]);
-                    }
-                }
-                if let Some(ref proxy_url) = pr {
-                    if !proxy_url.trim().is_empty() {
-                        cmd.args(["--proxy", proxy_url.trim()]);
-                    }
-                }
-                if let Some(ref extra) = da {
-                    for arg in extra.split_whitespace() {
-                        if !arg.is_empty() {
-                            cmd.arg(arg);
-                        }
-                    }
-                }
-
-                cmd.arg(&u);
-                cmd.output().map_err(|e| format!("Could not launch yt-dlp: {}", e))
-            })
-            .await
-            .map_err(|e| format!("Task join error: {}", e))??;
-
-            if output.status.success() {
-                Ok(output)
-            } else {
-                let err = String::from_utf8_lossy(&output.stderr);
-                let out = String::from_utf8_lossy(&output.stdout);
-                let combined = format!("{}\n{}", err.trim(), out.trim());
-                let final_err = if combined.trim().is_empty() {
-                    "Failed to fetch metadata. Please verify the link or network connection."
-                        .to_string()
-                } else {
-                    combined.trim().to_string()
-                };
-                Err(format!("yt-dlp fetch failed: {}", final_err))
             }
-        }));
+        }
     }
 
-    let (output, _remaining) = futures_util::future::select_ok(attempt_futs).await?;
+    let _inflight_guard = {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let lock = INFLIGHT_INSPECTS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        if let Ok(mut map) = lock.lock() {
+            map.insert(clean_url.clone(), rx);
+        }
+        InflightInspectGuard {
+            key: clean_url.clone(),
+            tx,
+        }
+    };
+
+    // Inherit saved cookies & proxy from SettingsState when callers pass None/"None"
+    let saved_settings = app
+        .as_ref()
+        .and_then(|a| a.try_state::<crate::settings::SettingsState>())
+        .map(|s| s.get_blocking());
+
+    let eff_cookies_browser = cookies_browser
+        .filter(|b| !b.trim().is_empty() && b != "None")
+        .or_else(|| {
+            saved_settings
+                .as_ref()
+                .map(|s| s.cookies_browser.clone())
+                .filter(|b| !b.trim().is_empty() && b != "None")
+        });
+
+    let eff_cookies_file = cookies_file
+        .filter(|f| !f.trim().is_empty())
+        .or_else(|| {
+            saved_settings
+                .as_ref()
+                .map(|s| s.cookies_file.clone())
+                .filter(|f| !f.trim().is_empty())
+        });
+
+    let eff_proxy = proxy
+        .filter(|p| !p.trim().is_empty())
+        .or_else(|| {
+            saved_settings
+                .as_ref()
+                .map(|s| s.proxy_url.clone())
+                .filter(|p| !p.trim().is_empty())
+        });
+
+    // Run default extractor first (yt-dlp + Deno returns ALL qualities including 1080p & 1080p Premium);
+    // never race `android,web` in parallel because `android,web` finishes fast with ONLY 360p (format 18).
+    let url_low = clean_url.to_lowercase();
+    let is_youtube = url_low.contains("youtube.com") || url_low.contains("youtu.be");
+    let attempts: Vec<Option<&'static str>> = if is_youtube {
+        vec![
+            None,
+            Some("youtube:player_client=tv,web"),
+            Some("youtube:player_client=android,web"),
+        ]
+    } else {
+        vec![None]
+    };
+
+    let mut output_opt: Option<std::process::Output> = None;
+    let mut last_err: Option<String> = None;
+    for extractor_arg in attempts {
+        match run_ytdlp_inspect_once(
+            clean_url.clone(),
+            extractor_arg,
+            eff_cookies_browser.clone(),
+            eff_cookies_file.clone(),
+            eff_proxy.clone(),
+            discovery_args.clone(),
+        )
+        .await
+        {
+            Ok(out) => {
+                output_opt = Some(out);
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+
+    let output = output_opt.ok_or_else(|| {
+        last_err.unwrap_or_else(|| {
+            "Failed to fetch metadata. Please verify the link or network connection.".to_string()
+        })
+    })?;
 
     let info = tauri::async_runtime::spawn_blocking(move || -> Result<MediaInfo, String> {
 
@@ -1253,7 +1458,11 @@ pub async fn fetch_media_info(
                     let fps = f["fps"].as_f64().unwrap_or(0.0).round() as u32;
                     let tbr = f["tbr"].as_f64().unwrap_or(0.0).round() as u64;
                     let has_audio = acodec != "none";
-                    let res_tag = if h >= 2160 {
+                    let note_low = format_note.to_lowercase();
+                    let is_premium = note_low.contains("premium") || fid == "616" || fid == "356";
+                    let res_tag = if h > 0 && is_premium {
+                        format!("{}p (Premium)", h)
+                    } else if h >= 2160 {
                         format!("{}p (4K UHD)", h)
                     } else if h >= 1440 {
                         format!("{}p (2K QHD)", h)
@@ -1269,6 +1478,20 @@ pub async fn fetch_media_info(
                         format_note.to_string()
                     };
 
+                    let est_size = if size > 0 {
+                        size
+                    } else if tbr > 0 && duration > 0 {
+                        ((tbr * 1000) / 8) * duration
+                    } else {
+                        0
+                    };
+                    let size_badge = if size > 0 {
+                        format_bytes(size)
+                    } else if est_size > 0 {
+                        format!("~{}", format_bytes(est_size))
+                    } else {
+                        format_bytes(0)
+                    };
                     let audio_badge = if has_audio { " [+Audio]" } else { "" };
                     let label = format!(
                         "{} • {} • {}fps • {} • {}{} (ID: {})",
@@ -1276,7 +1499,7 @@ pub async fn fetch_media_info(
                         short_codec(vcodec),
                         fps,
                         ext.to_uppercase(),
-                        format_bytes(size),
+                        size_badge,
                         audio_badge,
                         fid
                     );
@@ -1293,8 +1516,14 @@ pub async fn fetch_media_info(
                             ext: Some(ext),
                             vcodec: Some(short_codec(vcodec)),
                             acodec: Some(short_codec(acodec)),
-                            filesize: if size > 0 { Some(size) } else { None },
+                            filesize: if est_size > 0 { Some(est_size) } else { None },
                             has_audio: Some(has_audio),
+                            format_note: if format_note.trim().is_empty() {
+                                None
+                            } else {
+                                Some(format_note.to_string())
+                            },
+                            is_premium: Some(is_premium),
                         },
                     ));
                 } else if acodec != "none" {
@@ -1327,14 +1556,24 @@ pub async fn fetch_media_info(
                             acodec: Some(short_codec(acodec)),
                             filesize: if size > 0 { Some(size) } else { None },
                             has_audio: Some(true),
+                            format_note: if format_note.trim().is_empty() {
+                                None
+                            } else {
+                                Some(format_note.to_string())
+                            },
+                            is_premium: Some(false),
                         },
                     ));
                 }
             }
         }
 
-        // Sort highest quality first
-        video_raw.sort_by(|a, b| (b.0, b.1, b.2).cmp(&(a.0, a.1, a.2)));
+        // Sort highest quality first, ranking Premium above standard at the same height
+        video_raw.sort_by(|a, b| {
+            let ap = if a.3.is_premium.unwrap_or(false) { 1u8 } else { 0u8 };
+            let bp = if b.3.is_premium.unwrap_or(false) { 1u8 } else { 0u8 };
+            (b.0, bp, b.1, b.2).cmp(&(a.0, ap, a.1, a.2))
+        });
         audio_raw.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
 
         let video_streams = video_raw.into_iter().map(|x| x.3).collect();
@@ -2161,11 +2400,11 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 ]);
             }
 
-            // Ensure Node or Deno JS runtime
-            if find_exe_in_augmented_path("node").is_some() {
-                cmd.args(["--js-runtimes", "node"]);
-            } else if ensure_deno_available().is_some() {
+            // Prefer Deno (fast bundled binary) then Node JS runtime
+            if find_exe_in_augmented_path("deno").is_some() || ensure_deno_available().is_some() {
                 cmd.args(["--js-runtimes", "deno"]);
+            } else if find_exe_in_augmented_path("node").is_some() {
+                cmd.args(["--js-runtimes", "node"]);
             }
 
             // Ensure FFmpeg location is explicitly passed if found

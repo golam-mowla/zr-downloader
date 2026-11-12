@@ -142,7 +142,32 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       setSequential(false);
       if (cleanUrl) {
         handleUrlDetection(cleanUrl);
+      } else {
+        // When user opens "+ Add URL" manually, check clipboard automatically
+        let cancelled = false;
+        (async () => {
+          try {
+            let clipText: string | null = await invoke<string | null>("read_clipboard_link").catch(() => null);
+            if (!clipText && navigator.clipboard?.readText) {
+              const raw = await navigator.clipboard.readText().catch(() => "");
+              const trimmed = raw.trim();
+              if (/^(https?:\/\/|magnet:\?)/i.test(trimmed) && !/\s/.test(trimmed)) {
+                clipText = trimmed;
+              }
+            }
+            if (!cancelled && clipText && clipText.trim()) {
+              const detected = clipText.trim();
+              setUrl(detected);
+              handleUrlDetection(detected);
+            }
+          } catch {}
+        })();
+        return () => {
+          cancelled = true;
+        };
       }
+    } else {
+      inspectSeq.current++;
     }
   }, [isOpen, defaultUrl, defaultFilename]);
 
@@ -236,7 +261,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     fetchDefaultDir();
   }, []);
 
-  // Auto-inspect URL when modal is open and URL changes (600 ms debounce)
+  // Auto-inspect URL when modal is open and URL changes (instant for pre-filled/clipboard, 200ms while typing)
   useEffect(() => {
     if (!isOpen) {
       lastInspectedUrl.current = "";
@@ -246,11 +271,14 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     if (!shouldAutoInspectUrl(cleanUrl)) return;
     if (cleanUrl === lastInspectedUrl.current || isFetchingMedia) return;
 
+    const initialClean = typeof defaultUrl === "string" ? defaultUrl.trim() : (defaultUrl as any)?.url || "";
+    const delayMs = cleanUrl === initialClean ? 0 : 200;
+
     const timer = window.setTimeout(() => {
       if (cleanUrl === lastInspectedUrl.current || isFetchingMedia) return;
       lastInspectedUrl.current = cleanUrl;
       void handleFetchMediaInfo(cleanUrl);
-    }, 600);
+    }, delayMs);
 
     return () => window.clearTimeout(timer);
   }, [url, isOpen]);
@@ -428,17 +456,13 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           androidBridge.fetchMediaInfo(cleanUrl, callbackId);
         });
       } else {
-        try {
-          parsed = await invoke("fetch_media_info", {
-            url: cleanUrl,
-            cookiesBrowser: null,
-            cookiesFile: null,
-            proxy: null,
-            discoveryArgs: null,
-          });
-        } catch (err) {
-          parsed = await invoke("ytdlp_get_info", { url: cleanUrl });
-        }
+        parsed = await invoke("fetch_media_info", {
+          url: cleanUrl,
+          cookiesBrowser: null,
+          cookiesFile: null,
+          proxy: null,
+          discoveryArgs: null,
+        });
       }
 
       if (inspectSeq.current !== seq) return;

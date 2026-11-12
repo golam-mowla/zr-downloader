@@ -388,26 +388,41 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 // Send URL to ZR Downloader Desktop App
-const formatsCache = new Map(); // url -> { t, promise }
+const formatsCache = new Map(); // canonicalUrl -> { t, promise }
+function canonicalizeFormatUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    const host = u.hostname.toLowerCase();
+    if (host.includes("youtube.com") && u.pathname === "/watch" && u.searchParams.get("v")) {
+      return `https://www.youtube.com/watch?v=${u.searchParams.get("v")}`;
+    }
+    if (host === "youtu.be") {
+      const vid = u.pathname.replace(/^\/+/, "").split("/")[0];
+      if (vid) return `https://www.youtube.com/watch?v=${vid}`;
+    }
+  } catch {}
+  return rawUrl;
+}
 function getRealFormats(url) {
   if (!url) return Promise.resolve(null);
-  const hit = formatsCache.get(url);
+  const key = canonicalizeFormatUrl(url);
+  const hit = formatsCache.get(key);
   if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.promise;
   const promise = (async () => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 65000);
+    const timer = setTimeout(() => controller.abort(), 45000);
     try {
-      const res = await fetch(`${ZR_BRIDGE_URL}/formats?url=${encodeURIComponent(url)}`, { signal: controller.signal });
+      const res = await fetch(`${ZR_BRIDGE_URL}/formats?url=${encodeURIComponent(key)}`, { signal: controller.signal });
       if (!res.ok) throw new Error("formats " + res.status);
       return await res.json();
     } catch (e) {
-      formatsCache.delete(url);
+      formatsCache.delete(key);
       return null;
     } finally {
       clearTimeout(timer);
     }
   })();
-  formatsCache.set(url, { t: Date.now(), promise });
+  formatsCache.set(key, { t: Date.now(), promise });
   return promise;
 }
 
