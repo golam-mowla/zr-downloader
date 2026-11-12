@@ -43,6 +43,7 @@ interface DownloadTableViewProps {
   onOpenFolder: (path: string) => void;
   onChangePriority?: (id: string, priority: string) => void;
   onReorderTasks?: (orderedIds: string[]) => void;
+  onViewErrorLog?: (task: DownloadTask) => void;
   theme?: "dark" | "light";
   windowWidth?: number;
 }
@@ -59,6 +60,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
   onOpenFolder,
   onChangePriority,
   onReorderTasks,
+  onViewErrorLog,
   windowWidth,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -145,7 +147,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
             <col /> {/* File Name takes remaining 1fr */}
             {showSizeColumn && <col className="w-32" />}
             <col className="w-36 sm:w-44" /> {/* Progress */}
-            <col className="w-24 sm:w-28" /> {/* Status */}
+            <col className="w-28 sm:w-32" /> {/* Status */}
             {showSpeed && <col className="w-28" />}
             {showTimeLeft && <col className="w-24" />}
             <col className="w-[120px]" /> {/* Actions */}
@@ -381,40 +383,56 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                       </div>
                     </td>
 
-                    {/* Status Badge + Priority Selector */}
-                    <td className="py-2.5 px-3 whitespace-nowrap border-b border-zr">
-                      <div className="flex items-center space-x-1.5">
+                    {/* Status Badge + Priority Selector (stacked so Priority never overlaps Speed) */}
+                    <td className="py-2.5 px-3 whitespace-nowrap overflow-hidden border-b border-zr">
+                      <div className="flex flex-col items-start gap-1">
                         <span
-                          className={`inline-block text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md ${getStatusBadgeClass(
+                          className={`inline-block max-w-full truncate text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md ${getStatusBadgeClass(
                             task.status
                           )}`}
+                          title={isWarning ? "Downloaded, but conversion failed — file kept" : task.status}
                         >
                           {isWarning
-                            ? "Downloaded, but conversion failed — file kept"
+                            ? "Warning"
                             : task.status}
                         </span>
-                        {onChangePriority && (
-                          <select
-                            value={task.priority || "normal"}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => onChangePriority(task.id, e.target.value)}
-                            className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-zr bg-zr-surface text-zr-secondary cursor-pointer focus:outline-none focus:border-blue-500"
-                            title="Queue priority"
-                          >
-                            <option value="high">High</option>
-                            <option value="normal">Normal</option>
-                            <option value="low">Low</option>
-                          </select>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {onChangePriority && (
+                            <select
+                              value={task.priority || "normal"}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => onChangePriority(task.id, e.target.value)}
+                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-zr bg-zr-surface text-zr-secondary cursor-pointer focus:outline-none focus:border-blue-500"
+                              title="Queue priority"
+                            >
+                              <option value="high">High</option>
+                              <option value="normal">Normal</option>
+                              <option value="low">Low</option>
+                            </select>
+                          )}
+                          {isError && onViewErrorLog && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onViewErrorLog(task);
+                              }}
+                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400 hover:bg-red-500/25 border border-red-500/30 transition-colors"
+                              title={task.errorMessage || (task as any).error || "View failure log"}
+                            >
+                              Log
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </td>
 
                     {/* Speed: Transfer rate (visible >= 900px) */}
                     {showSpeed && (
-                      <td className="py-2.5 px-3 text-[12px] font-semibold tabular-nums text-amber-800 dark:text-amber-400 whitespace-nowrap border-b border-zr">
-                        {isDownloading || task.status === "downloading" || task.status === "seeding" ? (
+                      <td className="py-2.5 px-3 text-[12px] font-semibold tabular-nums text-amber-800 dark:text-amber-400 whitespace-nowrap overflow-hidden border-b border-zr">
+                        {isDownloading || task.status === "assembling" || task.status === "downloading" || task.status === "seeding" ? (
                           <div>
-                            <div>{getSpeedFormatted(task)}</div>
+                            <div className="truncate">{getSpeedFormatted(task)}</div>
                             {task.up_speed_formatted && task.up_speed_formatted !== "0 B/s" && (
                               <div className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
                                 ↑ {task.up_speed_formatted}

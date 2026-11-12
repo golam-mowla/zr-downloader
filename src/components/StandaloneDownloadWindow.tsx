@@ -14,6 +14,10 @@ import {
   HardDrive,
   CheckCircle2,
   X,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import {
   DownloadTask,
@@ -33,6 +37,8 @@ export interface StandaloneDownloadWindowProps {
 export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> = ({ taskId }) => {
   const [task, setTask] = useState<DownloadTask | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [showErrorLog, setShowErrorLog] = useState(false);
+  const [copiedLog, setCopiedLog] = useState(false);
 
   // Load theme preference
   useEffect(() => {
@@ -480,12 +486,46 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
           </div>
         ) : (
           isError &&
-          (task.errorMessage || (task as any).error_message) && (
-            <div className="p-2.5 rounded-lg border border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400 text-[12px] flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span className="break-all">{task.errorMessage || (task as any).error_message}</span>
-            </div>
-          )
+          (task.errorMessage || (task as any).error_message || (task.errorLog?.length || task.error_log?.length)) && (() => {
+            const errLines = task.errorLog || task.error_log || [];
+            return (
+              <div className="p-2.5 rounded-lg border border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400 text-[12px] space-y-2">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span className="break-words">{task.errorMessage || (task as any).error_message || "Download failed"}</span>
+                  </div>
+                  {errLines.length > 0 && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(errLines.join("\n"));
+                          setCopiedLog(true);
+                          setTimeout(() => setCopiedLog(false), 1800);
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-red-500/15 hover:bg-red-500/25 text-[10.5px] font-medium flex items-center gap-1"
+                      >
+                        {copiedLog ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        <span>{copiedLog ? "Copied" : "Copy"}</span>
+                      </button>
+                      <button
+                        onClick={() => setShowErrorLog((v) => !v)}
+                        className="px-1.5 py-0.5 rounded bg-red-500/15 hover:bg-red-500/25 text-[10.5px] font-medium flex items-center gap-0.5"
+                      >
+                        <span>Log</span>
+                        {showErrorLog ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {showErrorLog && errLines.length > 0 && (
+                  <pre className="p-2 rounded bg-black/20 dark:bg-black/40 text-[10.5px] font-mono overflow-x-auto max-h-28 overflow-y-auto whitespace-pre-wrap break-all">
+                    {errLines.join("\n")}
+                  </pre>
+                )}
+              </div>
+            );
+          })()
         )}
 
         {/* Progress Bar */}

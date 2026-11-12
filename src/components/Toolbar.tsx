@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Gauge,
   RotateCcw,
+  HelpCircle,
 } from "lucide-react";
 
 interface ToolbarProps {
@@ -22,6 +23,7 @@ interface ToolbarProps {
   onClearCompleted: () => void;
   onOpenMediaGrabber: () => void;
   onOpenSettings: () => void;
+  onOpenHelp?: () => void;
   onOpenDefaultFolder: () => void;
   speedLimitEnabled?: boolean;
   speedLimitLabel?: string;
@@ -43,6 +45,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onClearCompleted,
   onOpenMediaGrabber,
   onOpenSettings,
+  onOpenHelp,
   onOpenDefaultFolder,
   speedLimitEnabled = false,
   speedLimitLabel = "5 MB/s",
@@ -187,6 +190,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         >
           <Settings className="w-[18px] h-[18px]" />
         </button>
+
+        {/* Help & Failure Logs */}
+        {onOpenHelp && (
+          <button
+            onClick={onOpenHelp}
+            className="w-8 h-8 rounded-lg flex items-center justify-center border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary transition-colors"
+            title="Help, GitHub Repository & Failure Logs"
+            aria-label="Help & Logs"
+          >
+            <HelpCircle className="w-[18px] h-[18px] text-blue-600 dark:text-blue-400" />
+          </button>
+        )}
       </div>
     </div>
   );

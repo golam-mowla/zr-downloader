@@ -64,6 +64,8 @@ pub struct DownloadTask {
     pub chunks: Vec<ChunkProgress>,
     pub speed_history: Vec<u64>,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub error_log: Vec<String>,
     pub created_at: String,
 
     // --- Queue Priority & Ordering (C) ---
@@ -122,6 +124,7 @@ impl Default for DownloadTask {
             chunks: Vec::new(),
             speed_history: Vec::new(),
             error_message: None,
+            error_log: Vec::new(),
             created_at: String::new(),
             priority: default_priority(),
             queue_order: 0,
@@ -1435,6 +1438,11 @@ pub async fn execute_multithreaded_download(
                 write_dynamic_sparse_meta(&state_file_path, total_bytes, false, &final_segments)
                     .await;
                 let msg = "Server does not support resume".to_string();
+                let log_lines = vec![
+                    format!("URL: {}", url),
+                    format!("Target: {}", target_dest.display()),
+                    "Detail: Range resume check failed while continuing multi-connection segments.".to_string(),
+                ];
                 let mut tasks = state.tasks.write().await;
                 if let Some(t) = tasks.get_mut(&task_id) {
                     t.status = "error".to_string();
@@ -1443,9 +1451,11 @@ pub async fn execute_multithreaded_download(
                     t.speed_formatted = "0 B/s".to_string();
                     t.eta_formatted = "--".to_string();
                     t.error_message = Some(msg.clone());
+                    t.error_log = log_lines.clone();
+                    crate::append_failure_log(&app, &task_id, &t.filename, &t.url, &msg, &log_lines);
                     let _ = app.emit(
                         "download-error",
-                        serde_json::json!({ "id": task_id, "error": msg }),
+                        serde_json::json!({ "id": task_id, "error": msg, "errorLog": log_lines }),
                     );
                     let _ = app.emit("download-progress", t.clone());
                     let _ = app.emit("zr://progress", t.clone());
@@ -1504,6 +1514,11 @@ pub async fn execute_multithreaded_download(
         }
 
         let err_msg = chunk_errors.join("; ");
+        let log_lines: Vec<String> = chunk_errors
+            .iter()
+            .enumerate()
+            .map(|(i, e)| format!("Segment/Attempt #{}: {}", i + 1, e))
+            .collect();
         {
             let mut tasks = state.tasks.write().await;
             if let Some(t) = tasks.get_mut(&task_id) {
@@ -1512,9 +1527,11 @@ pub async fn execute_multithreaded_download(
                 t.speed_formatted = "0 B/s".to_string();
                 t.eta_formatted = "--".to_string();
                 t.error_message = Some(err_msg.clone());
+                t.error_log = log_lines.clone();
+                crate::append_failure_log(&app, &task_id, &t.filename, &t.url, &err_msg, &log_lines);
                 let _ = app.emit(
                     "download-error",
-                    serde_json::json!({ "id": task_id, "error": err_msg }),
+                    serde_json::json!({ "id": task_id, "error": err_msg, "errorLog": log_lines }),
                 );
                 let _ = app.emit("download-progress", t.clone());
                 let _ = app.emit("zr://progress", t.clone());
