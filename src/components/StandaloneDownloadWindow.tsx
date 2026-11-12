@@ -98,7 +98,10 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
         if (t && !stopped) {
           setTask((prev) => {
             if (!prev) return t;
-            const finished = prev.status === "completed" || prev.status === "error";
+            const finished =
+              prev.status === "completed" ||
+              prev.status === "completed_with_warning" ||
+              prev.status === "error";
             if (finished && t.status === prev.status) return prev;
             const same =
               prev.percent === t.percent &&
@@ -211,7 +214,10 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
     if (!task) return;
     const now = Date.now();
     const clampedPercent = Math.min(100, Math.max(0, task.percent || 0));
-    const isFinished = task.status === "completed" || clampedPercent >= 100;
+    const isFinished =
+      task.status === "completed" ||
+      task.status === "completed_with_warning" ||
+      (clampedPercent >= 100 && task.status !== "error");
 
     if (!isFinished && now - lastTitleUpdateRef.current < 500) {
       return;
@@ -220,7 +226,9 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
 
     const win = getCurrentWindow();
     const fn = task.filename || "Downloading...";
-    if (isFinished) {
+    if (task.status === "completed_with_warning") {
+      win.setTitle(`Downloaded with Warning - ${fn}`).catch(() => {});
+    } else if (isFinished) {
       win.setTitle(`100% Complete - ${fn}`).catch(() => {});
     } else if (task.status === "error") {
       win.setTitle(`Download Error - ${fn}`).catch(() => {});
@@ -247,10 +255,14 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
   const speedDisplay = getSpeedFormatted(task);
   const etaDisplay = getEtaFormatted(task);
 
-  const clampedPercent = Math.min(100, Math.max(0, task.percent || 0));
-  const isCompleted = task.status === "completed" || clampedPercent >= 100;
+  const rawPercent = Math.min(100, Math.max(0, task.percent || 0));
+  const isWarning = task.status === "completed_with_warning";
+  const isError = task.status === "error" && !isWarning;
+  const isCompleted =
+    task.status === "completed" || (rawPercent >= 100 && !isError && !isWarning);
+  const isFileReady = isCompleted || isWarning;
+  const clampedPercent = isError && rawPercent >= 100 ? 99 : rawPercent;
   const isPaused = task.status === "paused";
-  const isError = task.status === "error";
   const isAssembling = task.status === "assembling";
 
   const handlePause = async () => {
@@ -336,9 +348,21 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
       {/* Native Drag Header Bar */}
       <div data-tauri-drag-region className="flex items-center justify-between pb-2 mb-2 border-b border-zr/40 cursor-move select-none">
         <div data-tauri-drag-region className="flex items-center gap-2">
-          <Zap className="w-4 h-4 text-emerald-500 animate-pulse" />
+          <Zap
+            className={`w-4 h-4 ${
+              isWarning
+                ? "text-amber-500"
+                : isError
+                ? "text-red-500"
+                : "text-emerald-500 animate-pulse"
+            }`}
+          />
           <span data-tauri-drag-region className="font-semibold text-xs text-zr-primary truncate max-w-[340px]">
-            {clampedPercent.toFixed(1)}% of {task.filename || "Downloading..."}
+            {isWarning
+              ? `Downloaded with Warning - ${task.filename || "File kept"}`
+              : isError
+              ? `Download Error - ${task.filename || "Failed"}`
+              : `${clampedPercent.toFixed(1)}% of ${task.filename || "Downloading..."}`}
           </span>
         </div>
         <div data-tauri-drag-region className="text-[11px] text-zr-secondary font-mono">
@@ -375,6 +399,8 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
                 className={`font-semibold uppercase tracking-wider text-[11px] px-2 py-0.5 rounded ${
                   isCompleted
                     ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
+                    : isWarning
+                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30"
                     : isError
                     ? "bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/30"
                     : isPaused
@@ -384,7 +410,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
                     : "bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30"
                 }`}
               >
-                {task.status}
+                {isWarning ? "Downloaded, but conversion failed — file kept" : task.status}
               </span>
             </div>
 
@@ -415,6 +441,11 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
               <span className="font-semibold text-zr-primary flex items-center gap-1">
                 {isPaused ? (
                   <span className="text-amber-500">Paused</span>
+                ) : isWarning ? (
+                  <span className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    Downloaded, but conversion failed — file kept
+                  </span>
                 ) : isCompleted ? (
                   <span className="text-emerald-500 font-bold flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5" /> Finished
@@ -433,18 +464,28 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
               <span className="text-zr-secondary">Time left:</span>
               <span className="font-semibold text-zr-primary flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5 text-zr-secondary" />
-                <span>{isCompleted ? "00:00:00" : etaDisplay}</span>
+                <span>{isFileReady ? "00:00:00" : etaDisplay}</span>
               </span>
             </div>
           </div>
         </div>
 
-        {/* Error Message */}
-        {isError && (task.errorMessage || (task as any).error_message) && (
-          <div className="p-2.5 rounded-lg border border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400 text-[12px] flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span className="break-all">{task.errorMessage || (task as any).error_message}</span>
+        {/* Warning or Error Message */}
+        {isWarning ? (
+          <div className="p-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[12px] flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+            <span className="break-words font-medium">
+              {task.errorMessage || (task as any).error_message || "Downloaded, but conversion failed — file kept"}
+            </span>
           </div>
+        ) : (
+          isError &&
+          (task.errorMessage || (task as any).error_message) && (
+            <div className="p-2.5 rounded-lg border border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400 text-[12px] flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span className="break-all">{task.errorMessage || (task as any).error_message}</span>
+            </div>
+          )
         )}
 
         {/* Progress Bar */}
@@ -460,6 +501,8 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
               className={`h-full rounded-full transition-all duration-200 ${
                 isCompleted
                   ? "bg-emerald-600 dark:bg-emerald-500"
+                  : isWarning
+                  ? "bg-amber-600 dark:bg-amber-500"
                   : isError
                   ? "bg-red-600 dark:bg-red-500"
                   : isPaused
@@ -472,7 +515,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
         </div>
 
         {/* Chunk Connection Streams */}
-        {!isCompleted && !isError && (
+        {!isFileReady && !isError && (
           <div className="space-y-1 pt-1">
             <div className="flex justify-between text-[11px] text-zr-secondary font-medium">
               <span>Segmented Connection:</span>
@@ -499,7 +542,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
       {/* Bottom Controls */}
       <div className="pt-3 border-t border-zr flex items-center justify-between gap-2 mt-2">
         <div className="flex items-center gap-2">
-          {!isCompleted && !isError && (
+          {!isFileReady && !isError && (
             isPaused ? (
               <button
                 onClick={handleResume}
@@ -519,7 +562,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
             )
           )}
 
-          {!isCompleted && (
+          {!isFileReady && (
             <button
               onClick={handleCancel}
               className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-red-600 hover:text-white text-zr-secondary font-medium text-[12px] transition-colors"
@@ -528,7 +571,7 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
             </button>
           )}
 
-          {isCompleted && (
+          {isFileReady && (
             <>
               <button
                 onClick={handleOpenFile}

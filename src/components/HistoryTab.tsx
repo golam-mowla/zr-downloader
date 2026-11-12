@@ -43,7 +43,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
           </p>
         </div>
 
-        {tasks.some((t) => t.status === "completed") && (
+        {tasks.some((t) => t.status === "completed" || t.status === "completed_with_warning") && (
           <button
             type="button"
             onClick={onClearCompleted}
@@ -72,7 +72,9 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
               task.status === "interrupted" ||
               task.status === "error";
             const isDownloading = task.status === "downloading";
+            const isWarning = task.status === "completed_with_warning";
             const isCompleted = task.status === "completed";
+            const isFileReady = isCompleted || isWarning;
 
             return (
               <div key={task.id} className="neon-card p-4 space-y-3">
@@ -126,6 +128,12 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                         Completed
                       </span>
                     )}
+                    {isWarning && (
+                      <span className="px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-[11px] font-extrabold flex items-center gap-1">
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Downloaded, but conversion failed — file kept
+                      </span>
+                    )}
                     {isPaused && (
                       <span className="px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 text-[11px] font-extrabold flex items-center gap-1">
                         <AlertTriangle className="w-3.5 h-3.5" />
@@ -147,7 +155,9 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 dark:text-slate-300">
                     <span className="truncate max-w-sm">
-                      {task.progressText || (task.percent >= 100 ? "Completed ✔" : `${task.percent.toFixed(1)}%`)}
+                      {isWarning
+                        ? "Downloaded, but conversion failed — file kept"
+                        : task.progressText || (task.percent >= 100 ? "Completed ✔" : `${task.percent.toFixed(1)}%`)}
                     </span>
                     <span className="text-indigo-600 dark:text-cyan-400 font-black shrink-0">
                       {task.speed ? `${task.speed} • ` : ""}
@@ -162,7 +172,7 @@ export const HistoryTab: React.FC<HistoryTabProps> = ({
                         width: `${Math.min(100, Math.max(0, task.percent))}%`,
                         background: isCompleted
                           ? "#10b981"
-                          : isPaused
+                          : isWarning || isPaused
                           ? "#f59e0b"
                           : "linear-gradient(90deg, #06b6d4, #6366f1, #a855f7)",
                       }}

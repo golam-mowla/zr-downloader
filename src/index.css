@@ -205,6 +205,11 @@ textarea:focus {
   background-color: var(--status-success-bg);
 }
 
+.badge-status-warning {
+  color: var(--status-warning-text);
+  background-color: var(--status-warning-bg);
+}
+
 .badge-status-paused {
   color: var(--status-warning-text);
   background-color: var(--status-warning-bg);
@@ -239,6 +244,10 @@ textarea:focus {
 
 .progress-fill-done {
   background: #1fa971;
+}
+
+.progress-fill-warning {
+  background: #d97706;
 }
 
 .progress-fill-paused {

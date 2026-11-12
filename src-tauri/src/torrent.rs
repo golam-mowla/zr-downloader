@@ -375,7 +375,10 @@ pub async fn resume_torrent(
 
 #[tauri::command]
 pub async fn remove_torrent(
+    app: AppHandle,
     state: State<'_, TorrentState>,
+    engine_state: State<'_, crate::downloader::EngineState>,
+    download_state: State<'_, crate::media::DownloadState>,
     id_or_hash: String,
     delete_files: bool,
 ) -> Result<(), String> {
@@ -393,6 +396,12 @@ pub async fn remove_torrent(
             .map(|_| ())
             .map_err(|e| format!("Failed to forget torrent: {}", e))?;
     }
+    {
+        let mut tasks = engine_state.tasks.write().await;
+        tasks.remove(&id_or_hash);
+    }
+    crate::media::forget_task(&download_state, &id_or_hash);
+    crate::save_all_tasks(&app).await;
     Ok(())
 }
 
