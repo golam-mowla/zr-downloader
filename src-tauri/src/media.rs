@@ -1971,7 +1971,6 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
     let cancelled_tasks = state.cancelled_tasks.clone();
     cancelled_tasks.lock().unwrap().insert(task_id.clone(), false);
 
-    let resolved_folder = options.save_folder.clone();
     let tid = task_id.clone();
     let media_tasks = state.tasks.clone();
     tauri::async_runtime::spawn_blocking(move || {

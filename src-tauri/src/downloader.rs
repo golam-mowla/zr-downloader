@@ -1158,6 +1158,7 @@ pub async fn execute_multithreaded_download(
     let (ramp_tx, mut ramp_rx) = mpsc::unbounded_channel::<DynamicSegment>();
     let mut join_set: JoinSet<Result<(), String>> = JoinSet::new();
 
+    let multi_or_resumed = initial_segments.len() > 1 || is_resuming;
     let spawn_params = |seg: DynamicSegment| ChunkWorkerParams {
         seg,
         current_url: current_url.clone(),
@@ -1168,7 +1169,7 @@ pub async fn execute_multithreaded_download(
         temp_dir: temp_dir.clone(),
         dest_file_path: target_dest.clone(),
         low_disk_space,
-        multi_or_resumed: initial_segments.len() > 1 || is_resuming,
+        multi_or_resumed,
         shared_downloaded: shared_downloaded.clone(),
         cancel_rx: cancel_tx.subscribe(),
         app: app.clone(),
