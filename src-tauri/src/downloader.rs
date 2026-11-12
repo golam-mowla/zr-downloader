@@ -1642,8 +1642,7 @@ pub async fn execute_multithreaded_download(
             &effective_action,
             &effective_program,
             &path_post,
-        )
-        .await;
+        );
     });
 
     tauri::async_runtime::spawn(async move {

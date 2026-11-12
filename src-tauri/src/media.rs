@@ -3429,8 +3429,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                     &effective_action,
                     &effective_program,
                     &fpath_post,
-                )
-                .await;
+                );
             });
         }
 

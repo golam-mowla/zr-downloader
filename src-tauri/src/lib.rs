@@ -1624,7 +1624,8 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::env::temp_dir().join("zr-downloader"));
-            let settings_state = SettingsState::load_or_default(app_data_dir.clone());
+            let settings_state =
+                SettingsState::load_or_default(Some(app_data_dir.join("settings.json")));
             let initial_settings = settings_state.get_blocking();
             let scheduler_state = SchedulerState::load_or_default(app_data_dir);
 

@@ -4,10 +4,10 @@ use sha2::Sha256;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -212,8 +212,15 @@ impl SettingsState {
         }
     }
 
+    pub fn get_blocking(&self) -> AppSettings {
+        self.inner
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
     pub async fn get(&self) -> AppSettings {
-        self.inner.read().await.clone()
+        self.get_blocking()
     }
 
     pub async fn save(&self, new_settings: AppSettings) -> Result<AppSettings, String> {
@@ -230,7 +237,9 @@ impl SettingsState {
                 let _ = std::fs::remove_file(&tmp);
             }
         }
-        *self.inner.write().await = clean.clone();
+        if let Ok(mut guard) = self.inner.write() {
+            *guard = clean.clone();
+        }
         Ok(clean)
     }
 }
