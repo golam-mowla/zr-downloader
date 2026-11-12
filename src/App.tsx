@@ -17,6 +17,7 @@ import { DownloadTableView } from "./components/DownloadTableView";
 import { DownloadItemCard } from "./components/DownloadItemCard";
 import { AddDownloadModal, DirectDownloadExtras } from "./components/AddDownloadModal";
 import { PreferencesModal } from "./components/PreferencesModal";
+import { HelpModal } from "./components/HelpModal";
 import { DownloadStatusDialog } from "./components/DownloadStatusDialog";
 import { TorrentDetailsDrawer } from "./components/TorrentDetailsDrawer";
 import { ContextMenu } from "./components/ContextMenu";
@@ -75,6 +76,9 @@ export const App: React.FC = () => {
   const [modalInitialFilename, setModalInitialFilename] = useState("");
   const [modalBatchText, setModalBatchText] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [helpInitialTab, setHelpInitialTab] = useState<"help" | "logs">("help");
+  const [helpFocusedTaskId, setHelpFocusedTaskId] = useState<string | null>(null);
   const [defaultDir, setDefaultDir] = useState("D:\\Downloads");
   const [bridgeOnline, setBridgeOnline] = useState(true);
   const [speedLimitEnabled, setSpeedLimitEnabled] = useState(false);
@@ -216,6 +220,8 @@ export const App: React.FC = () => {
           chunk_count: task.chunk_count || 1,
           is_resumable: getIsResumable(task),
           low_disk_space: Boolean(task.low_disk_space || task.lowDiskSpace),
+          errorMessage: task.errorMessage || task.error || null,
+          errorLog: task.errorLog || task.error_log || [],
         },
         title: `${task.percent?.toFixed(1) || 0}% of ${task.filename || 'Downloading...'}`,
       });
@@ -357,6 +363,7 @@ export const App: React.FC = () => {
               etaFormatted: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
               eta: updated.eta_formatted || updated.etaFormatted || updated.eta || "--",
               errorMessage: updated.error_message || updated.errorMessage || current.errorMessage,
+              errorLog: updated.errorLog || updated.error_log || current.errorLog || current.error_log,
               speedHistory: newHistory,
             };
             changed = true;
@@ -438,6 +445,7 @@ export const App: React.FC = () => {
       const payload = event.payload || {};
       const id = payload.id;
       const error = payload.error || "Download error";
+      const errorLog = payload.errorLog || payload.error_log;
       if (id) {
         setTasks((prev) =>
           prev.map((t) =>
@@ -448,6 +456,7 @@ export const App: React.FC = () => {
                   percent: t.percent >= 100 ? 99 : t.percent,
                   error,
                   errorMessage: error,
+                  errorLog: errorLog || t.errorLog || t.error_log,
                 }
               : t
           )
@@ -1563,7 +1572,7 @@ export const App: React.FC = () => {
   // Keyboard shortcuts. The listener is attached once; it reads fresh state/handlers via a ref.
   const shortcutCtxRef = useRef<any>(null);
   shortcutCtxRef.current = {
-    blocked: isAddModalOpen || isSettingsOpen || Boolean(deleteConfirmTask),
+    blocked: isAddModalOpen || isSettingsOpen || isHelpOpen || Boolean(deleteConfirmTask),
     task: tasks.find((t) => t.id === selectedTaskId) || null,
     onDelete: handleDelete,
     onPause: handlePause,
@@ -1721,6 +1730,11 @@ export const App: React.FC = () => {
         statusCounts={statusCounts}
         bridgeOnline={bridgeOnline}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenHelp={(tab = "help") => {
+          setHelpFocusedTaskId(null);
+          setHelpInitialTab(tab);
+          setIsHelpOpen(true);
+        }}
         onOpenMediaModal={() => {
           setModalInitialUrl("");
           setModalInitialFilename("");
@@ -1751,6 +1765,11 @@ export const App: React.FC = () => {
             setIsAddModalOpen(true);
           }}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenHelp={() => {
+            setHelpFocusedTaskId(null);
+            setHelpInitialTab("help");
+            setIsHelpOpen(true);
+          }}
           onOpenDefaultFolder={handleOpenDefaultFolder}
           onRetryFailed={handleRetryFailed}
           failedCount={statusCounts.error}
@@ -1878,6 +1897,11 @@ export const App: React.FC = () => {
               onOpenFolder={handleOpenFolder}
               onChangePriority={handleChangePriority}
               onReorderTasks={handleReorderTasks}
+              onViewErrorLog={(task) => {
+                setHelpFocusedTaskId(task.id);
+                setHelpInitialTab("logs");
+                setIsHelpOpen(true);
+              }}
               theme={theme}
               windowWidth={windowWidth}
             />
@@ -1966,6 +1990,18 @@ export const App: React.FC = () => {
           invoke<DownloadTask[]>("get_all_downloads").then(setTasks).catch(() => {})
         }
         theme={theme}
+      />
+
+      {/* Help, GitHub Repository & Failure Logs Modal */}
+      <HelpModal
+        isOpen={isHelpOpen}
+        initialTab={helpInitialTab}
+        focusedTaskId={helpFocusedTaskId}
+        tasks={tasks}
+        onClose={() => {
+          setIsHelpOpen(false);
+          setHelpFocusedTaskId(null);
+        }}
       />
 
       {/* Delete Task Confirmation Dialog */}

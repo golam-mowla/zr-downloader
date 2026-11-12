@@ -57,6 +57,8 @@ export interface DownloadTask {
   lowDiskSpace?: boolean;
   error?: string | null;
   errorMessage?: string | null;
+  errorLog?: string[];
+  error_log?: string[];
   created_at?: string | number;
   createdAt?: string | number;
   completed_at?: number | null;

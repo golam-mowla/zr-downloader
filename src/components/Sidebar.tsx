@@ -13,6 +13,7 @@ import {
   Clock,
   PauseCircle,
   AlertCircle,
+  HelpCircle,
 } from "lucide-react";
 
 export type CategoryType = "all" | "video" | "audio" | "docs" | "compressed" | "programs" | "torrents";
@@ -27,6 +28,7 @@ interface SidebarProps {
   statusCounts: Record<StatusFilterType, number>;
   bridgeOnline: boolean;
   onOpenSettings: () => void;
+  onOpenHelp?: (tab?: "help" | "logs") => void;
   onOpenMediaModal: () => void;
   theme?: "dark" | "light";
 }
@@ -40,6 +42,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   statusCounts,
   bridgeOnline,
   onOpenSettings,
+  onOpenHelp,
   onOpenMediaModal,
   theme = "dark",
 }) => {
@@ -83,7 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             </div>
             <span className="text-[11.5px] font-medium text-zr-secondary">
-              Download Accelerator
+              by Golam Mowla
             </span>
           </div>
         </div>
@@ -209,6 +212,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <Settings className="w-[18px] h-[18px] text-zr-secondary" />
           <span>Options & Settings</span>
         </button>
+
+        {/* Help, GitHub Repo & Failure Logs */}
+        {onOpenHelp && (
+          <button
+            onClick={() => onOpenHelp("help")}
+            className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors text-[13px] font-medium text-zr-secondary hover:text-zr-primary hover:bg-zr-tableHead"
+          >
+            <HelpCircle className="w-[18px] h-[18px] text-blue-500" />
+            <span>Help &amp; Logs</span>
+          </button>
+        )}
       </div>
     </aside>
   );

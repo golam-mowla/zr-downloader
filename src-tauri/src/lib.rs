@@ -435,19 +435,25 @@ async fn resume_http_download(
             };
             if !probe_supports_range {
                 let msg = "Server does not support resume".to_string();
+                let log_lines = vec![
+                    format!("URL: {}", task.url),
+                    "Detail: HTTP HEAD/Range probe on resume indicated the server no longer accepts partial byte ranges.".to_string(),
+                ];
                 task.is_resumable = false;
                 task.status = "error".to_string();
                 task.speed_bps = 0;
                 task.speed_formatted = "0 B/s".to_string();
                 task.eta_formatted = "--".to_string();
                 task.error_message = Some(msg.clone());
+                task.error_log = log_lines.clone();
+                append_failure_log(&app, &task_id, &task.filename, &task.url, &msg, &log_lines);
                 {
                     let mut tasks = state.tasks.write().await;
                     tasks.insert(task_id.clone(), task.clone());
                 }
                 let _ = app.emit(
                     "download-error",
-                    serde_json::json!({ "id": task_id, "error": msg }),
+                    serde_json::json!({ "id": task_id, "error": msg, "errorLog": log_lines }),
                 );
                 let _ = app.emit("download-progress", task);
                 save_all_tasks(&app).await;
@@ -1366,6 +1372,72 @@ fn get_pending_url(state: State<'_, AppUrlState>) -> Option<serde_json::Value> {
     lock.take()
 }
 
+pub fn append_failure_log(
+    app: &AppHandle,
+    task_id: &str,
+    filename: &str,
+    url: &str,
+    summary: &str,
+    details: &[String],
+) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("zr_error_logs.log");
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > 262_144 {
+                if let Ok(existing) = std::fs::read_to_string(&path) {
+                    let start = existing.len() / 2;
+                    let slice = existing[start..]
+                        .find('\n')
+                        .map(|i| &existing[start + i + 1..])
+                        .unwrap_or("");
+                    let _ = std::fs::write(&path, slice);
+                }
+            }
+        }
+        let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let mut entry = format!(
+            "[{}] [{}] {} ({})\nReason: {}\n",
+            ts, task_id, filename, url, summary
+        );
+        for line in details.iter().take(30) {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                entry.push_str(&format!("  | {}\n", trimmed));
+            }
+        }
+        entry.push_str("---\n");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let _ = f.write_all(entry.as_bytes());
+        }
+    }
+}
+
+#[command]
+async fn get_error_logs(app: AppHandle) -> Result<String, String> {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let path = dir.join("zr_error_logs.log");
+        if path.exists() {
+            return tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| format!("Failed to read error log: {}", e));
+        }
+    }
+    Ok(String::new())
+}
+
+#[command]
+async fn clear_error_logs(app: AppHandle) -> Result<(), String> {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let path = dir.join("zr_error_logs.log");
+        if path.exists() {
+            let _ = tokio::fs::remove_file(&path).await;
+        }
+    }
+    Ok(())
+}
+
 #[command]
 async fn ytdlp_get_info(app: AppHandle, url: String) -> Result<media::MediaInfo, String> {
     media::fetch_media_info_with_app(Some(app), url, None, None, None, None).await
@@ -1895,6 +1967,8 @@ pub fn run() {
             import_download_list,
             read_text_file_content,
             read_clipboard_link,
+            get_error_logs,
+            clear_error_logs,
             // HTTP Downloader Commands
             probe_http_url,
             start_http_download,

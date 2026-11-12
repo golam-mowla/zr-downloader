@@ -10,6 +10,10 @@ import {
   GripHorizontal,
   ShieldCheck,
   ShieldAlert,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -54,6 +58,8 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
   const [pos, setPos] = useState({ x: initialOffset, y: initialOffset });
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef({ mouseX: 0, mouseY: 0, posX: 0, posY: 0 });
+  const [showErrorLog, setShowErrorLog] = useState(false);
+  const [copiedLog, setCopiedLog] = useState(false);
 
   if (!isOpen) return null;
 
@@ -216,14 +222,48 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
               </div>
             ) : (
               isError &&
-              (task.errorMessage || (task as any).error) && (
-                <div className="col-span-2 p-2.5 rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50">
-                  <p className="text-[12px] font-medium text-red-700 dark:text-red-400 break-words leading-relaxed">
-                    <span className="font-bold">Error: </span>
-                    {task.errorMessage || (task as any).error}
-                  </p>
-                </div>
-              )
+              (task.errorMessage || (task as any).error || (task.errorLog?.length || task.error_log?.length)) && (() => {
+                const errLines = task.errorLog || task.error_log || [];
+                return (
+                  <div className="col-span-2 p-2.5 rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-[12px] font-medium text-red-700 dark:text-red-400 break-words leading-relaxed">
+                        <span className="font-bold">Error: </span>
+                        {task.errorMessage || (task as any).error || "Download failed"}
+                      </p>
+                      {errLines.length > 0 && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(errLines.join("\n"));
+                              setCopiedLog(true);
+                              setTimeout(() => setCopiedLog(false), 1800);
+                            }}
+                            className="px-2 py-0.5 rounded bg-red-500/15 hover:bg-red-500/25 text-[11px] font-semibold text-red-700 dark:text-red-300 flex items-center gap-1"
+                          >
+                            {copiedLog ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedLog ? "Copied" : "Copy"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowErrorLog((v) => !v)}
+                            className="px-2 py-0.5 rounded bg-red-500/15 hover:bg-red-500/25 text-[11px] font-semibold text-red-700 dark:text-red-300 flex items-center gap-0.5"
+                          >
+                            <span>Log ({errLines.length})</span>
+                            {showErrorLog ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {showErrorLog && errLines.length > 0 && (
+                      <pre className="p-2 rounded bg-black/10 dark:bg-black/40 text-[11px] font-mono text-red-900 dark:text-red-200 overflow-x-auto max-h-36 overflow-y-auto whitespace-pre-wrap break-all">
+                        {errLines.join("\n")}
+                      </pre>
+                    )}
+                  </div>
+                );
+              })()
             )}
 
             {/* Status */}
