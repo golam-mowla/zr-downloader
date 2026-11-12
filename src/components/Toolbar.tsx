@@ -9,6 +9,7 @@ import {
   Settings,
   Sparkles,
   FolderOpen,
+  Gauge,
 } from "lucide-react";
 
 interface ToolbarProps {
@@ -21,6 +22,9 @@ interface ToolbarProps {
   onOpenMediaGrabber: () => void;
   onOpenSettings: () => void;
   onOpenDefaultFolder: () => void;
+  speedLimitEnabled?: boolean;
+  speedLimitLabel?: string;
+  onToggleSpeedLimit?: () => void;
   hasSelected: boolean;
   hasActive: boolean;
   hasCompleted: boolean;
@@ -37,6 +41,9 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onOpenMediaGrabber,
   onOpenSettings,
   onOpenDefaultFolder,
+  speedLimitEnabled = false,
+  speedLimitLabel = "5 MB/s",
+  onToggleSpeedLimit,
   hasSelected,
   hasActive,
   hasCompleted,
@@ -113,6 +120,27 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
       {/* Right Controls */}
       <div className="flex items-center space-x-2 shrink-0">
+        {onToggleSpeedLimit && (
+          <button
+            onClick={onToggleSpeedLimit}
+            className={`flex items-center space-x-1.5 min-h-[32px] px-2.5 py-1.5 rounded-lg text-[12px] font-semibold border transition-colors ${
+              speedLimitEnabled
+                ? "border-amber-500/60 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                : "border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-zr-secondary hover:text-zr-primary"
+            }`}
+            title={
+              speedLimitEnabled
+                ? `Speed limit active (${speedLimitLabel}) — click to turn off`
+                : `Turn on global speed limit (${speedLimitLabel})`
+            }
+          >
+            <Gauge className="w-4 h-4 shrink-0" />
+            <span className="hidden lg:inline">
+              {speedLimitEnabled ? `Limit: ${speedLimitLabel}` : "Speed Limit"}
+            </span>
+          </button>
+        )}
+
         {/* Media Grabber */}
         <button
           onClick={onOpenMediaGrabber}

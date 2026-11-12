@@ -8,7 +8,10 @@ import {
   FileCheck,
   Zap,
   GripHorizontal,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   DownloadTask,
   formatBytes,
@@ -329,6 +332,95 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
                 style={{ width: `${clampedPercent}%` }}
               />
             </div>
+          </div>
+
+          {/* Per-Task Connection & Speed Override + Checksum / Priority */}
+          <div className="p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[12px]">
+              <div className="flex items-center space-x-2">
+                <span className="text-zr-secondary font-medium">Connections:</span>
+                <select
+                  value={(task.autoConnections || task.auto_connections) ? "auto" : String(chunkCount)}
+                  title="Connections above 16: some servers may block"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "auto") {
+                      invoke("update_task_connections", {
+                        taskId: task.id,
+                        connections: 8,
+                        autoConnections: true,
+                      }).catch(() => {});
+                    } else {
+                      invoke("update_task_connections", {
+                        taskId: task.id,
+                        connections: parseInt(val, 10) || 8,
+                        autoConnections: false,
+                      }).catch(() => {});
+                    }
+                  }}
+                  className="px-2 py-1 rounded border border-zr bg-zr-surface text-zr-primary font-semibold"
+                >
+                  {[4, 8, 16, 24, 32].map((n) => (
+                    <option key={n} value={String(n)}>
+                      {n}{n > 16 ? " (may block)" : ""}
+                    </option>
+                  ))}
+                  <option value="auto">Auto (8→32)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center space-x-1.5">
+                <span className="text-zr-secondary font-medium">Task Limit (KB/s):</span>
+                <input
+                  type="number"
+                  min={0}
+                  defaultValue={task.speedLimitKb ?? task.speed_limit_kb ?? 0}
+                  onBlur={(e) => {
+                    const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                    invoke("set_task_speed_limit", {
+                      taskId: task.id,
+                      speedLimitKb: val,
+                    }).catch(() => {});
+                  }}
+                  className="w-20 px-2 py-1 rounded border border-zr bg-zr-surface text-zr-primary font-mono text-[12px]"
+                  title="0 = inherit global limit"
+                />
+              </div>
+
+              <div className="flex items-center space-x-1.5">
+                <span className="text-zr-secondary font-medium">Priority:</span>
+                <select
+                  value={task.priority || "normal"}
+                  onChange={(e) => {
+                    invoke("set_task_priority", {
+                      taskId: task.id,
+                      priority: e.target.value,
+                    }).catch(() => {});
+                  }}
+                  className="px-2 py-1 rounded border border-zr bg-zr-surface text-zr-primary font-semibold"
+                >
+                  <option value="high">High</option>
+                  <option value="normal">Normal</option>
+                  <option value="low">Low</option>
+                </select>
+              </div>
+            </div>
+
+            {(task.checksumStatus || task.checksum_status) && (
+              <div className="flex items-center space-x-2 text-[12px] pt-1 border-t border-zr">
+                {(task.checksumStatus || task.checksum_status) === "verified" ? (
+                  <span className="inline-flex items-center space-x-1 text-emerald-600 dark:text-emerald-400 font-semibold">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Checksum Verified</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center space-x-1 text-red-600 dark:text-red-400 font-semibold">
+                    <ShieldAlert className="w-4 h-4" />
+                    <span>Checksum Mismatch ({task.checksumActual || task.checksum_actual})</span>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Segmented Thread Visualizer */}

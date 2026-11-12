@@ -72,6 +72,90 @@ export interface DownloadTask {
   totalPeers?: number;
   up_speed?: string;
   up_speed_formatted?: string;
+
+  // Queue priority & ordering
+  priority?: "high" | "normal" | "low" | string;
+  queueOrder?: number;
+  queue_order?: number;
+
+  // Connections, speed limit, checksum, post-download & auth
+  autoConnections?: boolean;
+  auto_connections?: boolean;
+  speedLimitKb?: number;
+  speed_limit_kb?: number;
+  expectedChecksum?: string;
+  expected_checksum?: string;
+  checksumStatus?: "verified" | "mismatch" | "error" | "" | string;
+  checksum_status?: string;
+  checksumActual?: string;
+  checksum_actual?: string;
+  originPageUrl?: string;
+  origin_page_url?: string;
+  postDownloadAction?: string;
+  post_download_action?: string;
+  postDownloadProgram?: string;
+  post_download_program?: string;
+  scanStatus?: string;
+  scan_status?: string;
+  authUsername?: string;
+  auth_username?: string;
+  authPassword?: string;
+  auth_password?: string;
+}
+
+export interface SiteCredential {
+  id: string;
+  domain: string;
+  username: string;
+  password: string;
+}
+
+export interface AppSettings {
+  defaultDownloadDir: string;
+  maxActiveDownloads: number;
+  connectionMode: "fixed" | "auto" | string;
+  defaultConnections: number;
+  lowDiskSpace: boolean;
+
+  speedLimitEnabled: boolean;
+  speedLimitValue: number;
+  speedLimitUnit: "KB" | "MB" | string;
+
+  autoCategorize: boolean;
+  autoCategoryRoot: string;
+  postDownloadAction: "none" | "open_file" | "open_folder" | "run_program" | "defender_scan" | string;
+  postDownloadProgram: string;
+
+  proxyEnabled: boolean;
+  proxyType: "http" | "https" | "socks5" | string;
+  proxyHost: string;
+  proxyPort: number;
+  proxyUsername: string;
+  proxyPassword: string;
+  cookiesBrowser: string;
+  cookiesFile: string;
+  siteCredentials: SiteCredential[];
+
+  clipboardMonitor: boolean;
+  startWithWindows: boolean;
+  minimizeToTray: boolean;
+  closeToTray: boolean;
+}
+
+export interface SchedulerConfig {
+  enabled: boolean;
+  startTime: string;
+  stopTime: string;
+  days: string[];
+  whenFinished: "none" | "close_app" | "sleep" | "shutdown" | string;
+}
+
+export interface DuplicateCheckResult {
+  isDuplicate: boolean;
+  reason: string;
+  existingTaskId?: string | null;
+  existingPath?: string | null;
+  suggestedFilename: string;
 }
 
 export const getDownloadedBytes = (t: DownloadTask | any): number => {

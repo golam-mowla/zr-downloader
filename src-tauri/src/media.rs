@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{command, AppHandle, Emitter, State};
+use tauri::{command, AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncWriteExt;
 
 static ENGINE_LOCK: Mutex<()> = Mutex::new(());
@@ -208,6 +208,20 @@ pub struct DownloadOptions {
     pub duration: Option<f64>,
     #[serde(default)]
     pub is_resume: bool,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub queue_order: i64,
+    #[serde(default)]
+    pub expected_checksum: String,
+    #[serde(default)]
+    pub post_download_action: String,
+    #[serde(default)]
+    pub post_download_program: String,
+    #[serde(default)]
+    pub auth_username: String,
+    #[serde(default)]
+    pub auth_password: String,
 }
 
 impl Default for DownloadOptions {
@@ -231,7 +245,7 @@ impl Default for DownloadOptions {
             end_time: "00:00:10".to_string(),
             precise_cut: false,
             max_active_downloads: 3,
-            overwrite_files: true,
+            overwrite_files: false,
             include_media_id: false,
             include_auto_subtitles: false,
             include_super_res: false,
@@ -263,6 +277,13 @@ impl Default for DownloadOptions {
             referer: String::new(),
             duration: None,
             is_resume: false,
+            priority: "normal".to_string(),
+            queue_order: 0,
+            expected_checksum: String::new(),
+            post_download_action: String::new(),
+            post_download_program: String::new(),
+            auth_username: String::new(),
+            auth_password: String::new(),
         }
     }
 }
@@ -1700,17 +1721,111 @@ fn parse_ytdlp_output_path(line: &str) -> Option<String> {
     None
 }
 
+pub fn resolve_fresh_direct_url_sync(
+    app_settings: &crate::settings::AppSettings,
+    page_url: &str,
+) -> Result<String, String> {
+    let page = page_url.trim();
+    if page.is_empty() {
+        return Err("Empty origin page URL".to_string());
+    }
+    ensure_ytdlp_available();
+    let mut cmd = make_command("yt-dlp");
+    cmd.args(["--no-playlist", "--no-check-certificates", "-g", page]);
+    if let Some(proxy_url) = app_settings.effective_proxy_url() {
+        cmd.args(["--proxy", &proxy_url]);
+    }
+    if app_settings.cookies_browser != "None" && !app_settings.cookies_browser.trim().is_empty() {
+        cmd.args([
+            "--cookies-from-browser",
+            &app_settings.cookies_browser.to_lowercase(),
+        ]);
+    } else if !app_settings.cookies_file.trim().is_empty()
+        && PathBuf::from(&app_settings.cookies_file).exists()
+    {
+        cmd.args(["--cookies", app_settings.cookies_file.trim()]);
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("Failed to invoke yt-dlp: {}", e))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            "yt-dlp failed to refresh expired URL".to_string()
+        } else {
+            err
+        });
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout
+        .lines()
+        .map(|l| l.trim())
+        .find(|l| l.starts_with("http://") || l.starts_with("https://"))
+        .map(|s| s.to_string())
+        .ok_or_else(|| "yt-dlp returned no fresh URL".to_string())
+}
+
+/// Re-extract a fresh direct media stream URL from the original webpage via yt-dlp
+/// when a CDN link returns HTTP 403/410 or expires mid-download.
+pub async fn resolve_fresh_direct_url(app: &AppHandle, page_url: &str) -> Result<String, String> {
+    let page = page_url.trim().to_string();
+    let app_settings = app
+        .try_state::<crate::settings::SettingsState>()
+        .map(|s| s.get_blocking())
+        .unwrap_or_default();
+
+    tokio::task::spawn_blocking(move || resolve_fresh_direct_url_sync(&app_settings, &page))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn is_transient_ytdlp_error(diags: &[String]) -> bool {
+    diags.iter().any(|l| {
+        let low = l.to_lowercase();
+        low.contains("timed out")
+            || low.contains("timeout")
+            || low.contains("connection reset")
+            || low.contains("connection aborted")
+            || low.contains("temporary failure")
+            || low.contains("unable to download webpage")
+            || low.contains("http error 5")
+            || low.contains("http error 429")
+            || low.contains("eof")
+            || low.contains("transport")
+    })
+}
+
+fn is_expired_link_error(diags: &[String]) -> bool {
+    diags.iter().any(|l| {
+        let low = l.to_lowercase();
+        low.contains("http error 403")
+            || low.contains("http error 410")
+            || low.contains("403 forbidden")
+            || low.contains("410 gone")
+            || low.contains("expired")
+    })
+}
+
 #[command]
 pub async fn start_download(
     app: AppHandle,
     state: State<'_, DownloadState>,
     mut options: DownloadOptions,
 ) -> Result<String, String> {
+    let app_settings = app
+        .try_state::<crate::settings::SettingsState>()
+        .map(|s| s.get_blocking())
+        .unwrap_or_default();
+
     let resolved_folder = if options.save_folder.trim().is_empty()
         || options.save_folder.trim() == "Downloads"
         || !std::path::Path::new(&options.save_folder).is_absolute()
     {
-        dirs_or_default_downloads()
+        if !app_settings.default_download_dir.trim().is_empty() {
+            app_settings.default_download_dir.clone()
+        } else {
+            dirs_or_default_downloads()
+        }
     } else {
         options.save_folder.clone()
     };
@@ -1731,6 +1846,7 @@ pub async fn start_download(
             .as_ref()
             .map(|t| matches!(t.status.as_str(), "paused" | "error" | "cancelled"))
             .unwrap_or(false);
+    options.is_resume = is_resume_run;
     let existing_real_filename = existing_task_snapshot
         .as_ref()
         .map(|t| t.filename.clone())
@@ -1740,9 +1856,7 @@ pub async fn start_download(
         .map(|t| t.created_at.clone())
         .filter(|s| !s.trim().is_empty());
 
-    let active_pids = state.active_pids.clone();
-    let cancelled_tasks = state.cancelled_tasks.clone();
-    cancelled_tasks.lock().unwrap().insert(task_id.clone(), false);
+    state.cancelled_tasks.lock().unwrap().insert(task_id.clone(), false);
     state.task_options.lock().unwrap().insert(task_id.clone(), options.clone());
 
     let resolved_display_filename = options
@@ -1752,34 +1866,118 @@ pub async fn start_download(
         .or_else(|| existing_real_filename.clone())
         .unwrap_or_else(|| "Online Media.mp4".to_string());
 
+    let preserved_percent = if is_resume_run {
+        existing_task_snapshot.as_ref().map(|t| t.percent).unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let preserved_downloaded = if is_resume_run {
+        existing_task_snapshot.as_ref().map(|t| t.downloaded_bytes).unwrap_or(0)
+    } else {
+        0
+    };
+    let preserved_total = if is_resume_run {
+        existing_task_snapshot.as_ref().map(|t| t.total_bytes).unwrap_or(0)
+    } else {
+        0
+    };
+    let effective_priority = if !options.priority.trim().is_empty() {
+        options.priority.clone()
+    } else if let Some(ref prev) = existing_task_snapshot {
+        prev.priority.clone()
+    } else {
+        "normal".to_string()
+    };
+    let effective_queue_order = if options.queue_order != 0 {
+        options.queue_order
+    } else if let Some(ref prev) = existing_task_snapshot {
+        prev.queue_order
+    } else {
+        chrono::Utc::now().timestamp_millis()
+    };
+
     let initial_task = DownloadTask {
         id: task_id.clone(),
         url: options.url.clone(),
         filename: resolved_display_filename.clone(),
         save_path: resolved_folder.clone(),
-        total_bytes: 0,
-        downloaded_bytes: 0,
-        percent: if is_resume_run { 0.0 } else { 1.0 },
+        total_bytes: preserved_total,
+        downloaded_bytes: preserved_downloaded,
+        percent: preserved_percent,
         speed_bps: 0,
-        speed_formatted: "Connecting...".to_string(),
+        speed_formatted: "Queued".to_string(),
         eta_formatted: "--".to_string(),
-        status: "downloading".to_string(),
-        category: if options.download_mode == "audio" { "audio".to_string() } else { "video".to_string() },
-        chunk_count: 1,
+        status: "queued".to_string(),
+        category: if options.download_mode == "audio" {
+            "audio".to_string()
+        } else {
+            "video".to_string()
+        },
+        chunk_count: (options.aria2_connections as usize).clamp(1, 32),
         is_resumable: true,
         low_disk_space: options.low_disk_space.unwrap_or(false),
-        chunks: Vec::new(),
-        speed_history: Vec::new(),
-        error_message: None,
+        priority: effective_priority,
+        queue_order: effective_queue_order,
+        expected_checksum: options.expected_checksum.clone(),
+        post_download_action: options.post_download_action.clone(),
+        post_download_program: options.post_download_program.clone(),
+        auth_username: options.auth_username.clone(),
+        auth_password: options.auth_password.clone(),
         created_at: preserved_created_at
             .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+        ..Default::default()
     };
-    state.tasks.lock().unwrap().insert(task_id.clone(), initial_task);
+    state.tasks.lock().unwrap().insert(task_id.clone(), initial_task.clone());
+    let _ = app.emit("download-progress", initial_task);
     crate::spawn_save_all_tasks(&app);
+
+    // Trigger unified queue manager (HTTP + media share max_active_downloads)
+    crate::queue::process_queue(&app).await;
+
+    Ok(task_id)
+}
+
+pub fn launch_media_worker(app: AppHandle, task_id: String) {
+    let Some(state) = app.try_state::<DownloadState>() else {
+        return;
+    };
+    let Some(options) = state.task_options.lock().unwrap().get(&task_id).cloned() else {
+        return;
+    };
+    let existing_task_snapshot = state.tasks.lock().unwrap().get(&task_id).cloned();
+    let is_resume_run = options.is_resume
+        || existing_task_snapshot
+            .as_ref()
+            .map(|t| matches!(t.status.as_str(), "paused" | "error" | "cancelled") || t.downloaded_bytes > 0)
+            .unwrap_or(false);
+    let existing_real_filename = existing_task_snapshot
+        .as_ref()
+        .map(|t| t.filename.clone())
+        .filter(|n| !n.trim().is_empty() && n != "Online Media.mp4" && n != "Downloading...");
+    let preserved_percent = existing_task_snapshot
+        .as_ref()
+        .map(|t| t.percent)
+        .unwrap_or(0.0);
+    let preserved_downloaded = existing_task_snapshot
+        .as_ref()
+        .map(|t| t.downloaded_bytes)
+        .unwrap_or(0);
+    let preserved_total = existing_task_snapshot
+        .as_ref()
+        .map(|t| t.total_bytes)
+        .unwrap_or(0);
+
+    let active_pids = state.active_pids.clone();
+    let cancelled_tasks = state.cancelled_tasks.clone();
+    cancelled_tasks.lock().unwrap().insert(task_id.clone(), false);
 
     let tid = task_id.clone();
     let media_tasks = state.tasks.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let app_settings = app
+            .try_state::<crate::settings::SettingsState>()
+            .map(|s| s.get_blocking())
+            .unwrap_or_default();
         if let Err(e) = fs::create_dir_all(&options.save_folder) {
             let err_msg = format!("Failed to create output folder: {}", e);
             mark_task_error(&media_tasks, &tid, &err_msg);
@@ -1930,41 +2128,8 @@ pub async fn start_download(
             }
         };
 
-        if is_hls && is_resume_run {
-            clean_partial_files(&options.save_folder, &task_stem);
-            eprintln!("[media] [{}] Cleared stale partial files before resume", tid);
-            let log_msg = "Cleared stale partial files before resume".to_string();
-            let _ = app.emit(
-                "download-log",
-                serde_json::json!({
-                    "id": tid.clone(),
-                    "taskId": tid.clone(),
-                    "message": log_msg.clone(),
-                    "level": "info",
-                }),
-            );
-            let _ = app.emit(
-                "download-progress",
-                serde_json::json!({
-                    "id": tid.clone(),
-                    "taskId": tid.clone(),
-                    "percent": 0.0,
-                    "text": log_msg,
-                    "speed": "".to_string(),
-                    "speed_formatted": "Connecting...".to_string(),
-                    "speedFormatted": "Connecting...".to_string(),
-                    "eta": "--".to_string(),
-                    "eta_formatted": "--".to_string(),
-                    "status": "connecting".to_string(),
-                }),
-            );
-        }
-
-        // attempt_stage:
-        // 0 = Primary run (for HLS: native m3u8 + --no-continue + --fixup warn + --part)
-        // 1 = Clean post-processing retry (--no-continue + --fixup warn)
-        // 2 = Second retry (--downloader m3u8:ffmpeg --downloader-args ffmpeg:-c copy --no-part --fixup warn)
-        let build_cmd = |attempt_stage: u8| -> Command {
+        // When resuming, preserve partial files so yt-dlp continues instead of restarting at 0%.
+        let build_cmd = |attempt_stage: u8, active_url: &str| -> Command {
             let mut cmd = make_command("yt-dlp");
             cmd.args([
                 "--newline",
@@ -1983,7 +2148,7 @@ pub async fn start_download(
             let effective_referer = if !options.referer.trim().is_empty() {
                 options.referer.trim().to_string()
             } else {
-                origin_of(&options.url)
+                origin_of(active_url)
             };
             if !effective_referer.is_empty() {
                 let eff_origin = origin_of(&effective_referer);
@@ -2009,13 +2174,21 @@ pub async fn start_download(
                 cmd.arg("--ffmpeg-location").arg(ffmpeg_path.to_string_lossy().to_string());
             }
 
-            // For HLS, always start cleanly with --no-continue; keep -c only for non-HLS unless retrying post-processing
-            let continue_flag = if is_hls || attempt_stage >= 1 {
+            // On resume: NEVER --force-overwrites; always --no-overwrites --continue --part
+            let continue_flag = if is_resume_run || options.is_resume {
+                "--continue"
+            } else if is_hls || attempt_stage >= 1 {
                 "--no-continue"
             } else {
                 "-c"
             };
-            let stage_part_flag = if attempt_stage == 2 { "--no-part" } else { part_flag };
+            let stage_part_flag = if is_resume_run || options.is_resume {
+                "--part"
+            } else if attempt_stage == 2 {
+                "--no-part"
+            } else {
+                part_flag
+            };
 
             if is_hls || is_youtube {
                 cmd.args([
@@ -2068,7 +2241,9 @@ pub async fn start_download(
                     cmd.args(["--fixup", "warn"]);
                 }
             }
-        if options.overwrite_files || is_clipping_active || attempt_stage >= 1 || (is_hls && is_resume_run) {
+        if is_resume_run || options.is_resume {
+            cmd.arg("--no-overwrites");
+        } else if options.overwrite_files || is_clipping_active || attempt_stage >= 1 {
             cmd.arg("--force-overwrites");
         } else {
             cmd.arg("--no-overwrites");
@@ -2229,25 +2404,52 @@ pub async fn start_download(
             }
         }
 
-        // Speed Limit, Proxy, Cookies
-        if options.limit_speed && options.speed_limit_kb > 0 {
-            cmd.args(["--limit-rate", &format!("{}K", options.speed_limit_kb)]);
-        }
-        if !options.proxy.trim().is_empty() {
-            cmd.args(["--proxy", options.proxy.trim()]);
-        }
-        if options.cookies_browser != "None" && !options.cookies_browser.trim().is_empty() {
-            cmd.args([
-                "--cookies-from-browser",
-                &options.cookies_browser.to_lowercase(),
-            ]);
-        } else if !options.cookies_file.trim().is_empty()
-            && PathBuf::from(&options.cookies_file).exists()
-        {
-            cmd.args(["--cookies", options.cookies_file.trim()]);
+        // Speed Limit, Proxy, Cookies, Auth Credentials, & Aria2c
+        let live_settings = app
+            .try_state::<crate::settings::SettingsState>()
+            .map(|s| s.get_blocking())
+            .unwrap_or_else(|| app_settings.clone());
+        let effective_speed_kb: u64 = if options.speed_limit_kb > 0 && (options.limit_speed || options.speed_limit_kb > 0) {
+            options.speed_limit_kb as u64
+        } else {
+            live_settings.global_speed_limit_kbps()
+        };
+        if effective_speed_kb > 0 {
+            cmd.args(["--limit-rate", &format!("{}K", effective_speed_kb)]);
         }
 
-        // Aria2c Downloader (skip for clipping & HLS where native/ffmpeg HLS downloader applies)
+        let effective_proxy = if !options.proxy.trim().is_empty() {
+            options.proxy.trim().to_string()
+        } else {
+            live_settings.effective_proxy_url().unwrap_or_default()
+        };
+        if !effective_proxy.is_empty() {
+            cmd.args(["--proxy", &effective_proxy]);
+        }
+
+        let eff_browser = if options.cookies_browser != "None" && !options.cookies_browser.trim().is_empty() {
+            options.cookies_browser.clone()
+        } else {
+            live_settings.cookies_browser.clone()
+        };
+        let eff_cookies_file = if !options.cookies_file.trim().is_empty() {
+            options.cookies_file.clone()
+        } else {
+            live_settings.cookies_file.clone()
+        };
+        if eff_browser != "None" && !eff_browser.trim().is_empty() {
+            cmd.args(["--cookies-from-browser", &eff_browser.to_lowercase()]);
+        } else if !eff_cookies_file.trim().is_empty() && PathBuf::from(&eff_cookies_file).exists() {
+            cmd.args(["--cookies", eff_cookies_file.trim()]);
+        }
+
+        if !options.auth_username.trim().is_empty() {
+            cmd.args(["--username", options.auth_username.trim(), "--password", &options.auth_password]);
+        } else if let Some((u, pw)) = crate::settings::find_credentials_for_url(&live_settings, active_url) {
+            cmd.args(["--username", u, "--password", pw]);
+        }
+
+        // Aria2c Downloader (capped at 16 connections per server; includes speed limit & proxy)
         let aria2c_found =
             find_local_aria2c().is_some() || find_exe_in_augmented_path("aria2c").is_some();
         if (options.use_aria2c || aria2c_found)
@@ -2256,11 +2458,23 @@ pub async fn start_download(
             && !is_hls
             && attempt_stage != 2
         {
+            let aria_conns = if options.aria2_connections > 0 {
+                options.aria2_connections.clamp(1, 16)
+            } else {
+                (live_settings.default_connections as u32).clamp(1, 16)
+            };
+            let mut aria_args = format!("-x {} -s {} -k 1M", aria_conns, aria_conns);
+            if effective_speed_kb > 0 {
+                aria_args.push_str(&format!(" --max-overall-download-limit={}K", effective_speed_kb));
+            }
+            if !effective_proxy.is_empty() {
+                aria_args.push_str(&format!(" --all-proxy={}", effective_proxy));
+            }
             cmd.args([
                 "--downloader",
                 "aria2c",
                 "--downloader-args",
-                "aria2c:-x 16 -s 16 -k 1M",
+                &format!("aria2c:{}", aria_args),
             ]);
         }
 
@@ -2293,17 +2507,24 @@ pub async fn start_download(
             }
         }
 
-            cmd.arg(options.url.trim());
+            cmd.arg(active_url.trim());
             cmd.stdin(Stdio::null());
             cmd.stdout(Stdio::piped());
             cmd.stderr(Stdio::piped());
             cmd
         };
 
+        let initial_pct = if is_resume_run && preserved_percent > 0.0 {
+            preserved_percent
+        } else {
+            2.0
+        };
         let init_p = serde_json::json!({
             "id": tid.clone(),
             "taskId": tid.clone(),
-            "percent": 2.0,
+            "percent": initial_pct,
+            "downloaded_bytes": preserved_downloaded,
+            "total_bytes": preserved_total,
             "text": "Initializing download stream...".to_string(),
             "speed": "".to_string(),
             "speed_formatted": "Connecting...".to_string(),
@@ -2317,11 +2538,14 @@ pub async fn start_download(
         let _ = app.emit("ytdlp-progress", init_p);
 
         let known_duration = Arc::new(Mutex::new(clip_target_duration.or(options.duration)));
-        let last_percent = Arc::new(Mutex::new(if is_resume_run { 0.0_f64 } else { 2.0_f64 }));
+        let last_percent = Arc::new(Mutex::new(initial_pct));
         let run_started_at = std::time::SystemTime::now();
         let mut attempt_stage: u8 = 0;
-        let mut last_total_bytes: u64 = 0;
-        let mut last_downloaded_bytes: u64 = 0;
+        let mut network_retries: usize = 0;
+        let mut expired_refreshed = false;
+        let mut current_media_url = options.url.clone();
+        let mut last_total_bytes: u64 = preserved_total;
+        let mut last_downloaded_bytes: u64 = preserved_downloaded;
         let mut current_stem = task_stem.clone();
         let detected_output_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -2361,7 +2585,7 @@ pub async fn start_download(
             let mut spawned_child = None;
             let mut last_spawn_err = None;
             for attempt in 0..6 {
-                let mut cmd = build_cmd(attempt_stage);
+                let mut cmd = build_cmd(attempt_stage, &current_media_url);
                 match cmd.spawn() {
                     Ok(c) => {
                         spawned_child = Some(c);
@@ -2399,6 +2623,10 @@ pub async fn start_download(
                             "eta_formatted": "--",
                         }),
                     );
+                    let app_q = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::queue::process_queue(&app_q).await;
+                    });
                     return;
                 }
             };
@@ -2753,6 +2981,10 @@ pub async fn start_download(
                         "eta_formatted": "--"
                     }),
                 );
+                let app_q = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::queue::process_queue(&app_q).await;
+                });
                 return;
             }
 
@@ -2919,6 +3151,10 @@ pub async fn start_download(
                             "error_message": warn_msg,
                         }),
                     );
+                    let app_q = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::queue::process_queue(&app_q).await;
+                    });
                     return;
                 }
             }
@@ -2928,6 +3164,77 @@ pub async fn start_download(
             }
             if exit_ok && !has_postprocess_marker {
                 break;
+            }
+
+            // Requirement F: Expired link refresh (403/410) via yt-dlp re-extraction
+            if !expired_refreshed && is_expired_link_error(&combined_diags) {
+                expired_refreshed = true;
+                let msg = "HTTP 403/410 expired link detected — refreshing URL and resuming...".to_string();
+                let _ = app.emit(
+                    "download-log",
+                    serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }),
+                );
+                let _ = app.emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "id": tid.clone(),
+                        "taskId": tid.clone(),
+                        "percent": *last_percent.lock().unwrap(),
+                        "text": msg,
+                        "speed_formatted": "Refreshing link...".to_string(),
+                        "status": "downloading".to_string(),
+                    }),
+                );
+                // Re-extract via yt-dlp -g on webpage URL (keeps options.url updated if webpage returns a fresh direct CDN URL)
+                let cur_settings = app
+                    .try_state::<crate::settings::SettingsState>()
+                    .map(|s| s.get_blocking())
+                    .unwrap_or_else(|| app_settings.clone());
+                let extract_res = resolve_fresh_direct_url_sync(&cur_settings, &options.url);
+                if let Ok(fresh_url) = extract_res {
+                    if options.url.to_lowercase().contains(".m3u8") || current_media_url != fresh_url {
+                        current_media_url = fresh_url;
+                    }
+                }
+                continue;
+            }
+
+            // Requirement F: Auto retry up to 5 times with backoff [2, 5, 15, 30, 60] s on network errors
+            if is_transient_ytdlp_error(&combined_diags)
+                && network_retries < crate::downloader::NETWORK_RETRY_BACKOFF_SECS.len()
+            {
+                let wait_s = crate::downloader::NETWORK_RETRY_BACKOFF_SECS[network_retries];
+                network_retries += 1;
+                let msg = format!(
+                    "Network error — auto-retrying in {}s (attempt {}/5)...",
+                    wait_s, network_retries
+                );
+                let _ = app.emit(
+                    "download-log",
+                    serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }),
+                );
+                let _ = app.emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "id": tid.clone(),
+                        "taskId": tid.clone(),
+                        "percent": *last_percent.lock().unwrap(),
+                        "text": msg,
+                        "speed_formatted": format!("Retry in {}s", wait_s),
+                        "status": "downloading".to_string(),
+                    }),
+                );
+                let mut cancelled_during_wait = false;
+                for _ in 0..(wait_s * 4) {
+                    std::thread::sleep(Duration::from_millis(250));
+                    if cancelled_tasks.lock().unwrap().get(&tid).copied().unwrap_or(false) {
+                        cancelled_during_wait = true;
+                        break;
+                    }
+                }
+                if !cancelled_during_wait {
+                    continue;
+                }
             }
 
             let meaningful_err = combined_diags
@@ -2944,7 +3251,6 @@ pub async fn start_download(
                 .cloned()
                 .unwrap_or_else(|| "Unknown yt-dlp error".to_string());
 
-            clean_partial_files(&options.save_folder, &current_stem);
             mark_task_error(&media_tasks, &tid, &meaningful_err);
             let error_pct = (*last_percent.lock().unwrap()).min(99.0);
             crate::spawn_save_all_tasks(&app);
@@ -2962,6 +3268,10 @@ pub async fn start_download(
                     "eta_formatted": "--"
                 }),
             );
+            let app_q = app.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::queue::process_queue(&app_q).await;
+            });
             return;
         }
 
@@ -2972,12 +3282,27 @@ pub async fn start_download(
             run_started_at,
             detected_ref.as_deref(),
         );
-        let kept_filename = kept_file
+
+        let live_settings = app
+            .try_state::<crate::settings::SettingsState>()
+            .map(|s| s.get_blocking())
+            .unwrap_or_else(|| app_settings.clone());
+
+        let final_kept_file = kept_file.map(|p| {
+            crate::settings::maybe_move_to_auto_category(&live_settings, &p)
+        });
+
+        let kept_filename = final_kept_file
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_string());
-        let disk_size = kept_file
+        let final_folder = final_kept_file
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.to_string_lossy().to_string())
+            .unwrap_or_else(|| options.save_folder.clone());
+        let disk_size = final_kept_file
             .as_ref()
             .and_then(|p| fs::metadata(p).ok())
             .map(|m| m.len())
@@ -3001,6 +3326,25 @@ pub async fn start_download(
             return;
         }
 
+        let mut checksum_status = String::new();
+        let mut checksum_actual = String::new();
+        if !options.expected_checksum.trim().is_empty() {
+            if let Some(ref fpath) = final_kept_file {
+                if let Ok((matched, _algo, actual)) =
+                    crate::settings::verify_file_checksum(fpath, &options.expected_checksum)
+                {
+                    checksum_actual = actual;
+                    checksum_status = if matched {
+                        "verified".to_string()
+                    } else {
+                        "mismatch".to_string()
+                    };
+                } else {
+                    checksum_status = "error".to_string();
+                }
+            }
+        }
+
         if let Ok(mut tasks_lock) = media_tasks.lock() {
             if let Some(t) = tasks_lock.get_mut(&tid) {
                 t.percent = 100.0;
@@ -3010,6 +3354,9 @@ pub async fn start_download(
                 t.status = "completed".to_string();
                 t.speed_formatted = "Finished".to_string();
                 t.eta_formatted = "00:00:00".to_string();
+                t.save_path = final_folder.clone();
+                t.checksum_status = checksum_status.clone();
+                t.checksum_actual = checksum_actual.clone();
                 if let Some(ref kf) = kept_filename {
                     if !kf.is_empty() {
                         t.filename = kf.clone();
@@ -3028,7 +3375,10 @@ pub async fn start_download(
             "id": tid.clone(),
             "taskId": tid.clone(),
             "filename": kept_filename.clone(),
+            "save_path": final_folder.clone(),
             "percent": 100.0,
+            "checksumStatus": checksum_status.clone(),
+            "checksumActual": checksum_actual.clone(),
             "text": "Download Completed Successfully! ✔".to_string(),
             "speed": "Finished".to_string(),
             "speed_formatted": "Finished".to_string(),
@@ -3049,16 +3399,44 @@ pub async fn start_download(
             serde_json::json!({
                 "id": tid.clone(),
                 "filename": kept_filename,
-                "save_path": options.save_folder,
+                "save_path": final_folder,
                 "percent": 100.0,
                 "total_bytes": final_total,
                 "downloaded_bytes": final_total,
                 "status": "completed"
             }),
         );
-    });
 
-    Ok(task_id)
+        let effective_action = if !options.post_download_action.trim().is_empty() {
+            options.post_download_action.clone()
+        } else {
+            live_settings.post_download_action.clone()
+        };
+        let effective_program = if !options.post_download_program.trim().is_empty() {
+            options.post_download_program.clone()
+        } else {
+            live_settings.post_download_program.clone()
+        };
+        if let Some(ref fpath) = final_kept_file {
+            let app_post = app.clone();
+            let tid_post = tid.clone();
+            let fpath_post = fpath.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::settings::execute_post_download_action(
+                    &app_post,
+                    &tid_post,
+                    &effective_action,
+                    &effective_program,
+                    &fpath_post,
+                );
+            });
+        }
+
+        let app_q = app.clone();
+        tauri::async_runtime::spawn(async move {
+            crate::queue::process_queue(&app_q).await;
+        });
+    });
 }
 
 #[command]

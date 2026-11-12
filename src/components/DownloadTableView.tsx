@@ -15,6 +15,9 @@ import {
   Layers,
   Zap,
   Radio,
+  GripVertical,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 import {
   DownloadTask,
@@ -37,6 +40,8 @@ interface DownloadTableViewProps {
   onDelete: (id: string) => void;
   onOpenFile: (path: string) => void;
   onOpenFolder: (path: string) => void;
+  onChangePriority?: (id: string, priority: string) => void;
+  onReorderTasks?: (orderedIds: string[]) => void;
   theme?: "dark" | "light";
   windowWidth?: number;
 }
@@ -50,9 +55,13 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
   onDelete,
   onOpenFile,
   onOpenFolder,
+  onChangePriority,
+  onReorderTasks,
   windowWidth,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [dragOverTaskId, setDragOverTaskId] = useState<string | null>(null);
   const [internalWidth, setInternalWidth] = useState<number>(
     typeof window !== "undefined" ? window.innerWidth : 1200
   );
@@ -177,38 +186,97 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
               return (
                 <React.Fragment key={task.id}>
                   <tr
+                    draggable={Boolean(onReorderTasks)}
+                    onDragStart={(e) => {
+                      setDraggedTaskId(task.id);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", task.id);
+                    }}
+                    onDragOver={(e) => {
+                      if (!onReorderTasks || !draggedTaskId || draggedTaskId === task.id) return;
+                      e.preventDefault();
+                      setDragOverTaskId(task.id);
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverTaskId === task.id) setDragOverTaskId(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const srcId = draggedTaskId || e.dataTransfer.getData("text/plain");
+                      setDraggedTaskId(null);
+                      setDragOverTaskId(null);
+                      if (!onReorderTasks || !srcId || srcId === task.id) return;
+                      const ids = tasks.map((t) => t.id);
+                      const fromIdx = ids.indexOf(srcId);
+                      const toIdx = ids.indexOf(task.id);
+                      if (fromIdx < 0 || toIdx < 0) return;
+                      ids.splice(fromIdx, 1);
+                      ids.splice(toIdx, 0, srcId);
+                      onReorderTasks(ids);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedTaskId(null);
+                      setDragOverTaskId(null);
+                    }}
                     onClick={() => onSelectTask(task.id)}
                     className={`group min-h-[56px] cursor-pointer transition-colors ${
-                      isSelected
+                      dragOverTaskId === task.id
+                        ? "border-t-2 border-blue-500 bg-blue-50/40 dark:bg-blue-950/30"
+                        : isSelected
                         ? "bg-blue-50/80 dark:bg-blue-950/40"
                         : "hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
                     }`}
                   >
-                    {/* Index */}
+                    {/* Index + Drag Grip */}
                     {showIndex && (
                       <td className="py-2.5 px-2 text-center text-zr-muted text-[12px] tabular-nums font-sans border-b border-zr">
-                        {idx + 1}
+                        <div className="inline-flex items-center justify-center gap-0.5">
+                          {onReorderTasks && (
+                            <GripVertical className="w-3.5 h-3.5 opacity-0 group-hover:opacity-60 cursor-grab shrink-0" />
+                          )}
+                          <span>{idx + 1}</span>
+                        </div>
                       </td>
                     )}
 
-                    {/* File Name (flexible 1fr, shrinks with ellipsis) + Size when below 800px */}
+                    {/* File Name (flexible 1fr, shrinks with ellipsis) + Badges */}
                     <td className="py-2.5 px-3 min-w-0 max-w-0 truncate border-b border-zr">
                       <div className="flex items-center space-x-2 min-w-0">
                         {getCategoryIcon(task.category)}
                         <div className="min-w-0 flex-1 truncate">
-                          <span
-                            className="truncate text-[13px] font-semibold text-zr-primary hover:underline block"
-                            title={task.filename}
-                            onDoubleClick={() => {
-                              if (!isFileReady) return;
-                              const folder = task.save_path || task.savePath || "";
-                              const fn = task.filename || "";
-                              const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
-                              onOpenFile(full);
-                            }}
-                          >
-                            {task.filename}
-                          </span>
+                          <div className="flex items-center space-x-1.5 min-w-0">
+                            <span
+                              className="truncate text-[13px] font-semibold text-zr-primary hover:underline"
+                              title={task.filename}
+                              onDoubleClick={() => {
+                                if (!isFileReady) return;
+                                const folder = task.save_path || task.savePath || "";
+                                const fn = task.filename || "";
+                                const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
+                                onOpenFile(full);
+                              }}
+                            >
+                              {task.filename}
+                            </span>
+                            {(task.checksumStatus || task.checksum_status) === "verified" && (
+                              <span
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold shrink-0"
+                                title="Checksum verified"
+                              >
+                                <ShieldCheck className="w-3 h-3" />
+                                <span>Verified</span>
+                              </span>
+                            )}
+                            {(task.checksumStatus || task.checksum_status) === "mismatch" && (
+                              <span
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold shrink-0"
+                                title="Checksum mismatch!"
+                              >
+                                <ShieldAlert className="w-3 h-3" />
+                                <span>Mismatch</span>
+                              </span>
+                            )}
+                          </div>
 
                           {/* When Size column is hidden (<800px), display Size cleanly under file name */}
                           {!showSizeColumn && (
@@ -306,17 +374,32 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                       </div>
                     </td>
 
-                    {/* Status Badge */}
+                    {/* Status Badge + Priority Selector */}
                     <td className="py-2.5 px-3 whitespace-nowrap border-b border-zr">
-                      <span
-                        className={`inline-block text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md ${getStatusBadgeClass(
-                          task.status
-                        )}`}
-                      >
-                        {isWarning
-                          ? "Downloaded, but conversion failed — file kept"
-                          : task.status}
-                      </span>
+                      <div className="flex items-center space-x-1.5">
+                        <span
+                          className={`inline-block text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-md ${getStatusBadgeClass(
+                            task.status
+                          )}`}
+                        >
+                          {isWarning
+                            ? "Downloaded, but conversion failed — file kept"
+                            : task.status}
+                        </span>
+                        {onChangePriority && (
+                          <select
+                            value={task.priority || "normal"}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => onChangePriority(task.id, e.target.value)}
+                            className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-zr bg-zr-surface text-zr-secondary cursor-pointer focus:outline-none focus:border-blue-500"
+                            title="Queue priority"
+                          >
+                            <option value="high">High</option>
+                            <option value="normal">Normal</option>
+                            <option value="low">Low</option>
+                          </select>
+                        )}
+                      </div>
                     </td>
 
                     {/* Speed: Transfer rate (visible >= 900px) */}

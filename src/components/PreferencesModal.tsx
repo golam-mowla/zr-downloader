@@ -9,11 +9,18 @@ import {
   Cpu,
   Zap,
   Globe,
+  CalendarClock,
+  Shield,
+  Download,
+  Upload,
+  AlertTriangle,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
-import { ToolVersionInfo } from "../types";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { ToolVersionInfo, AppSettings, SchedulerConfig } from "../types";
 
 const TOOLS_CACHE_TTL_MS = 10 * 60 * 1000;
 let lastChecked = 0;
@@ -54,24 +61,72 @@ interface PreferencesModalProps {
   onClose: () => void;
   defaultDir: string;
   onChangeDefaultDir: (dir: string) => void;
+  onSettingsSaved?: (settings: AppSettings) => void;
+  onListImported?: () => void;
   theme?: "dark" | "light";
 }
+
+const DEFAULT_APP_SETTINGS: AppSettings = {
+  defaultDownloadDir: "",
+  maxActiveDownloads: 3,
+  connectionMode: "fixed",
+  defaultConnections: 8,
+  lowDiskSpace: false,
+  speedLimitEnabled: false,
+  speedLimitValue: 5,
+  speedLimitUnit: "MB",
+  autoCategorize: false,
+  autoCategoryRoot: "",
+  postDownloadAction: "none",
+  postDownloadProgram: "",
+  proxyEnabled: false,
+  proxyType: "http",
+  proxyHost: "",
+  proxyPort: 8080,
+  proxyUsername: "",
+  proxyPassword: "",
+  cookiesBrowser: "None",
+  cookiesFile: "",
+  siteCredentials: [],
+  clipboardMonitor: false,
+  startWithWindows: false,
+  minimizeToTray: false,
+  closeToTray: true,
+};
+
+const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
+  enabled: false,
+  startTime: "00:00",
+  stopTime: "06:00",
+  days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  whenFinished: "none",
+};
+
+const ALL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   isOpen,
   onClose,
   defaultDir,
   onChangeDefaultDir,
+  onSettingsSaved,
+  onListImported,
 }) => {
-  const [activeTab, setActiveTab] = useState<"general" | "connection" | "tools">("general");
+  const [activeTab, setActiveTab] = useState<
+    "general" | "connection" | "scheduler" | "network" | "tools"
+  >("general");
   const [savePath, setSavePath] = useState(defaultDir);
-  const [maxConcurrent, setMaxConcurrent] = useState(3);
-  const [defaultConnections, setDefaultConnections] = useState(8);
-  const [speedLimitEnabled, setSpeedLimitEnabled] = useState(false);
-  const [speedLimitKb, setSpeedLimitKb] = useState(5120); // 5 MB/s
-  const [lowDiskSpace, setLowDiskSpace] = useState(() => {
-    return localStorage.getItem("zr_low_disk_space") === "true";
+  const [appSettings, setAppSettings] = useState<AppSettings>({
+    ...DEFAULT_APP_SETTINGS,
+    defaultDownloadDir: defaultDir,
+    lowDiskSpace: localStorage.getItem("zr_low_disk_space") === "true",
   });
+  const [schedulerCfg, setSchedulerCfg] = useState<SchedulerConfig>(DEFAULT_SCHEDULER_CONFIG);
+  const [newCredDomain, setNewCredDomain] = useState("");
+  const [newCredUser, setNewCredUser] = useState("");
+  const [newCredPass, setNewCredPass] = useState("");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [transferMsg, setTransferMsg] = useState<string | null>(null);
 
   // Core Tools Info
   const [tools, setTools] = useState<ToolVersionInfo[]>([]);
@@ -86,6 +141,24 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadToolsInfo(false);
+      setTransferMsg(null);
+      invoke<AppSettings>("get_app_settings")
+        .then((res) => {
+          if (res) {
+            setAppSettings({
+              ...DEFAULT_APP_SETTINGS,
+              ...res,
+              defaultDownloadDir: res.defaultDownloadDir || defaultDir,
+            });
+            if (res.defaultDownloadDir) setSavePath(res.defaultDownloadDir);
+          }
+        })
+        .catch(() => {});
+      invoke<SchedulerConfig>("get_scheduler_config")
+        .then((res) => {
+          if (res) setSchedulerCfg({ ...DEFAULT_SCHEDULER_CONFIG, ...res });
+        })
+        .catch(() => {});
     }
   }, [isOpen]);
 
@@ -293,6 +366,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
       });
       if (selected && typeof selected === "string") {
         setSavePath(selected);
+        setAppSettings((prev) => ({ ...prev, defaultDownloadDir: selected }));
         onChangeDefaultDir(selected);
       }
     } catch (err) {
@@ -300,9 +374,102 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
     }
   };
 
+  const handleBrowseCategoryRoot = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: appSettings.autoCategoryRoot || savePath || undefined,
+      });
+      if (selected && typeof selected === "string") {
+        setAppSettings((prev) => ({ ...prev, autoCategoryRoot: selected }));
+      }
+    } catch (err) {
+      console.error("Category root browse error:", err);
+    }
+  };
+
+  const handleBrowseCookiesFile = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Cookies Text", extensions: ["txt"] }],
+      });
+      if (selected && typeof selected === "string") {
+        setAppSettings((prev) => ({ ...prev, cookiesFile: selected }));
+      }
+    } catch (err) {
+      console.error("Cookies browse error:", err);
+    }
+  };
+
+  const handleBrowsePostProgram = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Executables", extensions: ["exe", "bat", "cmd", "ps1"] }],
+      });
+      if (selected && typeof selected === "string") {
+        setAppSettings((prev) => ({ ...prev, postDownloadProgram: selected }));
+      }
+    } catch {}
+  };
+
+  const handleExportList = async () => {
+    try {
+      const target = await save({
+        defaultPath: "zr-downloads-export.json",
+        filters: [{ name: "JSON List", extensions: ["json"] }],
+      });
+      if (target) {
+        const count = await invoke<number>("export_download_list", { filePath: target });
+        setTransferMsg(`Exported ${count} downloads to JSON.`);
+      }
+    } catch (e: any) {
+      setTransferMsg(`Export failed: ${e?.message || e}`);
+    }
+  };
+
+  const handleImportList = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "JSON List", extensions: ["json"] }],
+      });
+      if (selected && typeof selected === "string") {
+        const count = await invoke<number>("import_download_list", { filePath: selected });
+        setTransferMsg(`Imported ${count} downloads.`);
+        onListImported?.();
+      }
+    } catch (e: any) {
+      setTransferMsg(`Import failed: ${e?.message || e}`);
+    }
+  };
+
+  const handleSaveAndClose = async () => {
+    try {
+      setSavingSettings(true);
+      const payload: AppSettings = {
+        ...appSettings,
+        defaultDownloadDir: savePath || appSettings.defaultDownloadDir,
+      };
+      localStorage.setItem("zr_low_disk_space", String(payload.lowDiskSpace));
+      const saved = await invoke<AppSettings>("save_app_settings", { newSettings: payload });
+      await invoke("save_scheduler_config", { config: schedulerCfg });
+      onChangeDefaultDir(saved.defaultDownloadDir || savePath);
+      onSettingsSaved?.(saved);
+      onClose();
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      onClose();
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 select-none">
-      <div className="w-full max-w-xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden transition-colors">
+      <div className="w-full max-w-2xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden transition-colors">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-zr bg-zr-tableHead transition-colors">
           <div className="flex items-center space-x-2.5">
@@ -321,34 +488,58 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-6 transition-colors">
+        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-4 overflow-x-auto transition-colors">
           <button
             onClick={() => setActiveTab("general")}
-            className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-1.5 border-b-2 transition-all ${
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
               activeTab === "general"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <HardDrive className="w-4 h-4" />
-            <span>General & Storage</span>
+            <span>General & Files</span>
           </button>
 
           <button
             onClick={() => setActiveTab("connection")}
-            className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-1.5 border-b-2 transition-all ${
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
               activeTab === "connection"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
             }`}
           >
             <Cpu className="w-4 h-4" />
-            <span>Connection & Multi-Threading</span>
+            <span>Queue & Speed</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("scheduler")}
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+              activeTab === "scheduler"
+                ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
+            }`}
+          >
+            <CalendarClock className="w-4 h-4" />
+            <span>Scheduler</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("network")}
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+              activeTab === "network"
+                ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
+            }`}
+          >
+            <Shield className="w-4 h-4" />
+            <span>Network</span>
           </button>
 
           <button
             onClick={() => setActiveTab("tools")}
-            className={`pb-2.5 text-[13px] font-semibold flex items-center space-x-1.5 border-b-2 transition-all ${
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
               activeTab === "tools"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
@@ -385,6 +576,88 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 </div>
               </div>
 
+              {/* Auto Categories (G) */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-[13px] text-zr-primary">
+                      Auto-Categorize Completed Files
+                    </div>
+                    <div className="text-[12px] text-zr-secondary">
+                      Move completed files into Videos, Music, Documents, Compressed, or Programs subfolders
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={appSettings.autoCategorize}
+                    onChange={(e) =>
+                      setAppSettings((prev) => ({ ...prev, autoCategorize: e.target.checked }))
+                    }
+                    className="w-4 h-4 accent-blue-600 cursor-pointer"
+                  />
+                </div>
+                {appSettings.autoCategorize && (
+                  <div className="flex space-x-2 pt-1">
+                    <input
+                      type="text"
+                      value={appSettings.autoCategoryRoot}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({ ...prev, autoCategoryRoot: e.target.value }))
+                      }
+                      placeholder={savePath || "Category root folder"}
+                      className="flex-1 px-3 py-1.5 rounded-lg font-mono text-[12px] border border-zr bg-zr-surface text-zr-primary"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleBrowseCategoryRoot}
+                      className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-[12px] font-semibold text-zr-secondary hover:text-zr-primary"
+                    >
+                      Browse Root
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Post-Download Action (G) */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2">
+                <label className="text-[13px] font-semibold text-zr-primary block">
+                  Default Post-Download Action
+                </label>
+                <select
+                  value={appSettings.postDownloadAction}
+                  onChange={(e) =>
+                    setAppSettings((prev) => ({ ...prev, postDownloadAction: e.target.value }))
+                  }
+                  className="w-full px-3 py-2 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px]"
+                >
+                  <option value="none">Do Nothing</option>
+                  <option value="open_file">Open Downloaded File</option>
+                  <option value="open_folder">Open Containing Folder</option>
+                  <option value="defender_scan">Antivirus Scan (Windows Defender MpCmdRun)</option>
+                  <option value="run_program">Run Custom Program / Script</option>
+                </select>
+                {appSettings.postDownloadAction === "run_program" && (
+                  <div className="flex space-x-2 pt-1">
+                    <input
+                      type="text"
+                      value={appSettings.postDownloadProgram}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({ ...prev, postDownloadProgram: e.target.value }))
+                      }
+                      placeholder="Path to executable (downloaded path passed as first argument)"
+                      className="flex-1 px-3 py-1.5 rounded-lg font-mono text-[12px] border border-zr bg-zr-surface text-zr-primary"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleBrowsePostProgram}
+                      className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-[12px] font-semibold text-zr-secondary hover:text-zr-primary"
+                    >
+                      Browse
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* Low Disk Space Optimization Mode */}
               <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 dark:bg-blue-900/10 space-y-2">
                 <div className="flex items-center justify-between">
@@ -396,115 +669,562 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                   </div>
                   <input
                     type="checkbox"
-                    checked={lowDiskSpace}
-                    onChange={(e) => {
-                      setLowDiskSpace(e.target.checked);
-                      localStorage.setItem("zr_low_disk_space", String(e.target.checked));
-                    }}
+                    checked={appSettings.lowDiskSpace}
+                    onChange={(e) =>
+                      setAppSettings((prev) => ({ ...prev, lowDiskSpace: e.target.checked }))
+                    }
                     className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
                   />
                 </div>
                 <p className="text-zr-secondary text-[12px] leading-relaxed">
-                  Saves 50% SSD space on large downloads (e.g. 20 GB file takes strictly 20 GB instead of 40 GB). Chunks write directly into the final destination file without creating duplicate temporary segment files or assembly delay. Ideal for small SSDs (e.g. 220 GB SSD).
+                  Saves 50% SSD space on large downloads without creating duplicate temporary segment files.
                 </p>
               </div>
 
-              {/* Browser Integration Info */}
-              <div className="p-4 rounded-lg bg-slate-50 dark:bg-slate-900/40 border border-zr space-y-2">
-                <div className="flex items-center space-x-2 text-zr-accent font-semibold text-[13px]">
-                  <Globe className="w-4 h-4" />
-                  <span>Browser Integration & Bridge</span>
+              {/* App Shell & UX Settings (I, J) */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
+                <div className="text-[13px] font-semibold text-zr-primary">
+                  App Shell, Tray & Clipboard
                 </div>
-                <p className="text-zr-secondary text-[12px] leading-relaxed">
-                  ZR Downloader listens on <b>http://127.0.0.1:9666</b> and handles the custom protocol <b>zr://</b>.
-                  Standard browser downloads (.zip, .exe, .iso, .pdf, .mp4) are caught automatically when using the ZR Downloader extension.
-                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[12.5px]">
+                  <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                    <span className="text-zr-secondary font-medium">Monitor Clipboard Links</span>
+                    <input
+                      type="checkbox"
+                      checked={appSettings.clipboardMonitor}
+                      onChange={(e) =>
+                        setAppSettings((p) => ({ ...p, clipboardMonitor: e.target.checked }))
+                      }
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                    <span className="text-zr-secondary font-medium">Start with Windows</span>
+                    <input
+                      type="checkbox"
+                      checked={appSettings.startWithWindows}
+                      onChange={(e) =>
+                        setAppSettings((p) => ({ ...p, startWithWindows: e.target.checked }))
+                      }
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                    <span className="text-zr-secondary font-medium">Minimize to Tray</span>
+                    <input
+                      type="checkbox"
+                      checked={appSettings.minimizeToTray}
+                      onChange={(e) =>
+                        setAppSettings((p) => ({ ...p, minimizeToTray: e.target.checked }))
+                      }
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                    <span className="text-zr-secondary font-medium">Close Button Hides to Tray</span>
+                    <input
+                      type="checkbox"
+                      checked={appSettings.closeToTray}
+                      onChange={(e) =>
+                        setAppSettings((p) => ({ ...p, closeToTray: e.target.checked }))
+                      }
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                  </label>
+                </div>
+
+                {/* Import / Export Download List (J) */}
+                <div className="flex items-center justify-between pt-2 border-t border-zr">
+                  <span className="text-[12px] text-zr-secondary">
+                    Backup or restore download queue (JSON)
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={handleImportList}
+                      className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-[12px] font-semibold text-zr-primary flex items-center space-x-1"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Import List</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleExportList}
+                      className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-[12px] font-semibold text-zr-primary flex items-center space-x-1"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export List</span>
+                    </button>
+                  </div>
+                </div>
+                {transferMsg && (
+                  <div className="text-[12px] text-emerald-600 dark:text-emerald-400 font-medium">
+                    {transferMsg}
+                  </div>
+                )}
+              </div>
+
+              {/* Browser Integration Info */}
+              <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/40 border border-zr flex items-center space-x-2 text-[12px] text-zr-secondary">
+                <Globe className="w-4 h-4 text-zr-accent shrink-0" />
+                <span>
+                  Listening on <b>http://127.0.0.1:9666</b> &amp; <b>zr://</b> protocol handler.
+                </span>
               </div>
             </div>
           )}
 
           {activeTab === "connection" && (
-            <div className="space-y-4">
-              {/* Connections / Threads per download */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between">
-                  <label className="text-[13px] font-medium text-zr-secondary">
-                    Default Simultaneous Chunk Connections
+            <div className="space-y-5">
+              {/* Connections / Threads per download: 4 / 8 / 16 / 24 / 32 + Auto */}
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-[13px] font-semibold text-zr-primary">
+                    Connections per Download
                   </label>
                   <span className="font-semibold tabular-nums text-zr-accent text-[13px]">
-                    {defaultConnections} Threads
+                    {appSettings.connectionMode === "auto"
+                      ? "Auto (8 -> 32)"
+                      : `${appSettings.defaultConnections} Connections`}
                   </span>
                 </div>
-                <div className="grid grid-cols-4 gap-2 pt-1">
-                  {[4, 8, 12, 16].map((num) => (
+                <div className="grid grid-cols-6 gap-2">
+                  {[4, 8, 16, 24, 32].map((num) => (
                     <button
                       key={num}
                       type="button"
-                      onClick={() => setDefaultConnections(num)}
-                      className={`py-2 rounded-lg font-semibold text-[13px] border transition-all ${
-                        defaultConnections === num
+                      title={num > 16 ? "some servers may block" : `${num} connections`}
+                      onClick={() =>
+                        setAppSettings((p) => ({
+                          ...p,
+                          connectionMode: "fixed",
+                          defaultConnections: num,
+                        }))
+                      }
+                      className={`py-2 rounded-lg font-semibold text-[12.5px] border transition-all ${
+                        appSettings.connectionMode === "fixed" &&
+                        appSettings.defaultConnections === num
                           ? "bg-blue-600 border-blue-600 text-white"
                           : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
                       }`}
                     >
-                      {num} Chunks
+                      {num}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    title="Start with 8, add +4 every 5s while total speed grows >10%, cap 32"
+                    onClick={() =>
+                      setAppSettings((p) => ({
+                        ...p,
+                        connectionMode: "auto",
+                        defaultConnections: 8,
+                      }))
+                    }
+                    className={`py-2 rounded-lg font-semibold text-[12.5px] border transition-all ${
+                      appSettings.connectionMode === "auto"
+                        ? "bg-blue-600 border-blue-600 text-white"
+                        : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
+                    }`}
+                  >
+                    Auto
+                  </button>
                 </div>
+                {(appSettings.connectionMode === "auto" || appSettings.defaultConnections > 16) && (
+                  <div
+                    className="flex items-center space-x-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[12px] text-amber-700 dark:text-amber-300"
+                    title="some servers may block"
+                  >
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>
+                      Using more than 16 connections: some servers may block or throttle excessive parallel requests. aria2c stays capped at 16 per server.
+                    </span>
+                  </div>
+                )}
               </div>
 
-              {/* Max Concurrent Downloads */}
-              <div className="space-y-1.5 pt-2 border-t border-zr">
-                <div className="flex justify-between">
-                  <label className="text-[13px] font-medium text-zr-secondary">
-                    Maximum Active Concurrent Tasks
-                  </label>
-                  <span className="font-semibold tabular-nums text-zr-accent text-[13px]">
-                    {maxConcurrent} Active
+              {/* Queue Manager: max_active_downloads 1..10 (applied to HTTP + media together) */}
+              <div className="space-y-2 pt-3 border-t border-zr">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <label className="text-[13px] font-semibold text-zr-primary block">
+                      Maximum Concurrent Downloads (Queue Limit: 1–10)
+                    </label>
+                    <span className="text-[11.5px] text-zr-secondary">
+                      Applies across both direct HTTP and video/media downloads together.
+                    </span>
+                  </div>
+                  <span className="font-semibold tabular-nums text-zr-accent text-[14px]">
+                    {appSettings.maxActiveDownloads}
                   </span>
                 </div>
-                <div className="grid grid-cols-4 gap-2 pt-1">
-                  {[1, 2, 3, 5].map((num) => (
-                    <button
-                      key={num}
-                      type="button"
-                      onClick={() => setMaxConcurrent(num)}
-                      className={`py-2 rounded-lg font-semibold text-[13px] border transition-all ${
-                        maxConcurrent === num
-                          ? "bg-blue-600 border-blue-600 text-white"
-                          : "bg-zr-surface border-zr text-zr-secondary hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-zr-primary"
-                      }`}
-                    >
-                      {num} Downloads
-                    </button>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  value={appSettings.maxActiveDownloads}
+                  onChange={(e) =>
+                    setAppSettings((p) => ({
+                      ...p,
+                      maxActiveDownloads: parseInt(e.target.value, 10) || 1,
+                    }))
+                  }
+                  className="w-full accent-blue-600 cursor-pointer"
+                />
+                <div className="flex justify-between text-[11px] text-zr-muted px-0.5 tabular-nums">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                    <span key={n}>{n}</span>
                   ))}
                 </div>
               </div>
 
-              {/* Speed Limiter */}
-              <div className="space-y-2 pt-2 border-t border-zr">
+              {/* Global Speed Limiter (KB/s or MB/s) */}
+              <div className="space-y-2.5 pt-3 border-t border-zr">
                 <div className="flex items-center justify-between">
-                  <label className="text-[13px] font-medium text-zr-secondary">
-                    Global Bandwidth Limiter
-                  </label>
+                  <div>
+                    <label className="text-[13px] font-semibold text-zr-primary block">
+                      Global Speed Limiter
+                    </label>
+                    <span className="text-[11.5px] text-zr-secondary">
+                      Applies to HTTP token-bucket, yt-dlp (--limit-rate), and aria2c (--max-overall-download-limit).
+                    </span>
+                  </div>
                   <input
                     type="checkbox"
-                    checked={speedLimitEnabled}
-                    onChange={(e) => setSpeedLimitEnabled(e.target.checked)}
-                    className="w-4 h-4 accent-blue-600 rounded"
+                    checked={appSettings.speedLimitEnabled}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, speedLimitEnabled: e.target.checked }))
+                    }
+                    className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
                   />
                 </div>
-                {speedLimitEnabled && (
-                  <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="number"
+                    min={1}
+                    value={appSettings.speedLimitValue}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({
+                        ...p,
+                        speedLimitValue: Math.max(1, parseInt(e.target.value, 10) || 1),
+                      }))
+                    }
+                    className="w-32 px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px] font-mono"
+                  />
+                  <select
+                    value={appSettings.speedLimitUnit}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, speedLimitUnit: e.target.value }))
+                    }
+                    className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px] font-semibold"
+                  >
+                    <option value="KB">KB/s</option>
+                    <option value="MB">MB/s</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "scheduler" && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-[13px] text-zr-primary">
+                    Enable Download Scheduler
+                  </div>
+                  <div className="text-[12px] text-zr-secondary">
+                    Automatically start queued/paused downloads at Start Time and pause active downloads at Stop Time.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={schedulerCfg.enabled}
+                  onChange={(e) =>
+                    setSchedulerCfg((prev) => ({ ...prev, enabled: e.target.checked }))
+                  }
+                  className="w-4 h-4 accent-blue-600 cursor-pointer"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[12.5px] font-semibold text-zr-secondary">
+                    Start Queue At
+                  </label>
+                  <input
+                    type="time"
+                    value={schedulerCfg.startTime}
+                    onChange={(e) =>
+                      setSchedulerCfg((prev) => ({ ...prev, startTime: e.target.value }))
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px]"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[12.5px] font-semibold text-zr-secondary">
+                    Pause Everything At
+                  </label>
+                  <input
+                    type="time"
+                    value={schedulerCfg.stopTime}
+                    onChange={(e) =>
+                      setSchedulerCfg((prev) => ({ ...prev, stopTime: e.target.value }))
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px]"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[12.5px] font-semibold text-zr-secondary block">
+                  Active Days
+                </label>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {ALL_DAYS.map((day) => {
+                    const active = schedulerCfg.days.includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() =>
+                          setSchedulerCfg((prev) => ({
+                            ...prev,
+                            days: active
+                              ? prev.days.filter((d) => d !== day)
+                              : [...prev.days, day],
+                          }))
+                        }
+                        className={`py-2 rounded-lg text-[12px] font-semibold border transition-colors ${
+                          active
+                            ? "bg-blue-600 border-blue-600 text-white"
+                            : "bg-zr-surface border-zr text-zr-secondary hover:text-zr-primary"
+                        }`}
+                      >
+                        {day}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-2 border-t border-zr">
+                <label className="text-[13px] font-semibold text-zr-primary block">
+                  When All Downloads Finish
+                </label>
+                <select
+                  value={schedulerCfg.whenFinished}
+                  onChange={(e) =>
+                    setSchedulerCfg((prev) => ({ ...prev, whenFinished: e.target.value }))
+                  }
+                  className="w-full px-3 py-2 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px]"
+                >
+                  <option value="none">Do Nothing</option>
+                  <option value="close_app">Close ZR Downloader</option>
+                  <option value="sleep">Put Computer to Sleep</option>
+                  <option value="shutdown">Shut Down Windows (with 30s cancel dialog)</option>
+                </select>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "network" && (
+            <div className="space-y-4">
+              {/* Proxy Section */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-[13px] text-zr-primary">
+                      HTTP / HTTPS / SOCKS5 Proxy
+                    </div>
+                    <div className="text-[12px] text-zr-secondary">
+                      Applied to HTTP engine, yt-dlp (--proxy), and aria2c (--all-proxy).
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={appSettings.proxyEnabled}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, proxyEnabled: e.target.checked }))
+                    }
+                    className="w-4 h-4 accent-blue-600 cursor-pointer"
+                  />
+                </div>
+                <div className="grid grid-cols-12 gap-2">
+                  <select
+                    value={appSettings.proxyType}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, proxyType: e.target.value }))
+                    }
+                    className="col-span-3 px-2.5 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12.5px]"
+                  >
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                    <option value="socks5">SOCKS5</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={appSettings.proxyHost}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, proxyHost: e.target.value }))
+                    }
+                    placeholder="127.0.0.1"
+                    className="col-span-6 px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12.5px] font-mono"
+                  />
+                  <input
+                    type="number"
+                    value={appSettings.proxyPort}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({
+                        ...p,
+                        proxyPort: parseInt(e.target.value, 10) || 8080,
+                      }))
+                    }
+                    placeholder="8080"
+                    className="col-span-3 px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12.5px] font-mono"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={appSettings.proxyUsername}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, proxyUsername: e.target.value }))
+                    }
+                    placeholder="Proxy Username (optional)"
+                    className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12.5px]"
+                  />
+                  <input
+                    type="password"
+                    value={appSettings.proxyPassword}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, proxyPassword: e.target.value }))
+                    }
+                    placeholder="Proxy Password (optional)"
+                    className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12.5px]"
+                  />
+                </div>
+              </div>
+
+              {/* Cookies for yt-dlp */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
+                <div className="font-semibold text-[13px] text-zr-primary">
+                  Cookies (yt-dlp Private / Authenticated Media)
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <select
+                    value={appSettings.cookiesBrowser}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, cookiesBrowser: e.target.value }))
+                    }
+                    className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12.5px]"
+                  >
+                    <option value="None">Cookies From Browser: None</option>
+                    <option value="Chrome">Chrome</option>
+                    <option value="Edge">Edge</option>
+                    <option value="Firefox">Firefox</option>
+                    <option value="Brave">Brave</option>
+                    <option value="Opera">Opera</option>
+                  </select>
+                  <div className="flex space-x-1.5">
                     <input
-                      type="number"
-                      value={speedLimitKb}
-                      onChange={(e) => setSpeedLimitKb(parseInt(e.target.value) || 0)}
-                      className="w-32 px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px] font-mono"
+                      type="text"
+                      value={appSettings.cookiesFile}
+                      onChange={(e) =>
+                        setAppSettings((p) => ({ ...p, cookiesFile: e.target.value }))
+                      }
+                      placeholder="cookies.txt path..."
+                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12px] font-mono"
                     />
-                    <span className="text-zr-secondary text-[13px]">
-                      KB/s ({(speedLimitKb / 1024).toFixed(1)} MB/s)
-                    </span>
+                    <button
+                      type="button"
+                      onClick={handleBrowseCookiesFile}
+                      className="px-2.5 py-1.5 rounded-lg border border-zr bg-zr-surface text-[12px] font-semibold text-zr-secondary hover:text-zr-primary"
+                    >
+                      File
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Per-Site HTTP Basic Auth Credentials */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
+                <div className="font-semibold text-[13px] text-zr-primary">
+                  Per-Site Basic Auth Credentials
+                </div>
+                <div className="grid grid-cols-12 gap-2">
+                  <input
+                    type="text"
+                    value={newCredDomain}
+                    onChange={(e) => setNewCredDomain(e.target.value)}
+                    placeholder="domain.com"
+                    className="col-span-4 px-2.5 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12px]"
+                  />
+                  <input
+                    type="text"
+                    value={newCredUser}
+                    onChange={(e) => setNewCredUser(e.target.value)}
+                    placeholder="Username"
+                    className="col-span-3 px-2.5 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12px]"
+                  />
+                  <input
+                    type="password"
+                    value={newCredPass}
+                    onChange={(e) => setNewCredPass(e.target.value)}
+                    placeholder="Password"
+                    className="col-span-3 px-2.5 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!newCredDomain.trim() || !newCredUser.trim()) return;
+                      setAppSettings((p) => ({
+                        ...p,
+                        siteCredentials: [
+                          ...p.siteCredentials,
+                          {
+                            id: `${Date.now()}`,
+                            domain: newCredDomain.trim(),
+                            username: newCredUser.trim(),
+                            password: newCredPass,
+                          },
+                        ],
+                      }));
+                      setNewCredDomain("");
+                      setNewCredUser("");
+                      setNewCredPass("");
+                    }}
+                    className="col-span-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-[12px] font-semibold flex items-center justify-center space-x-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
+                {appSettings.siteCredentials.length > 0 && (
+                  <div className="space-y-1 max-h-28 overflow-y-auto pt-1">
+                    {appSettings.siteCredentials.map((cred) => (
+                      <div
+                        key={cred.id}
+                        className="flex items-center justify-between px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-[12px]"
+                      >
+                        <span className="font-mono text-zr-primary">
+                          {cred.domain} — <b>{cred.username}</b>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAppSettings((p) => ({
+                              ...p,
+                              siteCredentials: p.siteCredentials.filter((c) => c.id !== cred.id),
+                            }))
+                          }
+                          className="text-red-500 hover:text-red-600"
+                          title="Remove credential"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -655,12 +1375,19 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end px-6 py-3.5 border-t border-zr bg-zr-tableHead">
+        <div className="flex items-center justify-end space-x-2 px-6 py-3.5 border-t border-zr bg-zr-tableHead">
           <button
             onClick={onClose}
-            className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[13px] shadow-xs transition-colors"
+            className="px-4 py-2 rounded-lg border border-zr bg-zr-surface text-zr-secondary hover:text-zr-primary font-semibold text-[13px]"
           >
-            Save & Close
+            Cancel
+          </button>
+          <button
+            onClick={handleSaveAndClose}
+            disabled={savingSettings}
+            className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[13px] shadow-xs transition-colors disabled:opacity-60"
+          >
+            {savingSettings ? "Saving..." : "Save & Close"}
           </button>
         </div>
       </div>
