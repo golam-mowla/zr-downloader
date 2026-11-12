@@ -35,6 +35,7 @@ interface DownloadTableViewProps {
   tasks: DownloadTask[];
   selectedTaskId: string | null;
   onSelectTask: (id: string) => void;
+  onContextMenuTask?: (e: React.MouseEvent, id: string) => void;
   onPause: (id: string) => void;
   onResume: (id: string) => void;
   onDelete: (id: string) => void;
@@ -50,6 +51,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
   tasks,
   selectedTaskId,
   onSelectTask,
+  onContextMenuTask,
   onPause,
   onResume,
   onDelete,
@@ -219,6 +221,11 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                       setDragOverTaskId(null);
                     }}
                     onClick={() => onSelectTask(task.id)}
+                    onContextMenu={(e) => {
+                      if (!onContextMenuTask) return;
+                      e.preventDefault();
+                      onContextMenuTask(e, task.id);
+                    }}
                     className={`group min-h-[56px] cursor-pointer transition-colors ${
                       dragOverTaskId === task.id
                         ? "border-t-2 border-blue-500 bg-blue-50/40 dark:bg-blue-950/30"

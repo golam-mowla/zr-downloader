@@ -19,7 +19,8 @@ import { AddDownloadModal, DirectDownloadExtras } from "./components/AddDownload
 import { PreferencesModal } from "./components/PreferencesModal";
 import { DownloadStatusDialog } from "./components/DownloadStatusDialog";
 import { TorrentDetailsDrawer } from "./components/TorrentDetailsDrawer";
-import { DownloadTask, AppSettings } from "./types";
+import { ContextMenu } from "./components/ContextMenu";
+import { DownloadTask, AppSettings, getIsResumable } from "./types";
 import { extractUrlsFromText } from "./lib/batchUrls";
 
 function cleanDownloadUrl(url: string): string {
@@ -86,8 +87,11 @@ export const App: React.FC = () => {
   const [activePopupTaskIds, setActivePopupTaskIds] = useState<string[]>([]);
   const [deleteConfirmTask, setDeleteConfirmTask] = useState<DownloadTask | null>(null);
   const [isDeletingTask, setIsDeletingTask] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
   const tasksRef = useRef<DownloadTask[]>([]);
   tasksRef.current = tasks;
+  // IDs the user just deleted: a late progress event must not resurrect them in the list.
+  const deletedIdsRef = useRef<Set<string>>(new Set());
   const notifiedRef = useRef<Set<string>>(new Set());
   const recentOpenUrlsRef = useRef<Map<string, number>>(new Map());
 
@@ -185,7 +189,7 @@ export const App: React.FC = () => {
           status: task.status || "downloading",
           category: task.category || "video",
           chunk_count: task.chunk_count || 1,
-          is_resumable: true,
+          is_resumable: getIsResumable(task),
           low_disk_space: Boolean(task.low_disk_space || task.lowDiskSpace),
         },
         title: `${task.percent?.toFixed(1) || 0}% of ${task.filename || 'Downloading...'}`,
@@ -323,7 +327,7 @@ export const App: React.FC = () => {
               speedHistory: newHistory,
             };
             changed = true;
-          } else {
+          } else if (!deletedIdsRef.current.has(updated.id)) {
             next.unshift({
               ...updated,
               downloaded_bytes: downloadedBytes,
@@ -657,6 +661,7 @@ export const App: React.FC = () => {
     };
 
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       unlistenProgress.then((f) => f()).catch(() => {});
       // unlistenZrProgress removed
       unlistenComplete.then((f) => f()).catch(() => {});
@@ -909,6 +914,7 @@ export const App: React.FC = () => {
       }
     }
     const shouldDeleteFile = Boolean(deleteFile);
+    deletedIdsRef.current.add(id);
     try {
       const task = tasks.find((t) => t.id === id);
       if (task && isTorrentTask(task, id)) {
@@ -925,22 +931,40 @@ export const App: React.FC = () => {
       if (selectedTaskId === id) setSelectedTaskId(null);
       if (selectedTorrentId === id) setSelectedTorrentId(null);
     } catch (err) {
+      deletedIdsRef.current.delete(id);
       console.error("Delete failed:", err);
     }
   };
 
   const handleStopAll = async () => {
-    tasks.forEach((t) => {
-      if (t.status === "downloading") {
-        if (isMediaTask(t, t.id)) {
-          invoke("cancel_download", { taskId: t.id }).catch(() => {});
-        } else {
-          invoke("pause_http_download", { taskId: t.id }).catch(() => {});
+    const current = tasksRef.current;
+    // One backend call pauses everything atomically. Pausing tasks one by one lets the queue
+    // promote the next waiting download into every slot that frees up, so "Stop All" never
+    // actually stopped anything while the queue was non-empty.
+    try {
+      await invoke("pause_all_downloads_cmd");
+    } catch (err) {
+      console.warn("pause_all_downloads_cmd failed, pausing one by one:", err);
+      current.forEach((t) => {
+        if (t.status === "downloading" && !isTorrentTask(t, t.id)) {
+          if (isMediaTask(t, t.id)) {
+            invoke("cancel_download", { taskId: t.id }).catch(() => {});
+          } else {
+            invoke("pause_http_download", { taskId: t.id }).catch(() => {});
+          }
         }
+      });
+    }
+    // Torrents are managed by their own engine.
+    current.forEach((t) => {
+      if (t.status === "downloading" && isTorrentTask(t, t.id)) {
+        invoke("pause_torrent", { idOrHash: t.id }).catch(() => {});
       }
     });
     setTasks((prev) =>
-      prev.map((t) => (t.status === "downloading" ? { ...t, status: "paused" } : t))
+      prev.map((t) =>
+        t.status === "downloading" || t.status === "queued" ? { ...t, status: "paused" } : t
+      )
     );
   };
 
@@ -948,6 +972,7 @@ export const App: React.FC = () => {
     const completedTasks = tasks.filter(
       (t) => t.status === "completed" || t.status === "completed_with_warning"
     );
+    completedTasks.forEach((t) => deletedIdsRef.current.add(t.id));
     await Promise.all(
       completedTasks.map((t) => {
         if (isTorrentTask(t, t.id)) {
@@ -1474,6 +1499,92 @@ export const App: React.FC = () => {
   }, []);
 
   // Category counts
+  const handleCopyLink = async (url: string) => {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch (err) {
+      // Clipboard API can be blocked in some webviews; fall back to a hidden textarea.
+      console.warn("Clipboard API failed, using fallback:", err);
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand("copy");
+      } catch {}
+      document.body.removeChild(ta);
+    }
+  };
+
+  // Retry every failed download one after another (avoids hammering servers all at once).
+  const handleRetryFailed = async () => {
+    const failed = tasksRef.current.filter((t) => t.status === "error");
+    for (const t of failed) {
+      await handleResume(t.id);
+    }
+  };
+
+  // Keyboard shortcuts. The listener is attached once; it reads fresh state/handlers via a ref.
+  const shortcutCtxRef = useRef<any>(null);
+  shortcutCtxRef.current = {
+    blocked: isAddModalOpen || isSettingsOpen || Boolean(deleteConfirmTask),
+    task: tasks.find((t) => t.id === selectedTaskId) || null,
+    onDelete: handleDelete,
+    onPause: handlePause,
+    onResume: handleResume,
+    onOpenFile: handleOpenFile,
+  };
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const ctx = shortcutCtxRef.current;
+      if (!ctx || ctx.blocked || e.isComposing) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el?.isContentEditable) return;
+      const isInteractive = tag === "BUTTON" || tag === "A";
+
+      // Ctrl/Cmd + N -> add download
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+        e.preventDefault();
+        setModalInitialUrl("");
+        setModalInitialFilename("");
+        setModalBatchText("");
+        setIsAddModalOpen(true);
+        return;
+      }
+
+      const task: DownloadTask | null = ctx.task;
+      if (!task || e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === "Delete") {
+        e.preventDefault();
+        ctx.onDelete(task.id);
+      } else if (e.key === " " && !isInteractive) {
+        e.preventDefault();
+        if (task.status === "downloading") {
+          ctx.onPause(task.id);
+        } else if (
+          task.status === "paused" ||
+          task.status === "interrupted" ||
+          task.status === "queued" ||
+          task.status === "error"
+        ) {
+          ctx.onResume(task.id);
+        }
+      } else if (e.key === "Enter" && !isInteractive) {
+        if (task.status === "completed" || task.status === "completed_with_warning") {
+          e.preventDefault();
+          ctx.onOpenFile(task.save_path || task.savePath || "");
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const categoryCounts = useMemo(() => {
     const counts: Record<CategoryType, number> = {
       all: tasks.length,
@@ -1608,6 +1719,8 @@ export const App: React.FC = () => {
           }}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenDefaultFolder={handleOpenDefaultFolder}
+          onRetryFailed={handleRetryFailed}
+          failedCount={statusCounts.error}
           hasSelected={Boolean(selectedTaskId)}
           hasActive={activeCount > 0}
           hasCompleted={statusCounts.completed > 0}
@@ -1720,6 +1833,10 @@ export const App: React.FC = () => {
                     openDownloadPopup(task);
                   }
                 }
+              }}
+              onContextMenuTask={(e, id) => {
+                setSelectedTaskId(id);
+                setContextMenu({ x: e.clientX, y: e.clientY, taskId: id });
               }}
               onPause={handlePause}
               onResume={handleResume}
@@ -1931,6 +2048,27 @@ export const App: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Right-click context menu for download rows */}
+      {contextMenu &&
+        (() => {
+          const menuTask = tasks.find((t) => t.id === contextMenu.taskId);
+          if (!menuTask) return null;
+          return (
+            <ContextMenu
+              x={contextMenu.x}
+              y={contextMenu.y}
+              task={menuTask}
+              onClose={() => setContextMenu(null)}
+              onPause={handlePause}
+              onResume={handleResume}
+              onDelete={(id) => handleDelete(id)}
+              onOpenFile={handleOpenFile}
+              onOpenFolder={handleOpenFolder}
+              onCopyLink={handleCopyLink}
+            />
+          );
+        })()}
 
       {/* 30-second Scheduled Shutdown Cancel Dialog */}
       {shutdownSeconds !== null && (

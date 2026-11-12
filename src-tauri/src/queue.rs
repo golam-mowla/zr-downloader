@@ -167,19 +167,38 @@ pub async fn remove_download(
         tasks.remove(&task_id)
     };
     if let Some(task) = removed {
-        let meta_path = downloader::sparse_meta_path_for(&task.save_path, &task.id);
-        let _ = std::fs::remove_file(meta_path);
-        if let Some(parent) = Path::new(&task.save_path).parent() {
-            let tmp_dir = parent.join(format!(".zr_tmp_{}", task.id));
-            if tmp_dir.exists() {
-                let _ = std::fs::remove_dir_all(tmp_dir);
+        let was_active = matches!(
+            task.status.as_str(),
+            "downloading" | "assembling" | "connecting"
+        );
+        let is_finished = matches!(task.status.as_str(), "completed" | "completed_with_warning");
+        let cleanup = move || {
+            let meta_path = downloader::sparse_meta_path_for(&task.save_path, &task.id);
+            let _ = std::fs::remove_file(meta_path);
+            if let Some(parent) = Path::new(&task.save_path).parent() {
+                let tmp_dir = parent.join(format!(".zr_tmp_{}", task.id));
+                if tmp_dir.exists() {
+                    let _ = std::fs::remove_dir_all(tmp_dir);
+                }
             }
-        }
-        if delete_file {
-            let path = Path::new(&task.save_path);
-            if path.exists() {
-                let _ = std::fs::remove_file(path);
+            // An unfinished low-disk-space download is a full-size pre-allocated file that is
+            // useless on its own, so it is always removed together with the task.
+            if delete_file || (!is_finished && task.low_disk_space) {
+                let path = Path::new(&task.save_path);
+                if path.exists() {
+                    let _ = std::fs::remove_file(path);
+                }
             }
+        };
+        if was_active {
+            // Give the cancelled workers a moment to release their file handles (Windows cannot
+            // delete open files) and let the progress monitor stop writing the resume metadata.
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                cleanup();
+            });
+        } else {
+            cleanup();
         }
     }
     crate::spawn_save_all_tasks(&app);

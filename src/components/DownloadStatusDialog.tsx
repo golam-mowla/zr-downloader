@@ -50,6 +50,11 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
   onBringToFront,
   theme = "dark",
 }) => {
+  const initialOffset = (dialogIndex % 8) * 32;
+  const [pos, setPos] = useState({ x: initialOffset, y: initialOffset });
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef({ mouseX: 0, mouseY: 0, posX: 0, posY: 0 });
+
   if (!isOpen) return null;
 
   const downloaded = getDownloadedBytes(task);
@@ -85,11 +90,6 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
         return "badge-status-queued";
     }
   };
-
-  const initialOffset = (dialogIndex % 8) * 32;
-  const [pos, setPos] = useState({ x: initialOffset, y: initialOffset });
-  const isDraggingRef = useRef(false);
-  const dragStartRef = useRef({ mouseX: 0, mouseY: 0, posX: 0, posY: 0 });
 
   const handleTitleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
