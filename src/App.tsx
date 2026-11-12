@@ -78,6 +78,8 @@ export const App: React.FC = () => {
     return (localStorage.getItem("zr-theme") as "dark" | "light") || "dark";
   });
   const [activePopupTaskIds, setActivePopupTaskIds] = useState<string[]>([]);
+  const [deleteConfirmTask, setDeleteConfirmTask] = useState<DownloadTask | null>(null);
+  const [isDeletingTask, setIsDeletingTask] = useState(false);
   const tasksRef = useRef<DownloadTask[]>([]);
   tasksRef.current = tasks;
   const notifiedRef = useRef<Set<string>>(new Set());
@@ -292,7 +294,9 @@ export const App: React.FC = () => {
       const id = updated?.id || updated?.taskId || updated?.task_id;
       if (!updated || !id) return;
       updated.id = id;
-      if (updated.status === "completed") notifyCompleted(updated);
+      if (updated.status === "completed" || updated.status === "completed_with_warning") {
+        notifyCompleted(updated);
+      }
       pendingUpdates.set(id, { ...(pendingUpdates.get(id) || {}), ...updated });
       if (!rafId) {
         rafId = window.requestAnimationFrame(flushBatch);
@@ -314,7 +318,12 @@ export const App: React.FC = () => {
             ? {
                 ...t,
                 ...completed,
-                status: "completed",
+                status:
+                  completed.status === "completed_with_warning"
+                    ? "completed_with_warning"
+                    : "completed",
+                errorMessage:
+                  completed.error_message || completed.errorMessage || t.errorMessage,
                 total_bytes: completed.total_bytes || t.total_bytes || 0,
                 totalBytes: completed.total_bytes || t.totalBytes || 0,
                 downloaded_bytes: completed.downloaded_bytes || completed.total_bytes || t.downloaded_bytes || 0,
@@ -334,7 +343,31 @@ export const App: React.FC = () => {
       const error = payload.error || "Download error";
       if (id) {
         setTasks((prev) =>
-          prev.map((t) => (t.id === id ? { ...t, status: "error", error, errorMessage: error } : t))
+          prev.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  status: "error",
+                  percent: t.percent >= 100 ? 99 : t.percent,
+                  error,
+                  errorMessage: error,
+                }
+              : t
+          )
+        );
+      }
+    });
+
+    const unlistenLog = listen<any>("download-log", (event) => {
+      const payload = event.payload || {};
+      const msg = payload.message || "";
+      const id = payload.id || payload.taskId;
+      if (msg) {
+        console.info("[ZR Download]", id || "", msg);
+      }
+      if (id && msg) {
+        setTasks((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, progressText: msg } : t))
         );
       }
     });
@@ -569,6 +602,7 @@ export const App: React.FC = () => {
       unlistenComplete.then((f) => f()).catch(() => {});
       unlistenZrComplete.then((f) => f()).catch(() => {});
       unlistenError.then((f) => f()).catch(() => {});
+      unlistenLog.then((f) => f()).catch(() => {});
       unlistenOpenUrl.then((f) => f()).catch(() => {});
       // unlistenZrOpenUrl removed
       delete (window as any).onAndroidSharedUrl;
@@ -806,19 +840,28 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: string, deleteFile?: boolean) => {
+    if (typeof deleteFile !== "boolean") {
+      const task = tasks.find((t) => t.id === id) || null;
+      if (task) {
+        setDeleteConfirmTask(task);
+        return;
+      }
+    }
+    const shouldDeleteFile = Boolean(deleteFile);
     try {
       const task = tasks.find((t) => t.id === id);
       if (task && isTorrentTask(task, id)) {
         try {
-          await invoke("remove_torrent", { idOrHash: task.id, deleteFiles: false });
+          await invoke("remove_torrent", { idOrHash: task.id, deleteFiles: shouldDeleteFile });
         } catch (e) {
           console.warn("remove_torrent error:", e);
         }
       } else {
-        await invoke("remove_http_download", { taskId: id, deleteFile: false });
+        await invoke("remove_http_download", { taskId: id, deleteFile: shouldDeleteFile });
       }
       setTasks((prev) => prev.filter((t) => t.id !== id));
+      setActivePopupTaskIds((prev) => prev.filter((pid) => pid !== id));
       if (selectedTaskId === id) setSelectedTaskId(null);
       if (selectedTorrentId === id) setSelectedTorrentId(null);
     } catch (err) {
@@ -842,11 +885,20 @@ export const App: React.FC = () => {
   };
 
   const handleClearCompleted = async () => {
-    const completedTasks = tasks.filter((t) => t.status === "completed");
-    for (const t of completedTasks) {
-      await invoke("remove_http_download", { taskId: t.id, deleteFile: false }).catch(() => {});
-    }
-    setTasks((prev) => prev.filter((t) => t.status !== "completed"));
+    const completedTasks = tasks.filter(
+      (t) => t.status === "completed" || t.status === "completed_with_warning"
+    );
+    await Promise.all(
+      completedTasks.map((t) => {
+        if (isTorrentTask(t, t.id)) {
+          return invoke("remove_torrent", { idOrHash: t.id, deleteFiles: false }).catch(() => {});
+        }
+        return invoke("remove_http_download", { taskId: t.id, deleteFile: false }).catch(() => {});
+      })
+    );
+    setTasks((prev) =>
+      prev.filter((t) => t.status !== "completed" && t.status !== "completed_with_warning")
+    );
     if (selectedTaskId && completedTasks.some((t) => t.id === selectedTaskId)) {
       setSelectedTaskId(null);
     }
@@ -1273,7 +1325,10 @@ export const App: React.FC = () => {
       error: 0,
     };
     tasks.forEach((t) => {
-      const st = t.status as StatusFilterType;
+      const st =
+        t.status === "completed_with_warning"
+          ? "completed"
+          : (t.status as StatusFilterType);
       if (counts[st] !== undefined) counts[st]++;
     });
     return counts;
@@ -1312,7 +1367,11 @@ export const App: React.FC = () => {
         if (cat !== selectedCategory) return false;
       }
       if (selectedStatus !== "all") {
-        if (t.status !== selectedStatus) return false;
+        if (selectedStatus === "completed") {
+          if (t.status !== "completed" && t.status !== "completed_with_warning") return false;
+        } else if (t.status !== selectedStatus) {
+          return false;
+        }
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
@@ -1569,6 +1628,76 @@ export const App: React.FC = () => {
         onChangeDefaultDir={setDefaultDir}
         theme={theme}
       />
+
+      {/* Delete Task Confirmation Dialog */}
+      {deleteConfirmTask && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-[1px] p-4"
+          onClick={() => {
+            if (!isDeletingTask) setDeleteConfirmTask(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-zr bg-zr-surface shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-zr-primary">Delete Download</h3>
+              <p className="text-xs text-zr-secondary break-all">
+                Choose how to remove{" "}
+                <span className="font-semibold text-zr-primary">
+                  {deleteConfirmTask.filename || deleteConfirmTask.url}
+                </span>
+                :
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingTask}
+                onClick={() => setDeleteConfirmTask(null)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-zr text-zr-secondary hover:text-zr-primary hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingTask}
+                onClick={async () => {
+                  const id = deleteConfirmTask.id;
+                  setIsDeletingTask(true);
+                  try {
+                    await handleDelete(id, false);
+                    setDeleteConfirmTask(null);
+                  } finally {
+                    setIsDeletingTask(false);
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-zr bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-zr-primary transition-colors disabled:opacity-50"
+              >
+                Remove from list
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingTask}
+                onClick={async () => {
+                  const id = deleteConfirmTask.id;
+                  setIsDeletingTask(true);
+                  try {
+                    await handleDelete(id, true);
+                    setDeleteConfirmTask(null);
+                  } finally {
+                    setIsDeletingTask(false);
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50"
+              >
+                Delete file too
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

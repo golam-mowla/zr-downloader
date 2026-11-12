@@ -55,11 +55,14 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
   const chunkCount = getChunkCount(task);
   const isDownloading = task.status === "downloading";
   const isPaused = task.status === "paused";
+  const isWarning = task.status === "completed_with_warning";
   const isCompleted = task.status === "completed";
-  const isError = task.status === "error";
+  const isError = task.status === "error" && !isWarning;
+  const isFileReady = isCompleted || isWarning;
 
   const percent = task.percent > 0 ? task.percent : total > 0 ? (downloaded / total) * 100 : 0;
-  const clampedPercent = Math.min(100, Math.max(0, percent));
+  const rawClamped = Math.min(100, Math.max(0, percent));
+  const clampedPercent = isError && rawClamped >= 100 ? 99 : rawClamped;
 
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
@@ -67,6 +70,8 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
         return "badge-status-downloading";
       case "completed":
         return "badge-status-completed";
+      case "completed_with_warning":
+        return "badge-status-warning";
       case "paused":
         return "badge-status-paused";
       case "error":
@@ -140,7 +145,9 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
               <Zap className="w-3.5 h-3.5 text-emerald-500 fill-emerald-500/20" />
             </div>
             <span className="font-semibold text-[13px] text-zr-primary truncate">
-              {isCompleted
+              {isWarning
+                ? `Downloaded with Warning - ${task.filename}`
+                : isCompleted
                 ? `Download Complete - ${task.filename}`
                 : isError
                 ? `Download Error - ${task.filename}`
@@ -195,14 +202,25 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
 
           {/* Metrics Grid */}
           <div className="grid grid-cols-2 gap-2.5 p-3 rounded-lg border border-zr bg-slate-50 dark:bg-slate-900/40">
-            {/* Error Message Banner */}
-            {isError && (task.errorMessage || (task as any).error) && (
-              <div className="col-span-2 p-2.5 rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50">
-                <p className="text-[12px] font-medium text-red-700 dark:text-red-400 break-words leading-relaxed">
-                  <span className="font-bold">Error: </span>
-                  {task.errorMessage || (task as any).error}
+            {/* Warning / Error Message Banner */}
+            {isWarning ? (
+              <div className="col-span-2 p-2.5 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/60">
+                <p className="text-[12px] font-medium text-amber-700 dark:text-amber-300 break-words leading-relaxed">
+                  {task.errorMessage ||
+                    (task as any).error_message ||
+                    "Downloaded, but conversion failed — file kept"}
                 </p>
               </div>
+            ) : (
+              isError &&
+              (task.errorMessage || (task as any).error) && (
+                <div className="col-span-2 p-2.5 rounded-md bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50">
+                  <p className="text-[12px] font-medium text-red-700 dark:text-red-400 break-words leading-relaxed">
+                    <span className="font-bold">Error: </span>
+                    {task.errorMessage || (task as any).error}
+                  </p>
+                </div>
+              )
             )}
 
             {/* Status */}
@@ -215,7 +233,9 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
                   task.status
                 )}`}
               >
-                {task.status}
+                {isWarning
+                  ? "Downloaded, but conversion failed — file kept"
+                  : task.status}
               </span>
             </div>
 
@@ -278,7 +298,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
               <span className="font-semibold tabular-nums text-zr-secondary text-[13px]">
                 {isDownloading
                   ? task.eta_formatted || "Calculating..."
-                  : isCompleted
+                  : isFileReady
                   ? "Finished"
                   : "--"}
               </span>
@@ -298,6 +318,8 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
                 className={`h-full rounded-full transition-all duration-200 ${
                   isCompleted
                     ? "bg-emerald-600 dark:bg-emerald-500"
+                    : isWarning
+                    ? "bg-amber-600 dark:bg-amber-500"
                     : isError
                     ? "bg-red-600 dark:bg-red-500"
                     : isPaused
@@ -319,7 +341,9 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
             </div>
             <div className="grid grid-cols-8 sm:grid-cols-16 gap-1">
               {Array.from({ length: Math.max(1, chunkCount) }).map((_, i) => {
-                const chunkPercent = isCompleted ? 100 : Math.min(100, Math.max(0, clampedPercent + (i % 3) * 5));
+                const chunkPercent = isFileReady
+                  ? 100
+                  : Math.min(100, Math.max(0, clampedPercent + (i % 3) * 5));
                 return (
                   <div
                     key={i}
@@ -330,6 +354,8 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
                       className={`h-full transition-all duration-200 ${
                         isCompleted
                           ? "bg-emerald-600 dark:bg-emerald-500"
+                          : isWarning
+                          ? "bg-amber-600 dark:bg-amber-500"
                           : isError
                           ? "bg-red-600 dark:bg-red-500"
                           : isPaused
@@ -367,7 +393,7 @@ export const DownloadStatusDialog: React.FC<DownloadStatusDialogProps> = ({
                 </button>
               )}
 
-              {isCompleted ? (
+              {isFileReady ? (
                 <>
                   <button
                     onClick={() => {

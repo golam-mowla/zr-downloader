@@ -15,6 +15,7 @@ export type TaskStatus =
   | "paused"
   | "interrupted"
   | "completed"
+  | "completed_with_warning"
   | "error"
   | "cancelled";
 

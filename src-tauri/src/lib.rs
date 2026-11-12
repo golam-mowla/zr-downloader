@@ -58,7 +58,8 @@ fn write_persisted_tasks_if_changed(app: &AppHandle, snapshot: &[PersistedTask])
     };
     let cache = LAST_SAVED_TASKS_JSON.get_or_init(|| Mutex::new(String::new()));
     if let Ok(mut prev) = cache.lock() {
-        if *prev == json && target.exists() {
+        // Always write atomically when empty so deleted tasks never stay in tasks.json.
+        if !snapshot.is_empty() && *prev == json && target.exists() {
             return;
         }
         if let Some(parent) = target.parent() {
@@ -395,13 +396,11 @@ async fn remove_http_download(
     }
     if delete_file.unwrap_or(false) {
         if let Some(ref mt) = removed_media {
-            let p = Path::new(&mt.save_path);
-            if p.exists() && p.is_file() {
-                let _ = std::fs::remove_file(p);
-            }
+            media::delete_task_files_and_partials(&mt.save_path, &mt.filename);
         }
     }
-    let res = queue::remove_download(app.clone(), state.inner().clone(), task_id, delete_file.unwrap_or(false)).await;
+    let res = queue::remove_download(app.clone(), state.inner().clone(), task_id.clone(), delete_file.unwrap_or(false)).await;
+    media::forget_task(&download_state, &task_id);
     save_all_tasks(&app).await;
     res
 }

@@ -110,6 +110,8 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
         return "badge-status-downloading";
       case "completed":
         return "badge-status-completed";
+      case "completed_with_warning":
+        return "badge-status-warning";
       case "paused":
         return "badge-status-paused";
       case "error":
@@ -166,9 +168,11 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
               const isSelected = selectedTaskId === task.id;
               const isExpanded = expandedId === task.id;
               const isDownloading = task.status === "downloading";
+              const isWarning = task.status === "completed_with_warning";
               const isCompleted = task.status === "completed";
               const isPaused = task.status === "paused";
-              const isError = task.status === "error";
+              const isError = task.status === "error" && !isWarning;
+              const isFileReady = isCompleted || isWarning;
 
               return (
                 <React.Fragment key={task.id}>
@@ -196,7 +200,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                             className="truncate text-[13px] font-semibold text-zr-primary hover:underline block"
                             title={task.filename}
                             onDoubleClick={() => {
-                              if (!isCompleted) return;
+                              if (!isFileReady) return;
                               const folder = task.save_path || task.savePath || "";
                               const fn = task.filename || "";
                               const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
@@ -261,7 +265,9 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                     <td className="py-2.5 px-3 border-b border-zr">
                       <div className="space-y-1">
                         <div className="flex justify-between items-center text-[12px] font-semibold tabular-nums">
-                          <span className="text-zr-primary">{task.percent.toFixed(1)}%</span>
+                          <span className="text-zr-primary">
+                            {(isError && task.percent >= 100 ? 99 : task.percent).toFixed(1)}%
+                          </span>
                           {getChunkCount(task) > 1 && (
                             <span className="text-zr-accent text-[11px] font-medium hidden sm:inline">
                               {getChunkCount(task)} Chunks
@@ -274,13 +280,20 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                             className={`h-full rounded-full transition-all duration-200 ${
                               isCompleted
                                 ? "bg-emerald-600 dark:bg-emerald-500"
+                                : isWarning
+                                ? "bg-amber-600 dark:bg-amber-500"
                                 : isError
                                 ? "bg-red-600 dark:bg-red-500"
                                 : isPaused
                                 ? "bg-amber-600 dark:bg-amber-500"
                                 : "bg-blue-600 dark:bg-blue-400"
                             }`}
-                            style={{ width: `${Math.min(100, Math.max(0, task.percent))}%` }}
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.max(0, isError && task.percent >= 100 ? 99 : task.percent)
+                              )}%`,
+                            }}
                           />
                         </div>
                         {/* Responsive inline speed and ETA when columns are hidden (<900px or <1000px) */}
@@ -300,7 +313,9 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                           task.status
                         )}`}
                       >
-                        {task.status}
+                        {isWarning
+                          ? "Downloaded, but conversion failed — file kept"
+                          : task.status}
                       </span>
                     </td>
 
@@ -363,7 +378,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                           </button>
                         )}
 
-                        {isCompleted && (
+                        {isFileReady && (
                           <button
                             onClick={() => {
                               const folder = task.save_path || task.savePath || "";

@@ -73,6 +73,8 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
         return "badge-status-downloading";
       case "completed":
         return "badge-status-completed";
+      case "completed_with_warning":
+        return "badge-status-warning";
       case "paused":
         return "badge-status-paused";
       case "error":
@@ -86,8 +88,10 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
 
   const isDownloading = task.status === "downloading";
   const isPaused = task.status === "paused";
+  const isWarning = task.status === "completed_with_warning";
   const isCompleted = task.status === "completed";
-  const isError = task.status === "error";
+  const isError = task.status === "error" && !isWarning;
+  const isFileReady = isCompleted || isWarning;
 
   const downloaded = getDownloadedBytes(task);
   const total = getTotalBytes(task);
@@ -110,7 +114,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
                 className="font-semibold text-[14px] text-zr-primary truncate cursor-pointer hover:underline"
                 title={task.filename}
                 onClick={() => {
-                  if (!isCompleted) return;
+                  if (!isFileReady) return;
                   const folder = task.save_path || task.savePath || "";
                   const fn = task.filename || "";
                   const full = folder ? `${folder.replace(/[/\\]+$/, "")}\\${fn}` : fn;
@@ -124,7 +128,9 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
                   task.status
                 )}`}
               >
-                {task.status}
+                {isWarning
+                  ? "Downloaded, but conversion failed — file kept"
+                  : task.status}
               </span>
               {chunkCount > 1 && (
                 <span className="text-[12px] font-semibold text-zr-accent bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-900/60">
@@ -170,7 +176,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
             </button>
           )}
 
-          {isCompleted && (
+          {isFileReady && (
             <button
               onClick={() => {
                 const folder = task.save_path || task.savePath || "";
@@ -195,7 +201,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
             <FolderOpen className="w-[18px] h-[18px]" />
           </button>
 
-          {!isCompleted && (
+          {!isFileReady && (
             <button
               onClick={() => onCancel(task.id)}
               className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -206,7 +212,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
             </button>
           )}
 
-          {isCompleted && (
+          {isFileReady && (
             <button
               onClick={() => onDelete(task.id)}
               className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-red-700 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
@@ -226,6 +232,8 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
             className={`h-full rounded-full transition-all duration-200 ${
               isCompleted
                 ? "bg-emerald-600 dark:bg-emerald-500"
+                : isWarning
+                ? "bg-amber-600 dark:bg-amber-500"
                 : isError
                 ? "bg-red-600 dark:bg-red-500"
                 : isPaused
@@ -239,7 +247,9 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
         {/* Progress Metrics Row: sans + tabular-nums 13px */}
         <div className="flex items-center justify-between text-[13px] tabular-nums font-sans">
           <div className="flex items-center space-x-2 text-zr-secondary">
-            <span className="font-semibold text-zr-primary">{task.percent.toFixed(1)}%</span>
+            <span className="font-semibold text-zr-primary">
+              {(isError && task.percent >= 100 ? 99 : task.percent).toFixed(1)}%
+            </span>
             <span>&bull;</span>
             <span>
               {formatBytes(downloaded)} / {total > 0 ? formatBytes(total) : "Unknown"}
@@ -254,7 +264,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
               </div>
             )}
             <div className="text-zr-secondary">
-              {isDownloading ? getEtaFormatted(task) : isCompleted ? "Complete" : "--"}
+              {isDownloading ? getEtaFormatted(task) : isFileReady ? "Complete" : "--"}
             </div>
             {task.speedHistory && task.speedHistory.length > 0 && (
               <button
