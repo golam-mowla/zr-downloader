@@ -323,6 +323,53 @@ fn apply_auth_header(
     }
 }
 
+/// Makes a server- or user-supplied file name safe to create on the local file system.
+/// Windows rules are the strictest, so they are applied everywhere: invalid characters,
+/// control characters, trailing dots/spaces, reserved device names and over-long names.
+pub fn sanitize_filename(name: &str) -> String {
+    let replaced: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c if (c as u32) < 32 => '_',
+            c => c,
+        })
+        .collect();
+
+    let mut out = replaced
+        .trim()
+        .trim_end_matches(|c: char| c == '.' || c == ' ')
+        .to_string();
+
+    if out.is_empty() || out.chars().all(|c| c == '.') {
+        return "download.bin".to_string();
+    }
+
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem_upper = out.split('.').next().unwrap_or("").to_uppercase();
+    if RESERVED.contains(&stem_upper.as_str()) {
+        out = format!("_{}", out);
+    }
+
+    const MAX_NAME_CHARS: usize = 200;
+    if out.chars().count() > MAX_NAME_CHARS {
+        let ext: String = Path::new(&out)
+            .extension()
+            .and_then(|e| e.to_str())
+            .filter(|e| e.chars().count() <= 10)
+            .map(|e| format!(".{}", e))
+            .unwrap_or_default();
+        let keep = MAX_NAME_CHARS - ext.chars().count();
+        let stem: String = out.chars().take(keep).collect();
+        out = format!("{}{}", stem, ext);
+    }
+
+    out
+}
+
 pub async fn probe_url(client: &reqwest::Client, url: &str) -> Result<UrlMetadata, String> {
     probe_url_with_auth(client, url, None).await
 }
@@ -397,6 +444,13 @@ pub async fn probe_url_with_auth(
             }
         }
     };
+
+    // The Range / HEAD attempts above only accept successful responses, but the final
+    // plain-GET fallback returns whatever the server sent. Without this check a 404/403/500
+    // error page was treated as a valid downloadable file.
+    if !resp.status().is_success() {
+        return Err(format!("Server returned HTTP {}", resp.status()));
+    }
 
     let headers = resp.headers();
 
@@ -1648,6 +1702,20 @@ pub async fn execute_multithreaded_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_filename_strips_invalid_and_reserved_names() {
+        assert_eq!(sanitize_filename("a:b*c?.zip"), "a_b_c_.zip");
+        assert_eq!(sanitize_filename(".."), "download.bin");
+        assert_eq!(sanitize_filename("   "), "download.bin");
+        assert_eq!(sanitize_filename("report. "), "report");
+        assert_eq!(sanitize_filename("con.txt"), "_con.txt");
+        assert_eq!(sanitize_filename("normal file (1).pdf"), "normal file (1).pdf");
+        let long = format!("{}.zip", "x".repeat(400));
+        let cleaned = sanitize_filename(&long);
+        assert_eq!(cleaned.chars().count(), 200);
+        assert!(cleaned.ends_with(".zip"));
+    }
 
     #[test]
     fn splits_32_connections_cover_full_range_without_gaps_or_overlaps() {

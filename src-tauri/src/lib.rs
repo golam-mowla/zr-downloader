@@ -225,16 +225,32 @@ async fn start_http_download(
         site_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str()))
     };
 
-    let meta = downloader::probe_url_with_auth(&client, &url, auth_ref)
-        .await
-        .unwrap_or(UrlMetadata {
-            url: url.clone(),
-            filename: "download.bin".to_string(),
-            total_size: None,
-            supports_ranges: false,
-            content_type: None,
-            category: "docs".to_string(),
-        });
+    let has_origin_page = origin_page_url
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let meta = match downloader::probe_url_with_auth(&client, &url, auth_ref).await {
+        Ok(m) => m,
+        Err(e) => {
+            // A definite "gone / not found / unauthorized" answer means there is nothing to
+            // download, so tell the user instead of queueing a task that can only fail.
+            // Network hiccups and temporary errors still fall through and retry in the engine.
+            // Links that can be refreshed from their origin page are always kept.
+            if !has_origin_page
+                && (e.contains("HTTP 404") || e.contains("HTTP 410") || e.contains("HTTP 401"))
+            {
+                return Err(e);
+            }
+            UrlMetadata {
+                url: url.clone(),
+                filename: "download.bin".to_string(),
+                total_size: None,
+                supports_ranges: false,
+                content_type: None,
+                category: "docs".to_string(),
+            }
+        }
+    };
 
     let mut resolved_name = filename
         .filter(|n| !n.trim().is_empty())
@@ -249,6 +265,7 @@ async fn start_http_download(
     if let Some(pos) = resolved_name.rfind(|c| c == '/' || c == '\\') {
         resolved_name = resolved_name[pos + 1..].to_string();
     }
+    resolved_name = downloader::sanitize_filename(&resolved_name);
     if !resolved_name.contains('.') {
         let ext = if let Some(pos) = meta.filename.rfind('.') {
             &meta.filename[pos..]
@@ -263,7 +280,7 @@ async fn start_http_download(
                 ".bin"
             }
         } else {
-            ".mp4"
+            ".bin"
         };
         resolved_name = format!("{}{}", resolved_name, ext);
     }

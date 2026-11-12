@@ -10,6 +10,7 @@ import {
   Sparkles,
   FolderOpen,
   Gauge,
+  RotateCcw,
 } from "lucide-react";
 
 interface ToolbarProps {
@@ -25,6 +26,8 @@ interface ToolbarProps {
   speedLimitEnabled?: boolean;
   speedLimitLabel?: string;
   onToggleSpeedLimit?: () => void;
+  onRetryFailed?: () => void;
+  failedCount?: number;
   hasSelected: boolean;
   hasActive: boolean;
   hasCompleted: boolean;
@@ -44,6 +47,8 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   speedLimitEnabled = false,
   speedLimitLabel = "5 MB/s",
   onToggleSpeedLimit,
+  onRetryFailed,
+  failedCount = 0,
   hasSelected,
   hasActive,
   hasCompleted,
@@ -105,6 +110,18 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Trash2 className="w-[18px] h-[18px]" />
           <span className="hidden md:inline">Delete</span>
         </button>
+
+        {/* Retry all failed downloads */}
+        {onRetryFailed && failedCount > 0 && (
+          <button
+            onClick={onRetryFailed}
+            className="flex items-center space-x-1 sm:space-x-1.5 min-h-[32px] px-2 sm:px-3 py-1.5 rounded-lg text-[13px] font-semibold border border-blue-300 dark:border-blue-900/60 bg-blue-50 dark:bg-blue-950/30 hover:bg-blue-100 dark:hover:bg-blue-950/50 text-blue-700 dark:text-blue-400 transition-colors"
+            title={`Retry all ${failedCount} failed download${failedCount === 1 ? "" : "s"}`}
+          >
+            <RotateCcw className="w-[18px] h-[18px]" />
+            <span className="hidden lg:inline">Retry Failed ({failedCount})</span>
+          </button>
+        )}
 
         {/* Clear Completed */}
         <button

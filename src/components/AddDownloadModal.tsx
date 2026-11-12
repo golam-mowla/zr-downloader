@@ -255,6 +255,16 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     return () => window.clearTimeout(timer);
   }, [url, isOpen]);
 
+  useEffect(() => {
+    if (isOpen && defaultBatchText) {
+      setBatchText(defaultBatchText);
+      setTab("batch");
+    }
+    if (isOpen) {
+      setDuplicatePrompt(null);
+    }
+  }, [isOpen, defaultBatchText]);
+
   if (!isOpen) return null;
 
   const handlePasteClipboard = async () => {
@@ -310,16 +320,6 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       console.error("Browse torrent file error:", e);
     }
   };
-
-  useEffect(() => {
-    if (isOpen && defaultBatchText) {
-      setBatchText(defaultBatchText);
-      setTab("batch");
-    }
-    if (isOpen) {
-      setDuplicatePrompt(null);
-    }
-  }, [isOpen, defaultBatchText]);
 
   const executeDirectSubmit = async (filenameOverride?: string) => {
     const cleanUrl = url.trim();
