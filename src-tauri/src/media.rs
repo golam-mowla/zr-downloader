@@ -1331,12 +1331,7 @@ pub async fn fetch_media_info_with_app(
 
     let eff_proxy = proxy
         .filter(|p| !p.trim().is_empty())
-        .or_else(|| {
-            saved_settings
-                .as_ref()
-                .map(|s| s.proxy_url.clone())
-                .filter(|p| !p.trim().is_empty())
-        });
+        .or_else(|| saved_settings.as_ref().and_then(|s| s.effective_proxy_url()));
 
     // Run default extractor first (yt-dlp + Deno returns ALL qualities including 1080p & 1080p Premium);
     // never race `android,web` in parallel because `android,web` finishes fast with ONLY 360p (format 18).
@@ -1480,8 +1475,12 @@ pub async fn fetch_media_info_with_app(
 
                     let est_size = if size > 0 {
                         size
-                    } else if tbr > 0 && duration > 0 {
-                        ((tbr * 1000) / 8) * duration
+                    } else if let Some(dur) = duration.filter(|d| *d > 0.0) {
+                        if tbr > 0 {
+                            (((tbr * 1000) / 8) as f64 * dur).round() as u64
+                        } else {
+                            0
+                        }
                     } else {
                         0
                     };
