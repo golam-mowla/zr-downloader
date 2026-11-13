@@ -52,6 +52,12 @@ function normalizeMediaUrl(rawUrl) {
       parsed.searchParams.delete("range");
       changed = true;
     }
+    if (parsed.hostname.includes("stream.kick.com") && parsed.pathname.includes("/ivs/v1/")) {
+      if (parsed.pathname.endsWith("/")) {
+        parsed.pathname += "master.m3u8";
+        changed = true;
+      }
+    }
     return changed ? parsed.toString() : rawUrl;
   } catch (e) {
     return rawUrl;
@@ -457,6 +463,16 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
         }
       } catch {}
     }
+  }
+
+  // Resolve Kick channel page URL or referrer if raw stream.kick.com URL was intercepted
+  if (cleanUrl.includes("stream.kick.com") && effectiveTabId) {
+    try {
+      const tabInfo = await chrome.tabs.get(effectiveTabId);
+      if (tabInfo && tabInfo.url && tabInfo.url.includes("kick.com/") && !tabInfo.url.includes("stream.kick.com")) {
+        if (!referrer) referrer = tabInfo.url;
+      }
+    } catch {}
   }
 
   // Notify tab that request is in progress

@@ -483,10 +483,10 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             () =>
               reject(
                 new Error(
-                  "Stream inspection timed out after 25s. You can click 'Download Media' directly to download with default best quality."
+                  "Stream inspection timed out. You can click 'Download Media' directly to download with default best quality."
                 )
               ),
-            25000
+            16000
           )
         );
         parsed = await Promise.race([fetchPromise, timeoutPromise]);
@@ -542,7 +542,9 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       if (audioStreams.length > 0) setSelectedAudioId(audioStreams[0].id);
     } catch (err: any) {
       if (inspectSeq.current !== seq) return;
-      setErrorMessage("Could not inspect stream. You can still click 'Download Media' directly: " + (err?.message || err?.toString() || "Stream check failed"));
+      const raw = err?.message || (typeof err === "string" ? err : err?.toString()) || "Stream check failed";
+      const cleanMsg = raw.replace(/^yt-dlp fetch failed:\s*/i, "").trim();
+      setErrorMessage(cleanMsg);
     } finally {
       if (inspectSeq.current === seq) {
         setIsFetchingMedia(false);
@@ -741,9 +743,18 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         {/* Form Body */}
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
           {errorMessage && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-900/60 text-red-700 dark:text-red-400 text-[13px] flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
-              <span>{errorMessage}</span>
+            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-900/60 text-red-700 dark:text-red-400 text-[13px] flex items-center justify-between space-x-2">
+              <div className="flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
+                <span>{errorMessage}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setErrorMessage(null)}
+                className="text-xs px-2 py-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/50 shrink-0 font-medium opacity-80 hover:opacity-100"
+              >
+                Dismiss
+              </button>
             </div>
           )}
 
