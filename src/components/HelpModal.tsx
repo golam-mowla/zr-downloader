@@ -133,7 +133,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({
                 Help, Repository &amp; Failure Logs
               </h2>
               <p className="text-[11.5px] text-zr-secondary">
-                ZR Downloader v1.2.33 &bull; by Golam Mowla
+                ZR Downloader v1.2.34 &bull; by Golam Mowla
               </p>
             </div>
           </div>

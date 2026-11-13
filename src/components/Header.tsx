@@ -213,7 +213,7 @@ export const Header: React.FC<HeaderProps> = ({
                 className="w-16 h-16 object-contain mx-auto drop-shadow-md"
               />
               <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                ZR Downloader v1.2.33
+                ZR Downloader v1.2.34
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Created by Golam Mowla &bull; Powered by Multi-Threaded Engine, BitTorrent &amp; yt-dlp

@@ -162,7 +162,14 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             }
           } catch {}
         })();
-        return () => {
+        const handleModalClose = () => {
+    if (url.trim()) {
+      sessionStorage.setItem("zr_last_handled_clipboard", url.trim());
+    }
+    onClose();
+  };
+
+  return () => {
           cancelled = true;
         };
       }
@@ -280,7 +287,14 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       void handleFetchMediaInfo(cleanUrl);
     }, delayMs);
 
-    return () => window.clearTimeout(timer);
+    const handleModalClose = () => {
+    if (url.trim()) {
+      sessionStorage.setItem("zr_last_handled_clipboard", url.trim());
+    }
+    onClose();
+  };
+
+  return () => window.clearTimeout(timer);
   }, [url, isOpen]);
 
   useEffect(() => {
@@ -352,6 +366,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   const executeDirectSubmit = async (filenameOverride?: string) => {
     const cleanUrl = url.trim();
     if (!cleanUrl) return;
+    sessionStorage.setItem("zr_last_handled_clipboard", cleanUrl);
     await onAddDirectDownload(
       cleanUrl,
       saveFolder,
@@ -456,13 +471,25 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           androidBridge.fetchMediaInfo(cleanUrl, callbackId);
         });
       } else {
-        parsed = await invoke("fetch_media_info", {
+        const fetchPromise = invoke("fetch_media_info", {
           url: cleanUrl,
           cookiesBrowser: null,
           cookiesFile: null,
           proxy: null,
           discoveryArgs: null,
         });
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "Stream inspection timed out after 25s. You can click 'Download Media' directly to download with default best quality."
+                )
+              ),
+            25000
+          )
+        );
+        parsed = await Promise.race([fetchPromise, timeoutPromise]);
       }
 
       if (inspectSeq.current !== seq) return;
@@ -529,6 +556,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       cleanUrl = cleanUrl.slice(2, -1).trim();
     }
     if (!cleanUrl) return;
+    sessionStorage.setItem("zr_last_handled_clipboard", cleanUrl);
     const isAudio = container.toLowerCase().includes("audio");
     await onAddMediaDownload({
       url: cleanUrl,
@@ -604,6 +632,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     }
     cleanUrl = cleanUrl.replace(/^["'`[]+|["'`\]]+$/g, "").trim();
     if (!cleanUrl) return;
+    sessionStorage.setItem("zr_last_handled_clipboard", cleanUrl);
     try {
       setSubmitting(true);
       setErrorMessage(null);
@@ -627,6 +656,13 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     }
   };
 
+  const handleModalClose = () => {
+    if (url.trim()) {
+      sessionStorage.setItem("zr_last_handled_clipboard", url.trim());
+    }
+    onClose();
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
       <div className="w-full max-w-xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150 transition-colors">
@@ -646,7 +682,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleModalClose}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
             aria-label="Close"
           >
@@ -867,6 +903,12 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 </button>
               )}
             </div>
+            {tab === "media" && isFetchingMedia && (
+              <div className="flex items-center space-x-2 text-[12px] text-blue-600 dark:text-blue-400 font-medium py-1">
+                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                <span>Extracting available formats &amp; video qualities with yt-dlp...</span>
+              </div>
+            )}
           </div>
           )}
 
@@ -1226,7 +1268,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         <div className="flex items-center justify-end space-x-3 px-5 py-3 border-t border-zr bg-zr-tableHead transition-colors">
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleModalClose}
             className="px-4 py-2 rounded-lg text-[13px] font-semibold text-zr-secondary hover:text-zr-primary hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
           >
             Cancel

@@ -109,12 +109,19 @@ export const App: React.FC = () => {
       const clipUrl = await invoke<string | null>("read_clipboard_link");
       if (!clipUrl) return;
       const trimmed = clipUrl.trim();
-      if (!trimmed || trimmed === lastHandledClipRef.current) return;
+      if (!trimmed) return;
+
+      const storedLast = sessionStorage.getItem("zr_last_handled_clipboard") || "";
+      if (trimmed === lastHandledClipRef.current || trimmed === storedLast) return;
+
       if (tasksRef.current.some((t) => t.url === trimmed)) {
         lastHandledClipRef.current = trimmed;
+        sessionStorage.setItem("zr_last_handled_clipboard", trimmed);
         return;
       }
+
       lastHandledClipRef.current = trimmed;
+      sessionStorage.setItem("zr_last_handled_clipboard", trimmed);
       setModalInitialUrl(trimmed);
       setModalInitialFilename("");
       setModalBatchText("");
@@ -304,12 +311,6 @@ export const App: React.FC = () => {
       } catch {}
     };
     loadInitialData();
-
-    const onWindowFocus = () => {
-      void checkClipboardForAutoInspect();
-    };
-    window.addEventListener("focus", onWindowFocus);
-    return () => window.removeEventListener("focus", onWindowFocus);
   }, []);
 
   // Listen to Tauri backend events with high-performance requestAnimationFrame batching
@@ -1133,6 +1134,11 @@ export const App: React.FC = () => {
         authUsername: extras?.authUsername ?? null,
         authPassword: extras?.authPassword ?? null,
       });
+      if (cleanDirectUrl) {
+        lastHandledClipRef.current = cleanDirectUrl;
+        sessionStorage.setItem("zr_last_handled_clipboard", cleanDirectUrl);
+        setClipboardNoticeUrl((prev) => (prev === cleanDirectUrl ? null : prev));
+      }
       const updated = await invoke<DownloadTask[]>("get_all_downloads");
       setTasks(updated);
       if (taskId) {
@@ -1193,6 +1199,13 @@ export const App: React.FC = () => {
       const isAudio =
         options.downloadMode === "audio" ||
         (options.container && String(options.container).toLowerCase().includes("audio"));
+
+      if (options?.url) {
+        const u = String(options.url).trim();
+        lastHandledClipRef.current = u;
+        sessionStorage.setItem("zr_last_handled_clipboard", u);
+        setClipboardNoticeUrl((prev) => (prev === u ? null : prev));
+      }
 
       let finalFilename = options.customFilename?.trim() || options.title?.trim() || "Online Media";
       if (!/\.[a-zA-Z0-9]{2,5}$/.test(finalFilename)) {
@@ -1393,6 +1406,12 @@ export const App: React.FC = () => {
     sequential: boolean
   ) => {
     try {
+      if (urlOrPath) {
+        const u = String(urlOrPath).trim();
+        lastHandledClipRef.current = u;
+        sessionStorage.setItem("zr_last_handled_clipboard", u);
+        setClipboardNoticeUrl((prev) => (prev === u ? null : prev));
+      }
       const resp: any = await invoke("add_torrent", {
         request: {
           source: urlOrPath,

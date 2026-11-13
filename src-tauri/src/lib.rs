@@ -1833,6 +1833,9 @@ pub fn run() {
             // Start Scheduler Loop (window schedule + when finished actions)
             scheduler::start_scheduler_loop(app.handle().clone());
 
+            // Background tool bootstrap (ensures Deno runtime is ready on fresh Windows 10/11 machines)
+            media::bootstrap_deno_in_background(app.handle().clone());
+
             // Start Clipboard Monitor Loop
             let clip_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
