@@ -1330,7 +1330,28 @@ pub fn canonicalize_inspect_url(raw: &str) -> String {
             }
         }
     }
+    // Normalize raw Kick Amazon IVS stream directory URL to its master playlist so yt-dlp
+    // treats it as an HLS stream instead of trying to fetch an HTML webpage
+    if lower.contains("stream.kick.com") && lower.contains("/ivs/v1/") {
+        if trimmed.ends_with('/') {
+            return format!("{}master.m3u8", trimmed);
+        }
+    }
     trimmed.to_string()
+}
+
+pub fn is_raw_stream_cdn(url: &str) -> bool {
+    let low = url.to_lowercase();
+    low.contains("stream.kick.com")
+        || low.contains("/ivs/")
+        || low.contains(".m3u8")
+        || low.contains(".mpd")
+        || low.contains("googlevideo.com")
+        || low.contains("cdninstagram.com")
+        || low.contains("fbcdn.net")
+        || low.contains("tiktokcdn.com")
+        || low.contains("byteoversea.com")
+        || low.contains("ibyteimg.com")
 }
 
 fn is_cookie_db_error(msg: &str) -> bool {
@@ -1350,17 +1371,19 @@ async fn run_ytdlp_inspect_once(
     proxy: Option<String>,
     discovery_args: Option<String>,
 ) -> Result<std::process::Output, String> {
-    let has_browser_cookie = cookies_browser
-        .as_deref()
-        .map(|b| b != "None" && !b.trim().is_empty())
-        .unwrap_or(false);
+    let is_raw_cdn = is_raw_stream_cdn(&target_url);
+    let has_browser_cookie = !is_raw_cdn
+        && cookies_browser
+            .as_deref()
+            .map(|b| b != "None" && !b.trim().is_empty())
+            .unwrap_or(false);
 
     for attempt_without_browser in [false, true] {
         if attempt_without_browser && !has_browser_cookie {
             break;
         }
         let u = target_url.clone();
-        let cb = if attempt_without_browser {
+        let cb = if attempt_without_browser || is_raw_cdn {
             None
         } else {
             cookies_browser.clone()
@@ -1379,9 +1402,17 @@ async fn run_ytdlp_inspect_once(
                 "--no-write-comments",
                 "--skip-unavailable-fragments",
                 "--socket-timeout",
-                "10",
+                "8",
+                "--retries",
+                "1",
                 "--extractor-retries",
                 "1",
+                "--fragment-retries",
+                "1",
+                "--file-access-retries",
+                "1",
+                "--no-wait-for-video",
+                "--no-live-from-start",
             ]);
 
             if find_exe_in_augmented_path("deno").is_some() || ensure_deno_available().is_some() {
@@ -1424,16 +1455,16 @@ async fn run_ytdlp_inspect_once(
 
             let mut child = cmd.spawn().map_err(|e| format!("Could not launch yt-dlp: {}", e))?;
             let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(22);
+            let timeout = std::time::Duration::from_secs(14);
             loop {
                 match child.try_wait() {
                     Ok(Some(_)) => break,
                     Ok(None) => {
                         if start.elapsed() >= timeout {
                             let _ = child.kill();
-                            return Err("yt-dlp inspect timed out after 22s".to_string());
+                            return Err("Stream inspection timed out (server did not respond in time).".to_string());
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(80));
+                        std::thread::sleep(std::time::Duration::from_millis(60));
                     }
                     Err(e) => return Err(format!("Error waiting for yt-dlp: {}", e)),
                 }
@@ -1454,15 +1485,41 @@ async fn run_ytdlp_inspect_once(
             continue;
         }
 
-        let final_err = if combined.trim().is_empty() {
+        let combined_low = combined.to_lowercase();
+        let friendly_err = if combined_low.contains("the channel is not currently live")
+            || combined_low.contains("stream is offline")
+            || combined_low.contains("offline")
+            || (combined_low.contains("403") && (target_url.contains("kick.com") || target_url.contains("ivs")))
+        {
+            "This live stream is currently offline or has ended (HTTP 403 Forbidden). Please try again when the stream is live.".to_string()
+        } else if combined_low.contains("403") && combined_low.contains("forbidden") {
+            "Access forbidden (HTTP 403). The stream might be offline, restricted, or expired.".to_string()
+        } else if combined_low.contains("404") && combined_low.contains("not found") {
+            "Media stream not found (HTTP 404). The stream or video may have ended or been deleted.".to_string()
+        } else if combined_low.contains("timed out") || combined_low.contains("timeout") {
+            "Stream inspection timed out (server did not respond in time).".to_string()
+        } else if combined.trim().is_empty() {
             "Failed to fetch metadata. Please verify the link or network connection.".to_string()
         } else {
-            combined.trim().to_string()
+            let mut best_line = "";
+            for line in combined.lines().rev() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("ERROR:") {
+                    best_line = trimmed.strip_prefix("ERROR:").unwrap_or(trimmed).trim();
+                    break;
+                }
+            }
+            if !best_line.is_empty() {
+                best_line.to_string()
+            } else {
+                combined.trim().chars().take(250).collect()
+            }
         };
-        return Err(format!("yt-dlp fetch failed: {}", final_err));
+
+        return Err(friendly_err);
     }
 
-    Err("yt-dlp fetch failed".to_string())
+    Err("Failed to inspect stream.".to_string())
 }
 
 #[command]
@@ -2632,6 +2689,8 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 "--newline",
                 "--progress",
                 "--no-playlist",
+                "--no-wait-for-video",
+                "--no-live-from-start",
                 "--socket-timeout",
                 "20",
                 "--extractor-retries",
@@ -2934,7 +2993,8 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
         } else {
             live_settings.cookies_file.clone()
         };
-        if eff_browser != "None" && !eff_browser.trim().is_empty() {
+        let is_raw_cdn = is_raw_stream_cdn(active_url);
+        if !is_raw_cdn && eff_browser != "None" && !eff_browser.trim().is_empty() {
             cmd.args(["--cookies-from-browser", &eff_browser.to_lowercase()]);
         } else if !eff_cookies_file.trim().is_empty() && PathBuf::from(&eff_cookies_file).exists() {
             cmd.args(["--cookies", eff_cookies_file.trim()]);
