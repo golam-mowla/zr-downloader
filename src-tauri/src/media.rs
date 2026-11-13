@@ -687,9 +687,9 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
                 "-L",
                 "--fail",
                 "--connect-timeout",
-                "10",
+                "8",
                 "--max-time",
-                "180",
+                "30",
                 "-o",
                 part_exe.to_string_lossy().as_ref(),
                 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
@@ -704,9 +704,9 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
             }
             let _ = fs::remove_file(&part_exe);
 
-            // 2. Try PowerShell Invoke-WebRequest fallback into .part then rename
+            // 2. Try PowerShell Invoke-WebRequest fallback into .part with -UseBasicParsing (critical for Windows 10)
             let ps_script = format!(
-                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -TimeoutSec 120 -Uri 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe' -OutFile '{}'",
+                "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -TimeoutSec 35 -Uri 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe' -OutFile '{}'",
                 part_exe.display().to_string().replace('\'', "''")
             );
             let mut ps_cmd = Command::new("powershell.exe");
@@ -761,6 +761,17 @@ fn download_ytdlp_with_timeouts() -> Option<PathBuf> {
 
 fn ensure_deno_available() -> Option<PathBuf> {
     find_local_deno()
+}
+
+pub fn bootstrap_deno_in_background(app: AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        if find_local_deno().is_none() {
+            tauri::async_runtime::spawn(async move {
+                let _ = install_engine(app, "deno").await;
+            });
+        }
+    }
 }
 
 fn make_command_from_path(resolved: &str) -> Command {
@@ -1368,7 +1379,7 @@ async fn run_ytdlp_inspect_once(
                 "--no-write-comments",
                 "--skip-unavailable-fragments",
                 "--socket-timeout",
-                "15",
+                "10",
                 "--extractor-retries",
                 "1",
             ]);
@@ -1407,7 +1418,27 @@ async fn run_ytdlp_inspect_once(
             }
 
             cmd.arg(&u);
-            cmd.output().map_err(|e| format!("Could not launch yt-dlp: {}", e))
+            cmd.stdin(Stdio::null());
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+
+            let mut child = cmd.spawn().map_err(|e| format!("Could not launch yt-dlp: {}", e))?;
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(22);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => {
+                        if start.elapsed() >= timeout {
+                            let _ = child.kill();
+                            return Err("yt-dlp inspect timed out after 22s".to_string());
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(80));
+                    }
+                    Err(e) => return Err(format!("Error waiting for yt-dlp: {}", e)),
+                }
+            }
+            child.wait_with_output().map_err(|e| format!("Failed to read yt-dlp output: {}", e))
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))??;
@@ -1543,16 +1574,35 @@ pub async fn fetch_media_info_with_app(
         .filter(|p| !p.trim().is_empty())
         .or_else(|| saved_settings.as_ref().and_then(|s| s.effective_proxy_url()));
 
-    // Run default extractor first (yt-dlp + Deno returns ALL qualities including 1080p & 1080p Premium);
-    // never race `android,web` in parallel because `android,web` finishes fast with ONLY 360p (format 18).
+    // If Deno/Node is available, default extractor returns ALL qualities (including 1080p Premium) in ~2s.
+    // When Deno is missing (e.g. fresh Windows 10 laptop), default web client stalls for ~60s;
+    // so we use android,web first (6s) while triggering Deno download in the background.
     let url_low = clean_url.to_lowercase();
     let is_youtube = url_low.contains("youtube.com") || url_low.contains("youtu.be");
+    let has_js_runtime = find_exe_in_augmented_path("deno").is_some()
+        || ensure_deno_available().is_some()
+        || find_exe_in_augmented_path("node").is_some();
+
+    if is_youtube && !has_js_runtime {
+        if let Some(ref a) = app {
+            bootstrap_deno_in_background(a.clone());
+        }
+    }
+
     let attempts: Vec<Option<&'static str>> = if is_youtube {
-        vec![
-            None,
-            Some("youtube:player_client=tv,web"),
-            Some("youtube:player_client=android,web"),
-        ]
+        if has_js_runtime {
+            vec![
+                None,
+                Some("youtube:player_client=tv,web"),
+                Some("youtube:player_client=android,web"),
+            ]
+        } else {
+            vec![
+                Some("youtube:player_client=android,web"),
+                Some("youtube:player_client=tv,web"),
+                None,
+            ]
+        }
     } else {
         vec![None]
     };
