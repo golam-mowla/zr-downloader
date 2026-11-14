@@ -1393,32 +1393,26 @@ async fn run_ytdlp_inspect_once(
         let da = discovery_args.clone();
 
         let output = tauri::async_runtime::spawn_blocking(move || {
+            // Same lean invocation as GM Downloader: plain --dump-single-json, no hard kill timeout.
+            // yt-dlp's own socket timeout stops dead connections; slow-but-working inspects are allowed to finish.
             let mut cmd = make_command("yt-dlp");
             cmd.args([
                 "--dump-single-json",
                 "--no-playlist",
                 "--no-check-certificates",
-                "--no-warnings",
-                "--no-write-comments",
-                "--skip-unavailable-fragments",
                 "--socket-timeout",
-                "8",
-                "--retries",
-                "1",
-                "--extractor-retries",
-                "1",
-                "--fragment-retries",
-                "1",
-                "--file-access-retries",
-                "1",
-                "--no-wait-for-video",
-                "--no-live-from-start",
+                "20",
             ]);
 
-            if find_exe_in_augmented_path("deno").is_some() || ensure_deno_available().is_some() {
-                cmd.args(["--js-runtimes", "deno"]);
-            } else if find_exe_in_augmented_path("node").is_some() {
-                cmd.args(["--js-runtimes", "node"]);
+            let u_low = u.to_lowercase();
+            let is_yt = u_low.contains("youtube.com") || u_low.contains("youtu.be");
+            if is_yt {
+                cmd.args(["--no-warnings", "--no-write-comments"]);
+                if find_exe_in_augmented_path("deno").is_some() || ensure_deno_available().is_some() {
+                    cmd.args(["--js-runtimes", "deno"]);
+                } else if find_exe_in_augmented_path("node").is_some() {
+                    cmd.args(["--js-runtimes", "node"]);
+                }
             }
 
             if let Some(arg) = extractor_arg {
@@ -1450,26 +1444,9 @@ async fn run_ytdlp_inspect_once(
 
             cmd.arg(&u);
             cmd.stdin(Stdio::null());
-            cmd.stdout(Stdio::piped());
-            cmd.stderr(Stdio::piped());
 
-            let mut child = cmd.spawn().map_err(|e| format!("Could not launch yt-dlp: {}", e))?;
-            let start = std::time::Instant::now();
-            let timeout = std::time::Duration::from_secs(14);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) => {
-                        if start.elapsed() >= timeout {
-                            let _ = child.kill();
-                            return Err("Stream inspection timed out (server did not respond in time).".to_string());
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(60));
-                    }
-                    Err(e) => return Err(format!("Error waiting for yt-dlp: {}", e)),
-                }
-            }
-            child.wait_with_output().map_err(|e| format!("Failed to read yt-dlp output: {}", e))
+            // output() drains stdout/stderr while waiting, so large JSON can no longer deadlock the pipe
+            cmd.output().map_err(|e| format!("Could not launch yt-dlp: {}", e))
         })
         .await
         .map_err(|e| format!("Task join error: {}", e))??;

@@ -117,18 +117,6 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   const lastInspectedUrl = useRef("");
   const inspectSeq = useRef(0);
 
-  const shouldAutoInspectUrl = (rawUrl: string): boolean => {
-    let clean = rawUrl.trim();
-    if (clean.startsWith("@[") && clean.endsWith("]")) {
-      clean = clean.slice(2, -1).trim();
-    }
-    if (!/^https?:\/\//i.test(clean)) return false;
-    const lower = clean.toLowerCase();
-    if (lower.startsWith("magnet:") || lower.includes(".torrent")) return false;
-    if (/\.(zip|rar|7z|exe|msi|iso|pdf|apk)(\?|#|$)/i.test(lower)) return false;
-    return true;
-  };
-
   useEffect(() => {
     if (isOpen) {
       const cleanUrl = typeof defaultUrl === "string" ? defaultUrl.trim() : (defaultUrl as any)?.url || "";
@@ -162,14 +150,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
             }
           } catch {}
         })();
-        const handleModalClose = () => {
-    if (url.trim()) {
-      sessionStorage.setItem("zr_last_handled_clipboard", url.trim());
-    }
-    onClose();
-  };
-
-  return () => {
+        return () => {
           cancelled = true;
         };
       }
@@ -268,34 +249,12 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
     fetchDefaultDir();
   }, []);
 
-  // Auto-inspect URL when modal is open and URL changes (instant for pre-filled/clipboard, 200ms while typing)
+  // Auto-inspect is disabled: formats are fetched only when the user clicks "Inspect".
   useEffect(() => {
     if (!isOpen) {
       lastInspectedUrl.current = "";
-      return;
     }
-    const cleanUrl = url.trim();
-    if (!shouldAutoInspectUrl(cleanUrl)) return;
-    if (cleanUrl === lastInspectedUrl.current || isFetchingMedia) return;
-
-    const initialClean = typeof defaultUrl === "string" ? defaultUrl.trim() : (defaultUrl as any)?.url || "";
-    const delayMs = cleanUrl === initialClean ? 0 : 200;
-
-    const timer = window.setTimeout(() => {
-      if (cleanUrl === lastInspectedUrl.current || isFetchingMedia) return;
-      lastInspectedUrl.current = cleanUrl;
-      void handleFetchMediaInfo(cleanUrl);
-    }, delayMs);
-
-    const handleModalClose = () => {
-    if (url.trim()) {
-      sessionStorage.setItem("zr_last_handled_clipboard", url.trim());
-    }
-    onClose();
-  };
-
-  return () => window.clearTimeout(timer);
-  }, [url, isOpen]);
+  }, [isOpen]);
 
   useEffect(() => {
     if (isOpen && defaultBatchText) {
@@ -315,10 +274,6 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       if (text && text.trim()) {
         const clean = text.trim();
         handleUrlChange(clean);
-        if (shouldAutoInspectUrl(clean)) {
-          lastInspectedUrl.current = clean;
-          void handleFetchMediaInfo(clean);
-        }
       }
     } catch (e) {
       console.error("Paste clipboard error:", e);
@@ -527,8 +482,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
       setMediaInfo(info);
       setCustomFilename(titleToUse);
-      if (videoStreams.length > 0) setSelectedFormatId(videoStreams[0].id);
-      if (audioStreams.length > 0) setSelectedAudioId(audioStreams[0].id);
+      setSelectedFormatId("best");
+      setSelectedAudioId("ba");
     } catch (err: any) {
       if (inspectSeq.current !== seq) return;
       const raw = err?.message || (typeof err === "string" ? err : err?.toString()) || "Stream check failed";
@@ -558,7 +513,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           : customFilename.trim() || mediaInfo?.title || "",
       downloadMode: isAudio ? "audio" : "video",
       videoStreamId: isAudio ? "" : selectedFormatId || "best",
-      audioStreamId: selectedAudioId || "best",
+      audioStreamId: selectedAudioId || "ba",
       container: container || "MP4 (Video)",
       enableClip: Boolean(enableClip),
       startTime: enableClip ? startTime || "00:00:00" : "00:00:00",
@@ -869,10 +824,6 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                   if (pasted) {
                     e.preventDefault();
                     handleUrlChange(pasted);
-                    if (shouldAutoInspectUrl(pasted)) {
-                      lastInspectedUrl.current = pasted;
-                      void handleFetchMediaInfo(pasted);
-                    }
                   }
                 }}
                 placeholder={
@@ -1184,20 +1135,47 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 </div>
               </div>
 
-              {/* Stream Picker */}
-              {mediaInfo.videoStreams.length > 0 && (
+              {/* Detected streams summary */}
+              <div className="flex flex-wrap items-center gap-2 text-[11.5px] font-semibold">
+                <span className="px-2.5 py-0.5 rounded-full border border-emerald-300/60 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                  ✔ {mediaInfo.videoStreams.length} Video • {mediaInfo.audioStreams.length} Audio • {mediaInfo.subtitles.length} Subtitles Found
+                </span>
+              </div>
+
+              {/* Video Quality (detected from link) */}
+              <div className="space-y-1.5">
+                <label className="text-[13px] font-medium text-zr-secondary">
+                  Available Video Qualities (Detected from Link)
+                </label>
+                <select
+                  value={selectedFormatId || "best"}
+                  onChange={(e) => setSelectedFormatId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden transition-colors"
+                >
+                  <option value="best">🌟 Best Available Video (Auto Highest Resolution &amp; FPS)</option>
+                  {mediaInfo.videoStreams.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      🎬 {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Audio stream (detected from link) */}
+              {mediaInfo.audioStreams.length > 0 && (
                 <div className="space-y-1.5">
                   <label className="text-[13px] font-medium text-zr-secondary">
-                    Video Quality
+                    Available Audio Stream (Detected from Link)
                   </label>
                   <select
-                    value={selectedFormatId}
-                    onChange={(e) => setSelectedFormatId(e.target.value)}
+                    value={selectedAudioId || "ba"}
+                    onChange={(e) => setSelectedAudioId(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg text-[13px] font-semibold border border-zr bg-zr-surface text-zr-primary focus:border-zr-accent focus:outline-hidden transition-colors"
                   >
-                    {mediaInfo.videoStreams.map((s) => (
+                    <option value="ba">🎵 Best Available Audio Stream (Auto Highest Bitrate)</option>
+                    {mediaInfo.audioStreams.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {s.label}
+                        🎧 {s.label}
                       </option>
                     ))}
                   </select>
