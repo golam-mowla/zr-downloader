@@ -1243,8 +1243,19 @@ async fn start_local_bridge(app_handle: AppHandle) {
                         return;
                     }
 
+                    if first_line.starts_with("GET /focus") {
+                        if let Some(win) = handle.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.unminimize();
+                            let _ = win.set_focus();
+                        }
+                        let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"focused\",\"app\":\"ZR Downloader\"}\r\n";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                        return;
+                    }
+
                     if first_line.starts_with("GET /ping") || req_str.contains("/ping") && !first_line.contains("/open?") {
-                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.35\"}\r\n";
+                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.36\"}\r\n";
                         let _ = stream.write_all(resp.as_bytes()).await;
                         return;
                     }
@@ -1687,6 +1698,29 @@ pub fn run() {
                 );
                 let _ = stream.write_all(req.as_bytes());
                 std::process::exit(0);
+            }
+        }
+    }
+
+    // Plain launch while ZR Downloader is already running (e.g. hidden in the tray):
+    // ask the running one to show its window, then exit, so no second tray icon appears.
+    if pending_arg_req.is_none() {
+        if let Ok(addr) = "127.0.0.1:9666".parse::<std::net::SocketAddr>() {
+            if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
+                &addr,
+                std::time::Duration::from_millis(350),
+            ) {
+                use std::io::{Read, Write};
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(800)));
+                let _ = stream.write_all(
+                    b"GET /focus HTTP/1.1\r\nHost: 127.0.0.1:9666\r\nConnection: close\r\n\r\n",
+                );
+                let mut buf = [0u8; 512];
+                if let Ok(n) = stream.read(&mut buf) {
+                    if String::from_utf8_lossy(&buf[..n]).contains("ZR Downloader") {
+                        std::process::exit(0);
+                    }
+                }
             }
         }
     }

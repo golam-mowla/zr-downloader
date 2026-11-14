@@ -1578,7 +1578,7 @@ pub async fn fetch_media_info_with_app(
     };
     if let Some(mut rx) = existing_rx {
         if !*rx.borrow() {
-            let _ = tokio::time::timeout(Duration::from_secs(45), rx.changed()).await;
+            let _ = tokio::time::timeout(Duration::from_secs(600), rx.changed()).await;
         }
         if let Ok(guard) = FORMATS_CACHE.lock() {
             if let Some(map) = guard.as_ref() {

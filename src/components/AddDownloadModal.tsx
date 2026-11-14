@@ -478,18 +478,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
           proxy: null,
           discoveryArgs: null,
         });
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  "Stream inspection timed out. You can click 'Download Media' directly to download with default best quality."
-                )
-              ),
-            16000
-          )
-        );
-        parsed = await Promise.race([fetchPromise, timeoutPromise]);
+        parsed = await fetchPromise;
       }
 
       if (inspectSeq.current !== seq) return;
