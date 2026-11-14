@@ -83,10 +83,13 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
   // below ~900px: hide SPEED
   // below ~800px: hide the "# " column and show Size under the file name
   // below ~700px: automatically switch to card view (handled in App.tsx)
-  const showTimeLeft = width >= 1000;
-  const showSpeed = width >= 900;
-  const showIndex = width >= 800;
-  const showSizeColumn = width >= 800;
+  // Sidebar (w-64 = 256px) is always visible, so base the breakpoints on the table's real width
+  const SIDEBAR_W = 256;
+  const avail = width - SIDEBAR_W;
+  const showTimeLeft = avail >= 1030;
+  const showSpeed = avail >= 930;
+  const showIndex = avail >= 820;
+  const showSizeColumn = avail >= 820;
 
   const totalVisibleCols =
     (showIndex ? 1 : 0) +
@@ -397,7 +400,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                             : task.status}
                         </span>
                         <div className="flex items-center gap-1">
-                          {onChangePriority && (
+                          {onChangePriority && !isFileReady && !isError && task.status !== "cancelled" && (
                             <select
                               value={task.priority || "normal"}
                               onClick={(e) => e.stopPropagation()}

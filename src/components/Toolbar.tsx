@@ -78,7 +78,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           title="Resume selected download"
         >
           <Play className="w-[18px] h-[18px] fill-current" />
-          <span className="hidden md:inline">Resume</span>
+          <span className="hidden lg:inline">Resume</span>
         </button>
 
         {/* Stop */}
@@ -89,7 +89,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           title="Pause selected download"
         >
           <Pause className="w-[18px] h-[18px]" />
-          <span className="hidden md:inline">Stop</span>
+          <span className="hidden lg:inline">Stop</span>
         </button>
 
         {/* Stop All */}
@@ -100,7 +100,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           title="Stop all active downloads"
         >
           <Square className="w-[18px] h-[18px]" />
-          <span className="hidden lg:inline">Stop All</span>
+          <span className="hidden xl:inline">Stop All</span>
         </button>
 
         {/* Delete */}
@@ -111,7 +111,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           title="Delete selected download"
         >
           <Trash2 className="w-[18px] h-[18px]" />
-          <span className="hidden md:inline">Delete</span>
+          <span className="hidden lg:inline">Delete</span>
         </button>
 
         {/* Retry all failed downloads */}
@@ -122,7 +122,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             title={`Retry all ${failedCount} failed download${failedCount === 1 ? "" : "s"}`}
           >
             <RotateCcw className="w-[18px] h-[18px]" />
-            <span className="hidden lg:inline">Retry Failed ({failedCount})</span>
+            <span className="hidden xl:inline">Retry Failed ({failedCount})</span>
           </button>
         )}
 
@@ -134,7 +134,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           title="Clear finished downloads from list"
         >
           <CheckCheck className="w-[18px] h-[18px]" />
-          <span className="hidden xl:inline">Clean Finished</span>
+          <span className="hidden 2xl:inline">Clean Finished</span>
         </button>
       </div>
 
@@ -155,7 +155,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             }
           >
             <Gauge className="w-4 h-4 shrink-0" />
-            <span className="hidden lg:inline">
+            <span className="hidden xl:inline">
               {speedLimitEnabled ? `Limit: ${speedLimitLabel}` : "Speed Limit"}
             </span>
           </button>

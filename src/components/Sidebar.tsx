@@ -66,9 +66,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-64 h-screen flex flex-col justify-between border-r border-zr bg-zr-surface text-zr-primary p-4 z-20 select-none overflow-y-auto transition-colors">
+    <aside className="w-64 h-screen flex flex-col border-r border-zr bg-zr-surface text-zr-primary p-4 z-20 select-none overflow-hidden transition-colors shrink-0">
       {/* Top Section */}
-      <div className="space-y-4">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden space-y-4 pr-1 -mr-1">
         {/* ZR Downloader Branding */}
         <div className="flex items-center space-x-3 px-1 py-1">
           <div className="w-10 h-10 rounded-xl overflow-hidden flex-shrink-0 shadow-md">
@@ -188,7 +188,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Bottom Section */}
-      <div className="pt-3 border-t border-zr space-y-2">
+      <div className="shrink-0 pt-3 mt-2 border-t border-zr space-y-2">
         {/* Browser Extension Bridge Status */}
         <div className="flex items-center justify-between px-3 py-2 rounded-lg border border-zr bg-zr-tableHead text-[12px]">
           <div className="flex items-center space-x-2">
