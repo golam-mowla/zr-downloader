@@ -677,7 +677,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                   />
                 </div>
                 <p className="text-zr-secondary text-[12px] leading-relaxed">
-                  Saves 50% SSD space on large downloads without creating duplicate temporary segment files.
+                  Saves 50% SSD space on large direct file downloads without creating duplicate temporary segment files. Has no effect on HLS / Kick / m3u8 streams, which always need temporary space.
                 </p>
               </div>
 

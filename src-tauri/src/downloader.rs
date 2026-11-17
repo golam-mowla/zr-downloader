@@ -595,7 +595,16 @@ pub struct SparseResumeMeta {
     pub chunks: HashMap<usize, u64>,
     #[serde(default)]
     pub segments: Vec<SparseSegment>,
+    /// true only when the file was written after every worker flushed (clean pause/stop).
+    /// A meta written by the periodic monitor (or left by a crash) is `false`.
+    #[serde(default)]
+    pub clean: bool,
 }
+
+/// Low-disk mode: on resume from a non-clean meta, re-download this many bytes per segment.
+/// Worker progress counters run ahead of what is flushed to disk (512 KB BufWriter), so after a
+/// crash/kill the last bytes before the counter may be missing (zero-filled) in the final file.
+pub const LOW_DISK_RESUME_SAFETY_MARGIN: u64 = 8 * 1024 * 1024;
 
 pub fn sparse_meta_path_for(save_path: &str, task_id: &str) -> PathBuf {
     let target_dest = PathBuf::from(save_path);
@@ -623,6 +632,7 @@ pub fn read_sparse_meta(content: &str) -> Option<SparseResumeMeta> {
             supports_ranges: true,
             chunks: map,
             segments: Vec::new(),
+            clean: false,
         });
     }
     None
@@ -703,6 +713,7 @@ async fn write_dynamic_sparse_meta(
     total_bytes: u64,
     supports_ranges: bool,
     segments: &[DynamicSegment],
+    clean: bool,
 ) {
     let mut chunks_map = HashMap::new();
     let mut saved_segments = Vec::with_capacity(segments.len());
@@ -723,9 +734,20 @@ async fn write_dynamic_sparse_meta(
         supports_ranges,
         chunks: chunks_map,
         segments: saved_segments,
+        clean,
     };
     if let Ok(json_str) = serde_json::to_string(&meta) {
-        let _ = fs::write(path, json_str).await;
+        // Atomic replace: a crash while writing must never leave a half-written (unparseable)
+        // meta file, because in low-disk mode that file is the ONLY record of progress.
+        let mut tmp_os = path.clone().into_os_string();
+        tmp_os.push(".tmp");
+        let tmp_path = PathBuf::from(tmp_os);
+        if fs::write(&tmp_path, json_str).await.is_ok() {
+            if fs::rename(&tmp_path, path).await.is_err() {
+                let _ = fs::remove_file(path).await;
+                let _ = fs::rename(&tmp_path, path).await;
+            }
+        }
     }
 }
 
@@ -1136,11 +1158,15 @@ pub async fn execute_multithreaded_download(
     let mut initial_segments: Vec<DynamicSegment> = Vec::new();
     let mut initial_downloaded = 0u64;
 
+    let resume_margin = match sparse_meta_opt {
+        Some(ref m) if low_disk_space && !m.clean => LOW_DISK_RESUME_SAFETY_MARGIN,
+        _ => 0,
+    };
     if let Some(ref meta) = sparse_meta_opt {
         if !meta.segments.is_empty() && is_resumable {
             for s in &meta.segments {
                 let c_down = if low_disk_space {
-                    s.downloaded
+                    s.downloaded.saturating_sub(resume_margin)
                 } else {
                     let part_path = temp_dir.join(format!("chunk_{}.part", s.index));
                     let disk_len = fs::metadata(&part_path).await.map(|m| m.len()).unwrap_or(0);
@@ -1184,6 +1210,7 @@ pub async fn execute_multithreaded_download(
                     .as_ref()
                     .and_then(|m| m.chunks.get(&index).copied())
                     .unwrap_or(0)
+                    .saturating_sub(resume_margin)
             } else {
                 let part_path = temp_dir.join(format!("chunk_{}.part", index));
                 let disk_len = fs::metadata(&part_path).await.map(|m| m.len()).unwrap_or(0);
@@ -1276,6 +1303,7 @@ pub async fn execute_multithreaded_download(
                             total_bytes,
                             is_resumable,
                             &segs_snapshot,
+                            false,
                         ).await;
                     }
 
@@ -1435,7 +1463,7 @@ pub async fn execute_multithreaded_download(
         if chunk_errors.iter().any(|e| e == "RANGE_NOT_SUPPORTED") {
             // Requirement A: On resume, NEVER silently restart from 0% — report clear error.
             if is_resuming {
-                write_dynamic_sparse_meta(&state_file_path, total_bytes, false, &final_segments)
+                write_dynamic_sparse_meta(&state_file_path, total_bytes, false, &final_segments, false)
                     .await;
                 let msg = "Server does not support resume".to_string();
                 let log_lines = vec![
@@ -1490,8 +1518,19 @@ pub async fn execute_multithreaded_download(
             return Box::pin(execute_multithreaded_download(app, state, task_id)).await;
         }
 
-        write_dynamic_sparse_meta(&state_file_path, total_bytes, is_resumable, &final_segments)
-            .await;
+        // All workers have finished and flushed their BufWriter here, so the meta is "clean"
+        // unless a worker died on a write error.
+        let all_cancel = chunk_errors
+            .iter()
+            .all(|e| e == "Cancelled" || e.contains("cancel"));
+        write_dynamic_sparse_meta(
+            &state_file_path,
+            total_bytes,
+            is_resumable,
+            &final_segments,
+            all_cancel,
+        )
+        .await;
 
         let is_user_paused = is_paused.load(Ordering::Relaxed)
             || chunk_errors
@@ -1779,6 +1818,7 @@ mod tests {
                     downloaded: 300,
                 },
             ],
+            clean: true,
         };
         std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap()).unwrap();
 

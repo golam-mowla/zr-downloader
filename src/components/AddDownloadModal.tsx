@@ -24,6 +24,7 @@ import {
   DuplicateCheckResult,
 } from "../types";
 import { expandBatchUrlInput } from "../lib/batchUrls";
+import { isHlsLikeUrl } from "../lib/utils";
 
 export interface DirectDownloadExtras {
   autoConnections?: boolean;
@@ -90,6 +91,11 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   });
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Low Disk Space mode cannot work for HLS/Kick/m3u8 streams (yt-dlp needs fragment + merge space),
+  // so the switch is greyed out and the flag is never sent for them. The saved preference is kept.
+  const lowDiskUnsupported = tab !== "batch" && tab !== "torrent" && isHlsLikeUrl(url);
+  const lowDiskActive = lowDiskSpace && !lowDiskUnsupported;
 
   // Batch Import State
   const [batchText, setBatchText] = useState(defaultBatchText);
@@ -327,7 +333,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       saveFolder,
       filenameOverride !== undefined ? filenameOverride : customFilename.trim(),
       autoConnections ? 8 : connections,
-      lowDiskSpace,
+      lowDiskActive,
       {
         autoConnections,
         speedLimitKb: speedLimitKb > 0 ? speedLimitKb : 0,
@@ -518,7 +524,7 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       enableClip: Boolean(enableClip),
       startTime: enableClip ? startTime || "00:00:00" : "00:00:00",
       endTime: enableClip ? endTime || "00:00:10" : "00:00:10",
-      lowDiskSpace: Boolean(lowDiskSpace),
+      lowDiskSpace: Boolean(lowDiskActive),
       overwriteFiles: forceOverwrite,
       aria2Connections: autoConnections ? 16 : Math.min(16, connections),
       limitSpeed: speedLimitKb > 0,
@@ -905,7 +911,12 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
 
           {/* Low Disk Space Optimization Switch (Direct & Media) */}
           {tab !== "torrent" && (
-            <div className="p-3 rounded-xl border border-blue-500/25 bg-blue-500/5 dark:bg-blue-900/10 space-y-1.5">
+            <div
+              className={`p-3 rounded-xl border border-blue-500/25 bg-blue-500/5 dark:bg-blue-900/10 space-y-1.5 transition-opacity ${
+                lowDiskUnsupported ? "opacity-50" : ""
+              }`}
+              aria-disabled={lowDiskUnsupported}
+            >
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
                   <HardDrive className="w-4 h-4 text-blue-500" />
@@ -915,16 +926,26 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                 </div>
                 <input
                   type="checkbox"
-                  checked={lowDiskSpace}
+                  checked={lowDiskActive}
+                  disabled={lowDiskUnsupported}
+                  title={
+                    lowDiskUnsupported
+                      ? "Not available for HLS / Kick / m3u8 streams"
+                      : undefined
+                  }
                   onChange={(e) => {
                     setLowDiskSpace(e.target.checked);
                     localStorage.setItem("zr_low_disk_space", String(e.target.checked));
                   }}
-                  className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  className={`w-4 h-4 rounded text-blue-600 focus:ring-blue-500 ${
+                    lowDiskUnsupported ? "cursor-not-allowed" : "cursor-pointer"
+                  }`}
                 />
               </div>
               <p className="text-[12px] text-zr-secondary leading-relaxed">
-                Saves 50% SSD space on large downloads (e.g. 20 GB file uses strictly 20 GB instead of 40 GB). Data streams directly into the final destination file without duplicate temporary files or assembly delay.
+                {lowDiskUnsupported
+                  ? "Not available for HLS / Kick / m3u8 streams: these always need temporary fragment files plus extra free space for the final merge (keep roughly 2x the video size free)."
+                  : "Saves 50% SSD space on direct file downloads (e.g. 20 GB file uses strictly 20 GB instead of 40 GB). Data streams directly into the final destination file without duplicate temporary files or assembly delay. Does not apply to HLS / Kick streams."}
               </p>
             </div>
           )}

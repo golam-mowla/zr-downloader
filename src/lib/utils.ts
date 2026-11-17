@@ -30,3 +30,20 @@ export function formatBytes(bytes?: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 }
+
+/**
+ * True for streams that Low Disk Space mode cannot help with (HLS / DASH / Kick / Twitch / IVS).
+ * Mirrors `is_hls_like_url` in src-tauri/src/media.rs: yt-dlp always needs fragment + merge space there.
+ */
+export function isHlsLikeUrl(rawUrl?: string): boolean {
+  const u = (rawUrl || "").trim().toLowerCase();
+  if (!u) return false;
+  if (u.includes("m3u8") || u.includes("/hls/") || u.includes(".mpd")) return true;
+  let host = u;
+  try {
+    host = new URL(u).hostname;
+  } catch {
+    /* not a full URL, fall back to the raw string */
+  }
+  return host.includes("kick.com") || host.includes("twitch.tv") || host.includes("ivs");
+}
