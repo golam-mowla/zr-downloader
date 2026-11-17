@@ -434,30 +434,47 @@ async fn resume_http_download(
                 Err(_) => task.is_resumable,
             };
             if !probe_supports_range {
-                let msg = "Server does not support resume".to_string();
-                let log_lines = vec![
-                    format!("URL: {}", task.url),
-                    "Detail: HTTP HEAD/Range probe on resume indicated the server no longer accepts partial byte ranges.".to_string(),
-                ];
-                task.is_resumable = false;
-                task.status = "error".to_string();
-                task.speed_bps = 0;
-                task.speed_formatted = "0 B/s".to_string();
-                task.eta_formatted = "--".to_string();
-                task.error_message = Some(msg.clone());
-                task.error_log = log_lines.clone();
-                append_failure_log(&app, &task_id, &task.filename, &task.url, &msg, &log_lines);
-                {
-                    let mut tasks = state.tasks.write().await;
-                    tasks.insert(task_id.clone(), task.clone());
+                // If the task was previously in error or was non-resumable, user is clicking "Retry":
+                // Restart cleanly from 0% since server cannot accept partial ranges.
+                if task.status == "error" || !task.is_resumable {
+                    let meta_path = downloader::sparse_meta_path_for(&task.save_path, &task.id);
+                    let _ = std::fs::remove_file(meta_path);
+                    if let Some(parent) = std::path::Path::new(&task.save_path).parent() {
+                        let tmp_dir = parent.join(format!(".zr_tmp_{}", task.id));
+                        let _ = std::fs::remove_dir_all(tmp_dir);
+                    }
+                    task.downloaded_bytes = 0;
+                    task.percent = 0.0;
+                    task.is_resumable = false;
+                    task.error_message = None;
+                    task.error_log = Vec::new();
+                    task.status = "queued".to_string();
+                } else {
+                    let msg = "Server does not support resume".to_string();
+                    let log_lines = vec![
+                        format!("URL: {}", task.url),
+                        "Detail: HTTP HEAD/Range probe on resume indicated the server no longer accepts partial byte ranges.".to_string(),
+                    ];
+                    task.is_resumable = false;
+                    task.status = "error".to_string();
+                    task.speed_bps = 0;
+                    task.speed_formatted = "0 B/s".to_string();
+                    task.eta_formatted = "--".to_string();
+                    task.error_message = Some(msg.clone());
+                    task.error_log = log_lines.clone();
+                    append_failure_log(&app, &task_id, &task.filename, &task.url, &msg, &log_lines);
+                    {
+                        let mut tasks = state.tasks.write().await;
+                        tasks.insert(task_id.clone(), task.clone());
+                    }
+                    let _ = app.emit(
+                        "download-error",
+                        serde_json::json!({ "id": task_id, "error": msg, "errorLog": log_lines }),
+                    );
+                    let _ = app.emit("download-progress", task);
+                    save_all_tasks(&app).await;
+                    return Err("Server does not support resume".to_string());
                 }
-                let _ = app.emit(
-                    "download-error",
-                    serde_json::json!({ "id": task_id, "error": msg, "errorLog": log_lines }),
-                );
-                let _ = app.emit("download-progress", task);
-                save_all_tasks(&app).await;
-                return Err("Server does not support resume".to_string());
             }
         }
         let mut tasks = state.tasks.write().await;
@@ -1731,6 +1748,7 @@ pub fn run() {
             cancelled_tasks: Arc::new(Mutex::new(HashMap::new())),
             task_options: Arc::new(Mutex::new(HashMap::new())),
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            running_workers: Arc::new(Mutex::new(std::collections::HashSet::new())),
         })
         .manage(AppUrlState {
             pending_url: Arc::new(Mutex::new(pending_arg_payload)),
@@ -2025,6 +2043,8 @@ pub fn run() {
             media::update_tool,
             media::open_folder,
             media::open_file,
+            media::check_app_update,
+            media::open_release_page,
             media::install_app_update,
             get_pending_url,
             ytdlp_get_info,

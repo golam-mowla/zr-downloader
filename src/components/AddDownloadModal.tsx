@@ -693,15 +693,26 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         {/* Form Body */}
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
           {errorMessage && (
-            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-300 dark:border-red-900/60 text-red-700 dark:text-red-400 text-[13px] flex items-center justify-between space-x-2">
-              <div className="flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-red-600 dark:text-red-400" />
-                <span>{errorMessage}</span>
+            <div className={`p-3 rounded-xl border text-[13px] flex items-center justify-between space-x-2 ${
+              errorMessage.toLowerCase().includes("timed out") || errorMessage.toLowerCase().includes("download media directly")
+                ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-900/60 text-amber-800 dark:text-amber-300"
+                : "bg-red-50 dark:bg-red-950/40 border-red-300 dark:border-red-900/60 text-red-700 dark:text-red-400"
+            }`}>
+              <div className="flex items-start space-x-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span>{errorMessage}</span>
+                  {(tab === "media" || isHlsLikeUrl(url)) && (
+                    <p className="text-[11.5px] font-semibold opacity-90">
+                      💡 Tip: You can click &ldquo;Download Media&rdquo; below to download directly with default best quality.
+                    </p>
+                  )}
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setErrorMessage(null)}
-                className="text-xs px-2 py-0.5 rounded hover:bg-red-100 dark:hover:bg-red-900/50 shrink-0 font-medium opacity-80 hover:opacity-100"
+                className="text-xs px-2 py-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 shrink-0 font-medium opacity-80 hover:opacity-100 self-start"
               >
                 Dismiss
               </button>
