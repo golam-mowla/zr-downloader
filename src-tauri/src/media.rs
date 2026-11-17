@@ -1994,6 +1994,46 @@ fn is_partial_media_filename(name_lower: &str) -> bool {
         || is_ytdlp_format_fragment_name(name_lower)
 }
 
+/// True when `name_lower` starts with the alphanumeric characters of `hint` AND the very next
+/// character is a real boundary (end of name, a `.` such as `.mp4.part` / `.f137.mp4` / `.temp.mp4`,
+/// or, optionally, yt-dlp's ` [id]` suffix). This stops "Highlights" from matching the unrelated
+/// "Highlights Day 2 [abc].mp4.part" of another task in the same folder.
+fn stem_boundary_match(name_lower: &str, hint: &str, allow_id_suffix: bool) -> bool {
+    let hint_chars: Vec<char> = hint.chars().collect();
+    let hint_len = hint_chars.len();
+    if hint_len == 0 {
+        return false;
+    }
+    let mut matched = 0usize;
+    let mut end_idx: Option<usize> = None;
+    for (i, c) in name_lower.char_indices() {
+        if matched == hint_len {
+            end_idx = Some(i);
+            break;
+        }
+        if c.is_alphanumeric() {
+            if hint_chars[matched] == c {
+                matched += 1;
+            } else {
+                return false;
+            }
+        }
+    }
+    let rest = match end_idx {
+        Some(i) => &name_lower[i..],
+        None => {
+            if matched == hint_len {
+                ""
+            } else {
+                return false;
+            }
+        }
+    };
+    // closing brackets/quotes can be the tail of the stem itself, e.g. stem "Live [abc]"
+    let rest = rest.trim_start_matches(|c: char| matches!(c, ']' | ')' | '}' | '\'' | '"' | '!' | '?'));
+    rest.is_empty() || rest.starts_with('.') || (allow_id_suffix && rest.starts_with(" ["))
+}
+
 fn name_matches_stem(name_lower: &str, stem: &str) -> bool {
     let base_stem = strip_media_extension_for_stem(stem);
     if base_stem.is_empty() {
@@ -2004,6 +2044,7 @@ fn name_matches_stem(name_lower: &str, stem: &str) -> bool {
     if clean_hint.len() < 3 {
         return false;
     }
+    let stem_has_id = base_stem.contains(" [");
     let base_no_id = if let Some(pos) = base_stem.rfind(" [") {
         base_stem[..pos].trim().to_string()
     } else {
@@ -2014,13 +2055,11 @@ fn name_matches_stem(name_lower: &str, stem: &str) -> bool {
         .chars()
         .filter(|c| c.is_alphanumeric())
         .collect();
-    let clean_name: String = name_lower.chars().filter(|c| c.is_alphanumeric()).collect();
 
-    name_lower.starts_with(&stem_lower)
-        || clean_name.starts_with(&clean_hint)
-        || clean_name.contains(&clean_hint)
-        || (clean_base_no_id.len() >= 3
-            && (clean_name.starts_with(&clean_base_no_id) || clean_name.contains(&clean_base_no_id)))
+    // A stem without an id may match files that carry ` [id]`; a stem WITH an id must not match
+    // another task's ` [otherid]` file.
+    stem_boundary_match(name_lower, &clean_hint, !stem_has_id)
+        || (clean_base_no_id.len() >= 3 && stem_boundary_match(name_lower, &clean_base_no_id, false))
 }
 
 fn is_readable_nonempty_file(path: &Path) -> bool {
@@ -2040,7 +2079,12 @@ fn is_readable_nonempty_file(path: &Path) -> bool {
 
 /// Removes partial artifacts (`*.part`, `*.ytdl`, `*.part-Frag*`, `*.temp.*`, `*.f<id>.*`)
 /// as well as 0-byte or unreadable final files matching `stem` inside `save_folder`.
+/// If `stem` is empty/too short to identify a task, NOTHING is deleted (it used to wipe every
+/// partial file in the folder, including other running downloads).
 pub fn clean_partial_files(save_folder: &str, stem: &str) {
+    if strip_media_extension_for_stem(stem).len() < 3 {
+        return;
+    }
     let Ok(entries) = fs::read_dir(save_folder) else {
         return;
     };
@@ -2053,17 +2097,153 @@ pub fn clean_partial_files(save_folder: &str, stem: &str) {
             continue;
         };
         let name_lower = name.to_lowercase();
-        let is_partial = is_partial_media_filename(&name_lower);
-        let matches = name_matches_stem(&name_lower, stem);
-        if is_partial {
-            if matches || strip_media_extension_for_stem(stem).len() < 3 {
-                let _ = fs::remove_file(&path);
-            }
-        } else if matches && !name_lower.starts_with(".zr_sparse_meta_") && !is_readable_nonempty_file(&path) {
+        if !name_matches_stem(&name_lower, stem) {
+            continue;
+        }
+        if is_partial_media_filename(&name_lower) {
+            let _ = fs::remove_file(&path);
+        } else if !name_lower.starts_with(".zr_sparse_meta_") && !is_readable_nonempty_file(&path) {
             // Delete 0-byte or unreadable final file for this output stem
             let _ = fs::remove_file(&path);
         }
     }
+}
+
+/// Removes ONLY the leftovers of a failed post-processing step (ffmpeg `*.temp.*` output and
+/// 0-byte/unreadable finals). The downloaded data (`*.part`, `*.ytdl`, `*.part-Frag*`,
+/// `*.f<id>.*`) is deliberately kept so a retry can continue instead of starting at 0%.
+pub fn clean_postprocess_leftovers(save_folder: &str, stem: &str) {
+    if strip_media_extension_for_stem(stem).len() < 3 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(save_folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let name_lower = name.to_lowercase();
+        if !name_matches_stem(&name_lower, stem) {
+            continue;
+        }
+        if name_lower.contains(".temp.") {
+            let _ = fs::remove_file(&path);
+        } else if !is_partial_media_filename(&name_lower)
+            && !name_lower.starts_with(".zr_sparse_meta_")
+            && !is_readable_nonempty_file(&path)
+        {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+/// True if any non-empty partial/fragment file for this stem exists (i.e. a retry can resume).
+pub fn has_partial_data(save_folder: &str, stem: &str) -> bool {
+    if strip_media_extension_for_stem(stem).len() < 3 {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(save_folder) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let name_lower = name.to_lowercase();
+        if is_partial_media_filename(&name_lower)
+            && !name_lower.contains(".temp.")
+            && name_matches_stem(&name_lower, stem)
+        {
+            if let Ok(meta) = entry.metadata() {
+                if meta.len() > 0 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Free bytes available to the current user on the volume that holds `dir` (None = unknown).
+#[cfg(windows)]
+pub fn free_space_bytes(dir: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            lp_directory_name: *const u16,
+            lp_free_bytes_available_to_caller: *mut u64,
+            lp_total_number_of_bytes: *mut u64,
+            lp_total_number_of_free_bytes: *mut u64,
+        ) -> i32;
+    }
+    let wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut avail, &mut total, &mut free) };
+    if ok != 0 {
+        Some(avail)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(windows))]
+pub fn free_space_bytes(dir: &Path) -> Option<u64> {
+    let out = std::process::Command::new("df")
+        .arg("-Pk")
+        .arg(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().nth(1)?;
+    let avail_kb: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
+    Some(avail_kb.saturating_mul(1024))
+}
+
+pub fn is_disk_full_error(diags: &[String]) -> bool {
+    diags.iter().any(|l| {
+        let low = l.to_lowercase();
+        low.contains("no space left")
+            || low.contains("os error 28")
+            || low.contains("os error 112")
+            || low.contains("errno 28")
+            || low.contains("not enough space")
+            || low.contains("disk full")
+            || low.contains("there is not enough space on the disk")
+    })
+}
+
+/// HLS / DASH / Kick / Twitch / IVS streams: Low Disk Space mode can never apply (yt-dlp needs
+/// fragment files plus merge space). Mirrors `isHlsLikeUrl` in src/lib/utils.ts.
+pub fn is_hls_like_url(url: &str) -> bool {
+    let url_lower = url.to_lowercase();
+    let host_lower = origin_of(&url_lower);
+    url_lower.contains("m3u8")
+        || url_lower.contains("/hls/")
+        || url_lower.contains("playlist.m3u8")
+        || url_lower.contains(".mpd")
+        || host_lower.contains("kick.com")
+        || host_lower.contains("twitch.tv")
+        || host_lower.contains("ivs")
+}
+
+fn fmt_gb(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / 1_073_741_824.0)
 }
 
 fn find_fresh_kept_output_file(
@@ -2447,7 +2627,7 @@ pub async fn start_download(
         },
         chunk_count: (options.aria2_connections as usize).clamp(1, 32),
         is_resumable: true,
-        low_disk_space: options.low_disk_space.unwrap_or(false),
+        low_disk_space: options.low_disk_space.unwrap_or(false) && !is_hls_like_url(&options.url),
         priority: effective_priority,
         queue_order: effective_queue_order,
         expected_checksum: options.expected_checksum.clone(),
@@ -2624,16 +2804,9 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             )
         };
         let url_lower = options.url.to_lowercase();
-        let host_lower = origin_of(&url_lower);
         let is_youtube = url_lower.contains("youtube.com") || url_lower.contains("youtu.be");
         let is_low_disk = options.low_disk_space.unwrap_or(false) || !options.use_part_files;
-        let is_hls = url_lower.contains("m3u8")
-            || url_lower.contains("/hls/")
-            || url_lower.contains("playlist.m3u8")
-            || url_lower.contains(".mpd")
-            || host_lower.contains("kick.com")
-            || host_lower.contains("twitch.tv")
-            || host_lower.contains("ivs");
+        let is_hls = is_hls_like_url(&options.url);
         // Never write directly into the final file in low-disk mode for HLS; keep --part enabled.
         let part_flag = if is_low_disk && !is_hls { "--no-part" } else { "--part" };
 
@@ -2708,9 +2881,10 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             }
 
             // On resume: NEVER --force-overwrites; always --no-overwrites --continue --part
-            // For attempt_stage 0 (including HLS): use --continue to preserve partial data.
-            // For attempt_stage >= 1 (retry/fallback): use --no-continue for a clean restart.
-            let continue_flag = if is_resume_run || options.is_resume || attempt_stage == 0 {
+            // ALWAYS --continue so already-downloaded fragments / format files are reused.
+            // Only the ffmpeg fresh-start fallback (attempt_stage 2, which is only entered when no
+            // progress had been made yet) uses --no-continue.
+            let continue_flag = if is_resume_run || options.is_resume || attempt_stage != 2 {
                 "--continue"
             } else {
                 "--no-continue"
@@ -2745,7 +2919,6 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 if is_hls {
                     cmd.args([
                         "--concurrent-fragments", "8",
-                        "--skip-unavailable-fragments",
                         "--fixup", "warn",
                     ]);
                     if attempt_stage == 2 {
@@ -2776,8 +2949,10 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             }
         if is_resume_run || options.is_resume {
             cmd.arg("--no-overwrites");
-        } else if (options.overwrite_files && !options.is_resume) || is_clipping_active || attempt_stage >= 1 {
+        } else if (options.overwrite_files && !options.is_resume) || is_clipping_active || attempt_stage == 2 {
             cmd.arg("--force-overwrites");
+        } else if attempt_stage == 1 {
+            // retry after a failed post-process: keep downloaded data, no overwrite flag at all
         } else {
             cmd.arg("--no-overwrites");
         }
@@ -3592,29 +3767,101 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                     || low.contains("invalid data found")
                     || low.contains("error opening input")
             });
-            let postprocess_failed = has_postprocess_marker
-                && (!exit_ok
-                    || combined_diags.iter().any(|l| {
-                        let low = l.to_lowercase();
-                        low.contains("error:")
-                            || low.contains("warning: postprocessing")
-                            || low.contains("invalid data found")
-                            || low.contains("error opening input")
-                    }));
+            // A post-process failure only counts when yt-dlp actually exited with an error.
+            // (exit code 0 + a harmless "Invalid data found" warning used to trigger a full restart)
+            let postprocess_failed = has_postprocess_marker && !exit_ok;
+
+            // Out of disk space: never throw the download away or start over. Keep every
+            // downloaded file, drop only the half-written ffmpeg temp output (frees space) and
+            // let the user press Resume after freeing space.
+            if !exit_ok || postprocess_failed {
+                let disk_full = is_disk_full_error(&combined_diags);
+                if disk_full || postprocess_failed {
+                    clean_postprocess_leftovers(&options.save_folder, &current_stem);
+                }
+                let need = last_total_bytes.max(last_downloaded_bytes);
+                let free = free_space_bytes(Path::new(&options.save_folder));
+                let has_kept_final = {
+                    let det = detected_output_path.lock().unwrap().clone();
+                    find_fresh_kept_output_file(
+                        &options.save_folder,
+                        &current_stem,
+                        run_started_at,
+                        det.as_deref(),
+                    )
+                    .is_some()
+                };
+                let too_small = postprocess_failed
+                    && !has_kept_final
+                    && need > 0
+                    && free.map(|f| f < need.saturating_add(need / 20)).unwrap_or(false);
+                if disk_full || too_small {
+                    let msg = match free {
+                        Some(f) => format!(
+                            "Not enough free disk space to finish (free {}, need about {}). Your downloaded data was kept - free some space and press Resume.",
+                            fmt_gb(f),
+                            fmt_gb(need)
+                        ),
+                        None => "Not enough free disk space to finish. Your downloaded data was kept - free some space and press Resume.".to_string(),
+                    };
+                    let tail_log: Vec<String> = combined_diags
+                        .iter()
+                        .filter(|l| !l.trim().is_empty())
+                        .rev()
+                        .take(40)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    mark_task_error_with_log(&media_tasks, &tid, &msg, tail_log.clone());
+                    crate::append_failure_log(
+                        &app,
+                        &tid,
+                        &current_stem,
+                        &current_media_url,
+                        &msg,
+                        &tail_log,
+                    );
+                    let error_pct = (*last_percent.lock().unwrap()).min(99.0);
+                    crate::spawn_save_all_tasks(&app);
+                    let _ = app.emit(
+                        "download-error",
+                        serde_json::json!({ "id": tid.clone(), "error": msg, "errorLog": tail_log }),
+                    );
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({
+                            "id": tid.clone(),
+                            "percent": error_pct,
+                            "status": "error",
+                            "error_message": msg,
+                            "errorLog": tail_log,
+                            "speed": "0 B/s",
+                            "speed_formatted": "0 B/s",
+                            "eta": "--",
+                            "eta_formatted": "--"
+                        }),
+                    );
+                    let app_q = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        crate::queue::process_queue(&app_q).await;
+                    });
+                    return;
+                }
+            }
 
             if attempt_stage == 0 && postprocess_failed {
                 attempt_stage = 1;
-                clean_partial_files(&options.save_folder, &current_stem);
-                *last_percent.lock().unwrap() = 0.0;
-                last_downloaded_bytes = 0;
-                last_total_bytes = 0;
-                let msg = "Post-processing failed — retrying cleanly (--no-continue --fixup warn)...".to_string();
+                // Keep ALL downloaded data; only drop the broken ffmpeg temp output.
+                clean_postprocess_leftovers(&options.save_folder, &current_stem);
+                let msg = "Post-processing failed - retrying the merge/fix-up only (downloaded data kept, --fixup warn)...".to_string();
                 eprintln!("[media] [{}] {}", tid, msg);
                 let _ = app.emit("download-log", serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }));
                 let fb_payload = serde_json::json!({
                     "id": tid.clone(),
                     "taskId": tid.clone(),
-                    "percent": 0.0,
+                    "percent": *last_percent.lock().unwrap(),
                     "text": msg,
                     "speed": "".to_string(),
                     "speed_formatted": "Retrying...".to_string(),
@@ -3628,33 +3875,23 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 continue;
             }
 
-            if attempt_stage == 1 && (postprocess_failed || !exit_ok) {
-                attempt_stage = 2;
-                clean_partial_files(&options.save_folder, &current_stem);
-                *last_percent.lock().unwrap() = 0.0;
-                last_downloaded_bytes = 0;
-                last_total_bytes = 0;
-                let msg = "Retry post-processing failed — switching to ffmpeg copy (--no-part)...".to_string();
-                eprintln!("[media] [{}] {}", tid, msg);
-                let _ = app.emit("download-log", serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }));
-                let fb_payload = serde_json::json!({
-                    "id": tid.clone(),
-                    "taskId": tid.clone(),
-                    "percent": 0.0,
-                    "text": msg,
-                    "speed": "".to_string(),
-                    "speed_formatted": "Retrying...".to_string(),
-                    "speedFormatted": "Retrying...".to_string(),
-                    "eta": "--".to_string(),
-                    "eta_formatted": "--".to_string(),
-                    "status": "connecting".to_string(),
-                });
-                let _ = app.emit("download-progress", fb_payload.clone());
-                let _ = app.emit("ytdlp-progress", fb_payload);
-                continue;
-            }
+            // NOTE: the old "stage 1 -> 2" escalation (full ffmpeg re-download from 0%) was removed.
+            // If the retried post-process fails again, the downloaded files are kept (see the
+            // kept_file handling below) instead of deleting 10+ GB and downloading it again.
 
-            if is_hls && attempt_stage == 0 && !exit_ok && !has_fresh_output_file(&options.save_folder) {
+            // The ffmpeg fallback restarts from 0% (--no-continue --force-overwrites). It used to fire on
+            // ANY failed HLS run, even at 99% (network blip, 403...). Now it only fires when nothing
+            // was downloaded yet; otherwise fall through to the 403-refresh / network-retry logic,
+            // and a later Resume continues with --continue.
+            let hls_made_progress = last_downloaded_bytes > 0
+                || *last_percent.lock().unwrap() > 0.5
+                || has_partial_data(&options.save_folder, &current_stem);
+            if is_hls
+                && attempt_stage == 0
+                && !exit_ok
+                && !hls_made_progress
+                && !has_fresh_output_file(&options.save_folder)
+            {
                 attempt_stage = 2;
                 let keep_pct = (*last_percent.lock().unwrap()).min(95.0).max(2.0);
                 let fb_payload = serde_json::json!({
@@ -5039,4 +5276,77 @@ fn decode_percent_encoded(input: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+#[cfg(test)]
+mod resume_safety_tests {
+    use super::*;
 
+    fn touch(dir: &Path, name: &str, size: usize) {
+        fs::write(dir.join(name), vec![1u8; size]).unwrap();
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn fresh_dir(tag: &str) -> PathBuf {
+        let d = env::temp_dir().join(format!("zr_media_test_{}_{}", tag, uuid::Uuid::new_v4()));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn postprocess_cleanup_keeps_downloaded_data() {
+        let d = fresh_dir("pp");
+        touch(&d, "Kick Stream.fhls-1080p60.mp4", 100);
+        touch(&d, "Kick Stream.fhls-audio-160.mp4", 100);
+        touch(&d, "Kick Stream.temp.mp4", 100);
+        clean_postprocess_leftovers(d.to_str().unwrap(), "Kick Stream");
+        assert_eq!(
+            names(&d),
+            vec!["Kick Stream.fhls-1080p60.mp4", "Kick Stream.fhls-audio-160.mp4"]
+        );
+        assert!(has_partial_data(d.to_str().unwrap(), "Kick Stream"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn stem_matching_does_not_touch_other_tasks() {
+        let d = fresh_dir("stem");
+        touch(&d, "Highlights Day 2 [abc].mp4.part", 10);
+        touch(&d, "Highlights.mp4.part", 10);
+        clean_partial_files(d.to_str().unwrap(), "Highlights");
+        assert_eq!(names(&d), vec!["Highlights Day 2 [abc].mp4.part"]);
+        let _ = fs::remove_dir_all(&d);
+
+        let d = fresh_dir("id");
+        touch(&d, "Live [aaa].mp4.part", 10);
+        touch(&d, "Live [bbb].mp4.part", 10);
+        clean_partial_files(d.to_str().unwrap(), "Live [aaa]");
+        assert_eq!(names(&d), vec!["Live [bbb].mp4.part"]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn empty_stem_never_wipes_folder() {
+        let d = fresh_dir("empty");
+        touch(&d, "Movie A.mp4.part", 10);
+        touch(&d, "Other Show.mp4.part", 10);
+        clean_partial_files(d.to_str().unwrap(), "");
+        assert_eq!(names(&d).len(), 2);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn disk_full_detection() {
+        assert!(is_disk_full_error(&[
+            "OSError: [Errno 28] No space left on device".to_string()
+        ]));
+        assert!(!is_disk_full_error(&["HTTP Error 403: Forbidden".to_string()]));
+    }
+}

@@ -30,9 +30,10 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("release.keystore")
-            storePassword = "zrdownloader123"
+            // Set ZR_KEYSTORE_PASSWORD / ZR_KEY_PASSWORD (env var or gradle property) in CI and rotate the key.
+            storePassword = System.getenv("ZR_KEYSTORE_PASSWORD") ?: (project.findProperty("ZR_KEYSTORE_PASSWORD") as String?) ?: "zrdownloader123"
             keyAlias = "zrdownloader"
-            keyPassword = "zrdownloader123"
+            keyPassword = System.getenv("ZR_KEY_PASSWORD") ?: (project.findProperty("ZR_KEY_PASSWORD") as String?) ?: "zrdownloader123"
             enableV1Signing = true
             enableV2Signing = true
             enableV3Signing = true
