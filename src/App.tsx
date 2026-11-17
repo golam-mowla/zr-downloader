@@ -17,6 +17,7 @@ import { DownloadTableView } from "./components/DownloadTableView";
 import { DownloadItemCard } from "./components/DownloadItemCard";
 import { AddDownloadModal, DirectDownloadExtras } from "./components/AddDownloadModal";
 import { PreferencesModal } from "./components/PreferencesModal";
+import { AppUpdateBanner, useAppUpdate } from "./components/AppUpdatePanel";
 import { HelpModal } from "./components/HelpModal";
 import { DownloadStatusDialog } from "./components/DownloadStatusDialog";
 import { TorrentDetailsDrawer } from "./components/TorrentDetailsDrawer";
@@ -1737,6 +1738,9 @@ export const App: React.FC = () => {
 
   const isDark = theme === "dark";
 
+  // Checks GitHub Releases shortly after start and every few hours; shows a banner if newer.
+  const appUpdate = useAppUpdate(true);
+
   return (
     <div className="flex h-screen w-screen overflow-hidden font-sans bg-zr-app text-zr-primary transition-colors duration-150">
       {/* Left Sidebar (IDM Category Tree + Status) */}
@@ -1764,6 +1768,7 @@ export const App: React.FC = () => {
 
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col h-screen min-w-0 overflow-hidden">
+        <AppUpdateBanner update={appUpdate} />
         {/* Top IDM Action Ribbon / Toolbar */}
         <Toolbar
           onAddUrl={() => {
@@ -2000,6 +2005,7 @@ export const App: React.FC = () => {
 
       {/* Preferences / Settings Modal */}
       <PreferencesModal
+        appUpdate={appUpdate}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         defaultDir={defaultDir}

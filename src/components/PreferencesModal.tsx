@@ -21,6 +21,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { ToolVersionInfo, AppSettings, SchedulerConfig } from "../types";
+import { AppUpdatePanel, useAppUpdate } from "./AppUpdatePanel";
 
 const TOOLS_CACHE_TTL_MS = 10 * 60 * 1000;
 let lastChecked = 0;
@@ -64,6 +65,7 @@ interface PreferencesModalProps {
   onSettingsSaved?: (settings: AppSettings) => void;
   onListImported?: () => void;
   theme?: "dark" | "light";
+  appUpdate?: ReturnType<typeof useAppUpdate>;
 }
 
 const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -105,6 +107,7 @@ const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
 const ALL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export const PreferencesModal: React.FC<PreferencesModalProps> = ({
+  appUpdate,
   isOpen,
   onClose,
   defaultDir,
@@ -1233,6 +1236,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
           {activeTab === "tools" && (
             <div className="space-y-3">
+              {appUpdate && <AppUpdatePanel update={appUpdate} />}
               <div className="flex items-center justify-between">
                 <span className="text-[13px] font-medium text-zr-secondary">
                   Core Media Engine Binaries

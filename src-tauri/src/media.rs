@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -46,6 +46,7 @@ pub struct DownloadState {
     pub cancelled_tasks: Arc<Mutex<HashMap<String, bool>>>,
     pub task_options: Arc<Mutex<HashMap<String, DownloadOptions>>>,
     pub tasks: Arc<Mutex<HashMap<String, DownloadTask>>>,
+    pub running_workers: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 pub struct AppUrlState {
@@ -92,6 +93,7 @@ pub struct MediaInfo {
     pub subtitles: Vec<SubtitleTrack>,
 }
 
+#[allow(dead_code)]
 fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1964,6 +1966,138 @@ fn strip_media_extension_for_stem(raw: &str) -> String {
     current.trim().to_string()
 }
 
+/// Maps a per-format percent (0..100) onto ONE overall bar when yt-dlp downloads several formats
+/// one after another (HLS video, then a separate audio playlist). Without this the bar jumps back
+/// to ~0% when the audio track starts, which looks exactly like "download restarted from zero".
+fn hls_phase_percent(raw: f64, idx: usize, total: usize) -> f64 {
+    let raw = raw.clamp(0.0, 100.0);
+    if total <= 1 {
+        return raw;
+    }
+    let idx = idx.min(total - 1);
+    let (lo, hi) = if total == 2 {
+        if idx == 0 {
+            (0.0, 94.0)
+        } else {
+            (94.0, 99.0)
+        }
+    } else {
+        let span = 99.0 / total as f64;
+        (span * idx as f64, span * (idx as f64 + 1.0))
+    };
+    lo + (hi - lo) * raw / 100.0
+}
+
+/// Number of formats yt-dlp announces, e.g. `[info] abc: Downloading 1 format(s): 1080p+audio`.
+fn parse_format_count(line: &str) -> Option<usize> {
+    if !line.starts_with("[info]") {
+        return None;
+    }
+    let idx = line.find("format(s):")?;
+    let list = line[idx + "format(s):".len()..].trim();
+    if list.is_empty() {
+        return None;
+    }
+    Some(list.matches('+').count() + 1)
+}
+
+/// Path yt-dlp reports when it starts (or skips, because it is already complete) one format file:
+/// `[download] Destination: X.f137.mp4` / `[download] X.f137.mp4 has already been downloaded`.
+fn format_file_from_line(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("[download]")?.trim();
+    let path = if let Some(p) = rest.strip_prefix("Destination:") {
+        p.trim()
+    } else if let Some(p) = rest.strip_suffix("has already been downloaded") {
+        p.trim()
+    } else {
+        return None;
+    };
+    if path.is_empty() {
+        return None;
+    }
+    Some(path.trim_matches('"').to_string())
+}
+
+/// (bytes of all downloaded format files, bytes of the biggest `*.temp.*` merge output) for a stem.
+fn merge_progress_bytes(save_folder: &str, stem: &str) -> (u64, u64) {
+    let mut src: u64 = 0;
+    let mut out: u64 = 0;
+    let Ok(entries) = fs::read_dir(save_folder) else {
+        return (0, 0);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let low = name.to_lowercase();
+        if !name_matches_stem(&low, stem) {
+            continue;
+        }
+        let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        if low.contains(".temp.") {
+            out = out.max(len);
+        } else if is_ytdlp_format_fragment_name(&low) {
+            src = src.saturating_add(len);
+        }
+    }
+    (src, out)
+}
+
+/// yt-dlp prints nothing while ffmpeg merges / fixes up a multi-GB file, so the UI looked frozen
+/// ("stuck") at 99%. This heartbeat reports how much of the merged file is written until `stop`.
+fn spawn_merge_heartbeat(
+    app: AppHandle,
+    tid: String,
+    save_folder: String,
+    stem: String,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            let (src, out) = merge_progress_bytes(&save_folder, &stem);
+            let secs = started.elapsed().as_secs();
+            let (pct, text) = if src > 0 && out > 0 {
+                let ratio = (out as f64 / src as f64).clamp(0.0, 1.0);
+                (
+                    99.0 + ratio * 0.9,
+                    format!(
+                        "Merging video + audio: {} of about {} written",
+                        format_bytes(out),
+                        format_bytes(src)
+                    ),
+                )
+            } else {
+                (99.0, format!("Merging video + audio... {}s", secs))
+            };
+            let payload = serde_json::json!({
+                "id": tid.clone(),
+                "taskId": tid.clone(),
+                "percent": pct,
+                "text": text,
+                "speed": "",
+                "speed_formatted": "Merging...",
+                "speedFormatted": "Merging...",
+                "eta": "--",
+                "eta_formatted": "--",
+                "etaFormatted": "--",
+                "status": "assembling",
+            });
+            let _ = app.emit("download-progress", payload);
+            for _ in 0..8 {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(125));
+            }
+        }
+    });
+}
+
 fn is_ytdlp_format_fragment_name(name_lower: &str) -> bool {
     for (idx, _) in name_lower.match_indices(".f") {
         let after = &name_lower[idx + 2..];
@@ -2653,7 +2787,18 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
     let Some(state) = app.try_state::<DownloadState>() else {
         return;
     };
+
+    // Ensure only one media worker executes for this task at any time
+    {
+        let mut workers = state.running_workers.lock().unwrap();
+        if !workers.insert(task_id.clone()) {
+            eprintln!("Worker for task {} is already running; skipping duplicate launch.", task_id);
+            return;
+        }
+    }
+
     let Some(options) = state.task_options.lock().unwrap().get(&task_id).cloned() else {
+        state.running_workers.lock().unwrap().remove(&task_id);
         return;
     };
     let existing_task_snapshot = state.tasks.lock().unwrap().get(&task_id).cloned();
@@ -2685,7 +2830,24 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
 
     let tid = task_id.clone();
     let media_tasks = state.tasks.clone();
+    let running_workers_clone = state.running_workers.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        struct WorkerGuard {
+            task_id: String,
+            running_workers: Arc<Mutex<std::collections::HashSet<String>>>,
+        }
+        impl Drop for WorkerGuard {
+            fn drop(&mut self) {
+                if let Ok(mut w) = self.running_workers.lock() {
+                    w.remove(&self.task_id);
+                }
+            }
+        }
+        let _guard = WorkerGuard {
+            task_id: tid.clone(),
+            running_workers: running_workers_clone,
+        };
+
         let app_settings = app
             .try_state::<crate::settings::SettingsState>()
             .map(|s| s.get_blocking())
@@ -2845,8 +3007,6 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 "20",
                 "--extractor-retries",
                 "3",
-                "--throttled-rate",
-                "100K",
                 "--progress-template",
                 "download:[ZR_PROG] %(progress._percent_str)s | %(progress.downloaded_bytes)s | %(progress.total_bytes)s | %(progress.total_bytes_estimate)s | %(progress._speed_str)s | %(progress._eta_str)s",
             ]);
@@ -3165,6 +3325,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             && aria2c_found
             && !options.enable_clip
             && !is_hls
+            && !is_youtube
             && attempt_stage != 2
         {
             let aria_conns = if options.aria2_connections > 0 {
@@ -3435,11 +3596,65 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
 
             // Read stdout for progress lines (handles both \r and \n for real-time updates)
             let mut last_emit_instant = std::time::Instant::now() - std::time::Duration::from_secs(1);
+            // Multi-format HLS (video + separate audio): one overall bar instead of 0..100% per file.
+            let mut phase_total: usize = 1;
+            let mut phase_seen: Vec<String> = Vec::new();
+            let mut phase_done_bytes: u64 = 0;
+            let mut run_max_pct: f64 = 0.0;
+            let merge_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut merge_hb_started = false;
             if let Some(so) = stdout {
                 read_lines_cr_or_lf(so, |trimmed| {
                     let is_canc = cancelled_tasks.lock().unwrap().get(&tid).copied().unwrap_or(false);
                     if is_canc {
                         return false;
+                    }
+
+                    if !merge_hb_started
+                        && (trimmed.starts_with("[Merger]")
+                            || trimmed.starts_with("[Fixup")
+                            || trimmed.starts_with("[VideoRemuxer]")
+                            || trimmed.starts_with("[VideoConvertor]"))
+                    {
+                        merge_hb_started = true;
+                        spawn_merge_heartbeat(
+                            app.clone(),
+                            tid.clone(),
+                            options.save_folder.clone(),
+                            current_stem.clone(),
+                            merge_stop.clone(),
+                        );
+                    }
+
+                    if is_hls {
+                        if let Some(n) = parse_format_count(trimmed) {
+                            phase_total = n.max(1);
+                        }
+                        if let Some(fpath) = format_file_from_line(trimmed) {
+                            let fname_low = Path::new(&fpath)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            if is_ytdlp_format_fragment_name(&fname_low) && !phase_seen.contains(&fpath) {
+                                if !phase_seen.is_empty() {
+                                    // previous format finished: keep its bytes, start the next one
+                                    phase_done_bytes = phase_done_bytes.saturating_add(last_downloaded_bytes);
+                                    last_downloaded_bytes = 0;
+                                    last_total_bytes = 0;
+                                }
+                                phase_seen.push(fpath);
+                                let msg = format!(
+                                    "Downloading stream part {}/{}",
+                                    phase_seen.len(),
+                                    phase_total.max(phase_seen.len())
+                                );
+                                let _ = app.emit(
+                                    "download-log",
+                                    serde_json::json!({ "id": tid.clone(), "message": msg, "level": "info" }),
+                                );
+                            }
+                        }
                     }
 
                     if let Some(dur) = parse_ffmpeg_duration(trimmed) {
@@ -3556,9 +3771,20 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                 pct = ((last_downloaded_bytes as f64 / last_total_bytes as f64) * 100.0).clamp(0.0, 99.9);
                             }
                             let prev_pct = *last_percent.lock().unwrap();
+                            let mut guard_fired = false;
                             if prev_pct >= 98.0 && tot_b > 0 && prev_tot > 0 && tot_b < prev_tot / 2 {
                                 pct = 99.0;
+                                guard_fired = true;
                             }
+                            if pct <= 0.0 {
+                                // yt-dlp prints "N/A" until it can estimate the size (always right after a
+                                // resume). Never push 0% to the UI: that looked like a restart from zero.
+                                pct = prev_pct;
+                            } else if is_hls && !guard_fired {
+                                pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total)
+                                    .max(run_max_pct);
+                            }
+                            run_max_pct = run_max_pct.max(pct);
                             if pct > 0.0 {
                                 *last_percent.lock().unwrap() = pct;
                             }
@@ -3580,8 +3806,8 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                 &media_tasks,
                                 &tid,
                                 pct,
-                                last_downloaded_bytes,
-                                last_total_bytes,
+                                last_downloaded_bytes.saturating_add(phase_done_bytes),
+                                last_total_bytes.saturating_add(phase_done_bytes),
                                 &speed_str,
                                 &eta_str,
                                 &mut last_emit_instant,
@@ -3608,9 +3834,18 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                         }
 
                         let prev_pct = *last_percent.lock().unwrap();
+                        let mut guard_fired = false;
                         if prev_pct >= 98.0 && parsed_tot > 0 && last_total_bytes > 0 && parsed_tot < last_total_bytes / 2 {
                             pct = 99.0;
+                            guard_fired = true;
                         }
+                        if pct <= 0.0 {
+                            pct = prev_pct;
+                        } else if is_hls && !guard_fired {
+                            pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total)
+                                .max(run_max_pct);
+                        }
+                        run_max_pct = run_max_pct.max(pct);
                         if pct > 0.0 {
                             *last_percent.lock().unwrap() = pct;
                         }
@@ -3696,6 +3931,9 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                         || trimmed.starts_with("[ExtractAudio]")
                         || trimmed.starts_with("[EmbedSubtitle]")
                         || trimmed.starts_with("[Metadata]")
+                        || trimmed.starts_with("[Fixup")
+                        || trimmed.starts_with("[VideoRemuxer]")
+                        || trimmed.starts_with("[VideoConvertor]")
                     {
                         let _ = app.emit(
                             "download-progress",
@@ -3716,6 +3954,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             }
 
             let status = child.wait();
+            merge_stop.store(true, std::sync::atomic::Ordering::Relaxed);
             if let Some(handle) = stderr_handle {
                 let _ = handle.join();
             }
@@ -3883,8 +4122,11 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             // ANY failed HLS run, even at 99% (network blip, 403...). Now it only fires when nothing
             // was downloaded yet; otherwise fall through to the 403-refresh / network-retry logic,
             // and a later Resume continues with --continue.
+            // NOTE: last_percent starts at 2.0 on a fresh run, so it can NOT be used to detect progress
+            // (the previous check was always true, which silently disabled the ffmpeg fallback).
             let hls_made_progress = last_downloaded_bytes > 0
-                || *last_percent.lock().unwrap() > 0.5
+                || phase_done_bytes > 0
+                || !phase_seen.is_empty()
                 || has_partial_data(&options.save_folder, &current_stem);
             if is_hls
                 && attempt_stage == 0
@@ -3919,8 +4161,25 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 detected_ref.as_deref(),
             );
 
+            // find_fresh_kept_output_file() also returns ANY recently written file in the folder. When the
+            // merge failed, only a file that really belongs to THIS task may end the task as "kept" -
+            // otherwise clean_partial_files() below would delete the fully downloaded video/audio parts
+            // and the next attempt would start from zero.
+            let kept_file_for_warn = kept_file.clone().filter(|p| {
+                if let Some(d) = detected_ref.as_deref() {
+                    if Path::new(d) == p.as_path() {
+                        return true;
+                    }
+                }
+                !current_stem.is_empty()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| name_matches_stem(&n.to_lowercase(), &current_stem))
+                        .unwrap_or(false)
+            });
+
             if postprocess_failed {
-                if let Some(ref kept_path) = kept_file {
+                if let Some(ref kept_path) = kept_file_for_warn {
                     let kept_name = kept_path
                         .file_name()
                         .and_then(|n| n.to_str())
@@ -5163,11 +5422,226 @@ pub async fn open_folder(path: String) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
+// App update check (GitHub Releases) - the 1-click installer below uses its result
+// ---------------------------------------------------------------------------
+
+/// GitHub "owner/repo" whose Releases are checked for new app versions.
+const APP_UPDATE_REPO: &str = "golam-mowla/zr-downloader";
+
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub update_available: bool,
+    pub release_name: String,
+    pub release_notes: String,
+    pub release_url: String,
+    pub published_at: String,
+    pub asset_name: String,
+    pub asset_url: String,
+    pub asset_size: u64,
+}
+
+fn parse_version_parts(v: &str) -> Vec<u64> {
+    let v = v.trim().trim_start_matches(|c: char| c == 'v' || c == 'V');
+    let core = v.split(|c: char| c == '-' || c == '+').next().unwrap_or("");
+    core.split('.')
+        .map(|p| p.trim().parse::<u64>().unwrap_or(0))
+        .collect()
+}
+
+/// True when `latest` is a strictly higher version than `current` ("v1.2.39" vs "1.2.38").
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let a = parse_version_parts(latest);
+    let b = parse_version_parts(current);
+    let n = a.len().max(b.len());
+    for i in 0..n {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// Picks the installer asset that fits this OS: (name, url, size).
+fn pick_update_asset(assets: &[serde_json::Value]) -> Option<(String, String, u64)> {
+    let mut best: Option<(i32, String, String, u64)> = None;
+    for a in assets {
+        let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let url = a
+            .get("browser_download_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if name.is_empty() || url.is_empty() {
+            continue;
+        }
+        let low = name.to_lowercase();
+        let size = a.get("size").and_then(|v| v.as_u64()).unwrap_or(0);
+        let score: i32 = if cfg!(target_os = "windows") {
+            if low.ends_with(".exe") && (low.contains("setup") || low.contains("install")) {
+                100
+            } else if low.ends_with(".exe") {
+                80
+            } else {
+                0
+            }
+        } else if cfg!(target_os = "macos") {
+            if low.ends_with(".dmg") {
+                100
+            } else if low.ends_with(".zip")
+                && (low.contains("mac") || low.contains("darwin") || low.contains("osx"))
+            {
+                70
+            } else {
+                0
+            }
+        } else if low.ends_with(".appimage") {
+            100
+        } else {
+            0
+        };
+        if score == 0 {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some(b) => score > b.0,
+        };
+        if better {
+            best = Some((score, name.to_string(), url.to_string(), size));
+        }
+    }
+    best.map(|(_, n, u, sz)| (n, u, sz))
+}
+
+/// Checks GitHub Releases for a newer app version. Never installs anything by itself.
+#[command]
+pub async fn check_app_update(app: AppHandle) -> Result<AppUpdateInfo, String> {
+    let current = app.package_info().version.to_string();
+    let proxy = app
+        .try_state::<crate::settings::SettingsState>()
+        .map(|s| s.get_blocking())
+        .and_then(|s| s.effective_proxy_url());
+
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(format!("ZR-Downloader/{}", current));
+    if let Some(p) = proxy {
+        if !p.trim().is_empty() {
+            if let Ok(px) = reqwest::Proxy::all(p.trim()) {
+                builder = builder.proxy(px);
+            }
+        }
+    }
+    let client = builder.build().map_err(|e| e.to_string())?;
+
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        APP_UPDATE_REPO
+    );
+    let resp = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach GitHub: {}", e))?;
+
+    let code = resp.status().as_u16();
+    if code == 404 {
+        // no published (non-draft, non-prerelease) release yet
+        return Ok(AppUpdateInfo {
+            current_version: current,
+            ..Default::default()
+        });
+    }
+    if !resp.status().is_success() {
+        return Err(format!("GitHub returned HTTP {}", code));
+    }
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    let tag = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let assets: Vec<serde_json::Value> = json
+        .get("assets")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let (asset_name, asset_url, asset_size) = pick_update_asset(&assets).unwrap_or_default();
+    let mut notes = json
+        .get("body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if notes.chars().count() > 4000 {
+        notes = notes.chars().take(4000).collect::<String>() + "...";
+    }
+
+    Ok(AppUpdateInfo {
+        update_available: !tag.is_empty() && is_newer_version(&tag, &current),
+        current_version: current,
+        latest_version: tag.trim_start_matches(|c: char| c == 'v' || c == 'V').to_string(),
+        release_name: json
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        release_notes: notes,
+        release_url: json
+            .get("html_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        published_at: json
+            .get("published_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        asset_name,
+        asset_url,
+        asset_size,
+    })
+}
+
+/// Opens this project's GitHub release page in the default browser (nothing else is allowed).
+#[command]
+pub async fn open_release_page(url: String) -> Result<(), String> {
+    let allowed = format!("https://github.com/{}/", APP_UPDATE_REPO);
+    if !url.starts_with(&allowed) {
+        return Err("Only this project's GitHub pages can be opened.".to_string());
+    }
+    open::that(&url).map_err(|e| format!("Failed to open browser: {}", e))
+}
+
+/// File extension of the download URL's last path segment (query stripped), or `default`.
+#[allow(dead_code)]
+fn update_file_ext(url: &str, default: &str) -> String {
+    let path = url.split('?').next().unwrap_or(url);
+    let last = path.rsplit('/').next().unwrap_or("");
+    match last.rsplit_once('.') {
+        Some((_, ext)) if !ext.is_empty() && ext.len() <= 8 && ext.chars().all(|c| c.is_ascii_alphanumeric()) => {
+            ext.to_lowercase()
+        }
+        _ => default.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Command 6: 1-Click App Updater (Downloads & Launches Installer from GitHub)
 // ---------------------------------------------------------------------------
 
 #[command]
 pub async fn install_app_update(_app: AppHandle, download_url: String) -> Result<String, String> {
+    // This command downloads AND RUNS the file, so it must never accept an arbitrary URL.
+    let allowed_prefix = format!("https://github.com/{}/releases/download/", APP_UPDATE_REPO);
+    if !download_url.starts_with(&allowed_prefix) {
+        return Err("Refusing to install: the update must come from this app's GitHub Releases.".to_string());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let temp_dir = env::temp_dir();
 
@@ -5210,7 +5684,7 @@ pub async fn install_app_update(_app: AppHandle, download_url: String) -> Result
 
         #[cfg(target_os = "macos")]
         {
-            let dest = temp_dir.join("GM-Downloader-macOS.zip");
+            let dest = temp_dir.join(format!("GM-Downloader-Update.{}", update_file_ext(&download_url, "dmg")));
             let dest_str = dest.to_string_lossy().to_string();
             let status = Command::new("curl")
                 .args(["-L", "-f", "-o", &dest_str, &download_url])
@@ -5292,6 +5766,74 @@ mod resume_safety_tests {
             .collect();
         v.sort();
         v
+    }
+
+    #[test]
+    fn phase_percent_never_goes_back_to_zero_for_audio() {
+        // 2 formats: video fills 0..94, audio 94..99
+        assert_eq!(hls_phase_percent(100.0, 0, 2), 94.0);
+        assert_eq!(hls_phase_percent(0.0, 1, 2), 94.0);
+        assert!(hls_phase_percent(50.0, 1, 2) > 94.0 && hls_phase_percent(100.0, 1, 2) == 99.0);
+        // single format is untouched, 3 formats are split evenly
+        assert_eq!(hls_phase_percent(42.0, 0, 1), 42.0);
+        assert!((hls_phase_percent(100.0, 2, 3) - 99.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_format_count_and_format_files() {
+        assert_eq!(parse_format_count("[info] abc: Downloading 1 format(s): hls-1080+hls-audio"), Some(2));
+        assert_eq!(parse_format_count("[info] abc: Downloading 1 format(s): best"), Some(1));
+        assert_eq!(parse_format_count("[download] 10%"), None);
+        assert_eq!(
+            format_file_from_line("[download] Destination: C:\\v\\Live.f137.mp4"),
+            Some("C:\\v\\Live.f137.mp4".to_string())
+        );
+        assert_eq!(
+            format_file_from_line("[download] Live.f140.m4a has already been downloaded"),
+            Some("Live.f140.m4a".to_string())
+        );
+        assert_eq!(format_file_from_line("[download]  45.0% of 10MiB"), None);
+    }
+
+    #[test]
+    fn merge_progress_counts_parts_and_temp_output() {
+        let d = fresh_dir("mergehb");
+        touch(&d, "Kick Stream.f137.mp4", 1000);
+        touch(&d, "Kick Stream.f140.m4a", 200);
+        touch(&d, "Kick Stream.temp.mp4", 600);
+        touch(&d, "Other Show.f137.mp4", 5000);
+        let (src, out) = merge_progress_bytes(d.to_str().unwrap(), "Kick Stream");
+        assert_eq!((src, out), (1200, 600));
+    }
+
+    #[test]
+    fn version_compare_handles_v_prefix_and_lengths() {
+        assert!(is_newer_version("v1.2.39", "1.2.38"));
+        assert!(is_newer_version("1.3.0", "1.2.99"));
+        assert!(is_newer_version("2.0", "1.9.9"));
+        assert!(!is_newer_version("v1.2.38", "1.2.38"));
+        assert!(!is_newer_version("1.2.37", "1.2.38"));
+        assert!(!is_newer_version("1.2", "1.2.0"));
+    }
+
+    #[test]
+    fn picks_installer_asset_and_ext() {
+        let assets = vec![
+            serde_json::json!({"name":"notes.txt","browser_download_url":"https://x/notes.txt","size":1}),
+            serde_json::json!({"name":"ZR-Downloader_1.2.39_x64-setup.exe","browser_download_url":"https://x/s.exe","size":99}),
+            serde_json::json!({"name":"ZR-Downloader_1.2.39_amd64.AppImage","browser_download_url":"https://x/a.AppImage","size":98}),
+            serde_json::json!({"name":"ZR-Downloader_1.2.39.dmg","browser_download_url":"https://x/m.dmg","size":97}),
+        ];
+        let picked = pick_update_asset(&assets).expect("an installer for this OS");
+        if cfg!(target_os = "windows") {
+            assert!(picked.0.ends_with("setup.exe"));
+        } else if cfg!(target_os = "macos") {
+            assert!(picked.0.ends_with(".dmg"));
+        } else {
+            assert!(picked.0.ends_with(".AppImage"));
+        }
+        assert_eq!(update_file_ext("https://github.com/o/r/releases/download/v1/App.dmg?x=1", "zip"), "dmg");
+        assert_eq!(update_file_ext("https://github.com/o/r/releases/download/v1/noext", "zip"), "zip");
     }
 
     fn fresh_dir(tag: &str) -> PathBuf {
