@@ -687,7 +687,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
               {/* App Shell & UX Settings (I, J) */}
               <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
                 <div className="text-[13px] font-semibold text-zr-primary">
-                  App Shell, Tray & Clipboard
+                  App Shell & Clipboard
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[12.5px]">
                   <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
@@ -708,28 +708,6 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                       checked={appSettings.startWithWindows}
                       onChange={(e) =>
                         setAppSettings((p) => ({ ...p, startWithWindows: e.target.checked }))
-                      }
-                      className="w-4 h-4 accent-blue-600"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
-                    <span className="text-zr-secondary font-medium">Minimize to Tray</span>
-                    <input
-                      type="checkbox"
-                      checked={appSettings.minimizeToTray}
-                      onChange={(e) =>
-                        setAppSettings((p) => ({ ...p, minimizeToTray: e.target.checked }))
-                      }
-                      className="w-4 h-4 accent-blue-600"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
-                    <span className="text-zr-secondary font-medium">Close Button Hides to Tray</span>
-                    <input
-                      type="checkbox"
-                      checked={appSettings.closeToTray}
-                      onChange={(e) =>
-                        setAppSettings((p) => ({ ...p, closeToTray: e.target.checked }))
                       }
                       className="w-4 h-4 accent-blue-600"
                     />

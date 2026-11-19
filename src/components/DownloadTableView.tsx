@@ -58,7 +58,6 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
   onDelete,
   onOpenFile,
   onOpenFolder,
-  onChangePriority,
   onReorderTasks,
   onViewErrorLog,
   windowWidth,
@@ -386,7 +385,7 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                       </div>
                     </td>
 
-                    {/* Status Badge + Priority Selector (stacked so Priority never overlaps Speed) */}
+                    {/* Status Badge */}
                     <td className="py-2.5 px-3 whitespace-nowrap overflow-hidden border-b border-zr">
                       <div className="flex flex-col items-start gap-1">
                         <span
@@ -400,19 +399,6 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
                             : task.status}
                         </span>
                         <div className="flex items-center gap-1">
-                          {onChangePriority && !isFileReady && !isError && task.status !== "cancelled" && (
-                            <select
-                              value={task.priority || "normal"}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => onChangePriority(task.id, e.target.value)}
-                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded border border-zr bg-zr-surface text-zr-secondary cursor-pointer focus:outline-none focus:border-blue-500"
-                              title="Queue priority"
-                            >
-                              <option value="high">High</option>
-                              <option value="normal">Normal</option>
-                              <option value="low">Low</option>
-                            </select>
-                          )}
                           {isError && onViewErrorLog && (
                             <button
                               type="button"

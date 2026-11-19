@@ -1,3 +1,4 @@
+pub mod clipper;
 pub mod downloader;
 pub mod media;
 pub mod queue;
@@ -491,8 +492,18 @@ async fn cancel_http_download(
     download_state: State<'_, DownloadState>,
     task_id: String,
 ) -> Result<(), String> {
+    let save_folder_opt = {
+        let tasks = download_state.tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks.get(&task_id).map(|t| t.save_path.clone())
+    }.or_else(|| {
+        let opts = download_state.task_options.lock().unwrap_or_else(|e| e.into_inner());
+        opts.get(&task_id).map(|o| o.save_folder.clone())
+    });
     let _ = media::cancel_download(app.clone(), download_state, Some(task_id.clone())).await;
-    let res = queue::cancel_download(app.clone(), state.inner().clone(), task_id).await;
+    let res = queue::cancel_download(app.clone(), state.inner().clone(), task_id.clone()).await;
+    if let Some(sp) = save_folder_opt {
+        media::remove_clip_working_dir(&sp, &task_id);
+    }
     save_all_tasks(&app).await;
     res
 }
@@ -509,17 +520,20 @@ async fn remove_http_download(
     let ds_opts = download_state.task_options.clone();
     let _ = media::cancel_download(app.clone(), download_state.clone(), Some(task_id.clone())).await;
     let removed_media = {
-        let mut m_tasks = ds_tasks.lock().unwrap();
+        let mut m_tasks = ds_tasks.lock().unwrap_or_else(|e| e.into_inner());
         m_tasks.remove(&task_id)
     };
-    {
-        let mut m_opts = ds_opts.lock().unwrap();
-        m_opts.remove(&task_id);
-    }
-    if delete_file.unwrap_or(false) {
-        if let Some(ref mt) = removed_media {
+    let removed_opts = {
+        let mut m_opts = ds_opts.lock().unwrap_or_else(|e| e.into_inner());
+        m_opts.remove(&task_id)
+    };
+    if let Some(ref mt) = removed_media {
+        media::remove_clip_working_dir(&mt.save_path, &task_id);
+        if delete_file.unwrap_or(false) {
             media::delete_task_files_and_partials(&mt.save_path, &mt.filename);
         }
+    } else if let Some(ref opt) = removed_opts {
+        media::remove_clip_working_dir(&opt.save_folder, &task_id);
     }
     let res = queue::remove_download(app.clone(), state.inner().clone(), task_id.clone(), delete_file.unwrap_or(false)).await;
     media::forget_task(&download_state, &task_id);
@@ -1759,34 +1773,15 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .on_window_event(|window, event| {
-            match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    save_all_tasks_sync(window.app_handle());
-                    if window.label() == "main" {
-                        let close_to_tray = window
-                            .app_handle()
-                            .try_state::<SettingsState>()
-                            .map(|s| s.get_blocking().close_to_tray)
-                            .unwrap_or(true);
-                        if close_to_tray {
-                            api.prevent_close();
-                            let _ = window.hide();
-                        }
-                    }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                save_all_tasks_sync(window.app_handle());
+                // Main window: the X button always hides to the system tray (downloads keep running;
+                // use the tray menu "Exit ZR Downloader" to quit). Minimize is a normal taskbar
+                // minimize and never goes to the tray. Popup windows (dl_*, ntf_*) close normally.
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
-                tauri::WindowEvent::Resized(_) => {
-                    if window.label() == "main" && window.is_minimized().unwrap_or(false) {
-                        let min_to_tray = window
-                            .app_handle()
-                            .try_state::<SettingsState>()
-                            .map(|s| s.get_blocking().minimize_to_tray)
-                            .unwrap_or(false);
-                        if min_to_tray {
-                            let _ = window.hide();
-                        }
-                    }
-                }
-                _ => {}
             }
         })
         .setup(|app| {
