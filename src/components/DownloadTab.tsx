@@ -794,14 +794,14 @@ export const DownloadTab: React.FC<DownloadTabProps> = ({
                         <span className="text-indigo-600 dark:text-cyan-400 font-black shrink-0">
                           {t.speed ? `${t.speed} • ` : ""}
                           {t.eta ? `ETA ${t.eta} • ` : ""}
-                          {t.percent.toFixed(1)}%
+                          {(t.status === "completed" ? 100 : Math.min(99.0, Math.max(0, t.percent))).toFixed(1)}%
                         </span>
                       </div>
                       <div className="w-full h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden border border-slate-200 dark:border-slate-700 p-0.5">
                         <div
                           className="h-full rounded-full transition-all duration-300"
                           style={{
-                            width: `${Math.min(100, Math.max(0, t.percent))}%`,
+                            width: `${Math.min(100, Math.max(0, t.status === "completed" ? 100 : Math.min(99.0, t.percent)))}%`,
                             background: isPaused
                               ? "#f59e0b"
                               : "linear-gradient(90deg, #06b6d4, #6366f1, #10b981)",

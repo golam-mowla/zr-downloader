@@ -342,47 +342,51 @@ export const DownloadTableView: React.FC<DownloadTableViewProps> = ({
 
                     {/* Progress Bar & Percent */}
                     <td className="py-2.5 px-3 border-b border-zr">
-                      <div className="space-y-1">
-                        <div className="flex justify-between items-center text-[12px] font-semibold tabular-nums">
-                          <span className="text-zr-primary">
-                            {(isError && task.percent >= 100 ? 99 : task.percent).toFixed(1)}%
-                          </span>
-                          {getChunkCount(task) > 1 && (
-                            <span className="text-zr-accent text-[11px] font-medium hidden sm:inline">
-                              {getChunkCount(task)} Chunks
-                            </span>
-                          )}
-                        </div>
-                        {/* 8px high solid accent progress bar */}
-                        <div className="h-2 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-200 ${
-                              isCompleted
-                                ? "bg-emerald-600 dark:bg-emerald-500"
-                                : isWarning
-                                ? "bg-amber-600 dark:bg-amber-500"
-                                : isError
-                                ? "bg-red-600 dark:bg-red-500"
-                                : isPaused
-                                ? "bg-amber-600 dark:bg-amber-500"
-                                : "bg-blue-600 dark:bg-blue-400"
-                            }`}
-                            style={{
-                              width: `${Math.min(
-                                100,
-                                Math.max(0, isError && task.percent >= 100 ? 99 : task.percent)
-                              )}%`,
-                            }}
-                          />
-                        </div>
-                        {/* Responsive inline speed and ETA when columns are hidden (<900px or <1000px) */}
-                        {(!showSpeed || !showTimeLeft) && (
-                          <div className="flex items-center justify-between text-[11px] tabular-nums text-zr-secondary pt-0.5 truncate">
-                            <span>{!showSpeed && isDownloading ? getSpeedFormatted(task) : ""}</span>
-                            <span>{!showTimeLeft && isDownloading ? getEtaFormatted(task) : ""}</span>
+                      {(() => {
+                        const displayPct = isCompleted
+                          ? 100
+                          : Math.min(99.0, Math.max(0, isError && task.percent >= 100 ? 99 : task.percent));
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center text-[12px] font-semibold tabular-nums">
+                              <span className="text-zr-primary">
+                                {displayPct.toFixed(1)}%
+                              </span>
+                              {getChunkCount(task) > 1 && (
+                                <span className="text-zr-accent text-[11px] font-medium hidden sm:inline">
+                                  {getChunkCount(task)} Chunks
+                                </span>
+                              )}
+                            </div>
+                            {/* 8px high solid accent progress bar */}
+                            <div className="h-2 w-full bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-200 ${
+                                  isCompleted
+                                    ? "bg-emerald-600 dark:bg-emerald-500"
+                                    : isWarning
+                                    ? "bg-amber-600 dark:bg-amber-500"
+                                    : isError
+                                    ? "bg-red-600 dark:bg-red-500"
+                                    : isPaused
+                                    ? "bg-amber-600 dark:bg-amber-500"
+                                    : "bg-blue-600 dark:bg-blue-400"
+                                }`}
+                                style={{
+                                  width: `${displayPct}%`,
+                                }}
+                              />
+                            </div>
+                            {/* Responsive inline speed and ETA when columns are hidden (<900px or <1000px) */}
+                            {(!showSpeed || !showTimeLeft) && (
+                              <div className="flex items-center justify-between text-[11px] tabular-nums text-zr-secondary pt-0.5 truncate">
+                                <span>{!showSpeed && isDownloading ? getSpeedFormatted(task) : ""}</span>
+                                <span>{!showTimeLeft && isDownloading ? getEtaFormatted(task) : ""}</span>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
+                        );
+                      })()}
                     </td>
 
                     {/* Status Badge */}

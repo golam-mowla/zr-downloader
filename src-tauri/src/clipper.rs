@@ -96,3 +96,55 @@ pub fn save_clip_state(working_dir: &Path, state: &ClipState) -> Result<(), Stri
     fs::rename(&tmp_path, &final_path).map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Returns true if a format file name or path indicates an audio stream.
+pub fn is_audio_format_file(path: &str) -> bool {
+    let p = path.to_lowercase();
+    p.ends_with(".m4a")
+        || p.ends_with(".opus")
+        || p.ends_with(".mp3")
+        || p.ends_with(".aac")
+        || p.ends_with(".ogg")
+        || p.ends_with(".weba")
+        || p.ends_with(".flac")
+        || p.ends_with(".wav")
+        || p.contains(".f140.")
+        || p.contains(".f251.")
+        || p.contains(".f250.")
+        || p.contains(".f249.")
+        || p.contains(".f139.")
+        || p.contains(".f233.")
+        || p.contains(".f234.")
+}
+
+/// Maps a per-format percent (0..100) onto ONE overall bar (0..99%) when yt-dlp downloads several
+/// formats one after another (e.g. YouTube DASH video + audio, HLS video + audio playlists).
+/// Clamped strictly below 100% so in-flight downloading tasks never display 100.0% prematurely.
+pub fn multi_phase_percent(raw: f64, idx: usize, total: usize, first_is_audio: bool) -> f64 {
+    let raw = raw.clamp(0.0, 100.0);
+    if total <= 1 {
+        return raw.min(99.0);
+    }
+    let idx = idx.min(total - 1);
+    let (lo, hi) = if total == 2 {
+        if first_is_audio {
+            // Audio downloaded first (~15% of bytes), video downloaded second (~84% of bytes)
+            if idx == 0 {
+                (0.0, 15.0)
+            } else {
+                (15.0, 99.0)
+            }
+        } else {
+            // Video downloaded first (~90% of bytes), audio downloaded second (~9% of bytes)
+            if idx == 0 {
+                (0.0, 90.0)
+            } else {
+                (90.0, 99.0)
+            }
+        }
+    } else {
+        let span = 99.0 / total as f64;
+        (span * idx as f64, span * (idx as f64 + 1.0))
+    };
+    (lo + (hi - lo) * raw / 100.0).clamp(0.0, 99.0)
+}

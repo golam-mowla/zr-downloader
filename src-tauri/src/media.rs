@@ -1131,6 +1131,7 @@ fn emit_unified_media_progress(
     last_emit: &mut std::time::Instant,
     force_emit: bool,
 ) {
+    let safe_pct = pct.clamp(0.0, 99.0);
     let speed_bps = parse_human_size_to_bytes(speed_str);
     let clean_speed = if !speed_str.is_empty() {
         speed_str.to_string()
@@ -1145,14 +1146,16 @@ fn emit_unified_media_progress(
         eta_str.to_string()
     };
 
+    let effective_total = total_bytes.max(downloaded_bytes);
+
     if let Ok(mut tasks_lock) = media_tasks.lock() {
         if let Some(t) = tasks_lock.get_mut(tid) {
-            t.percent = pct;
+            t.percent = safe_pct;
             if downloaded_bytes > 0 {
                 t.downloaded_bytes = downloaded_bytes;
             }
-            if total_bytes > 0 {
-                t.total_bytes = total_bytes;
+            if effective_total > 0 {
+                t.total_bytes = effective_total;
             }
             if speed_bps > 0 || !speed_str.is_empty() {
                 t.speed_bps = speed_bps;
@@ -1164,13 +1167,13 @@ fn emit_unified_media_progress(
     }
 
     let now = std::time::Instant::now();
-    if force_emit || now.duration_since(*last_emit).as_millis() >= 200 || pct >= 99.5 {
+    if force_emit || now.duration_since(*last_emit).as_millis() >= 200 || safe_pct >= 99.0 {
         *last_emit = now;
         let payload = serde_json::json!({
             "id": tid.to_string(),
             "taskId": tid.to_string(),
-            "percent": pct,
-            "text": format!("{:.1}% of {} at {}", pct, format_bytes(total_bytes), clean_speed),
+            "percent": safe_pct,
+            "text": format!("{:.1}% of {} at {}", safe_pct, format_bytes(effective_total), clean_speed),
             "speed": clean_speed.clone(),
             "speed_formatted": clean_speed.clone(),
             "speedFormatted": clean_speed.clone(),
@@ -1179,8 +1182,8 @@ fn emit_unified_media_progress(
             "eta": clean_eta.clone(),
             "eta_formatted": clean_eta.clone(),
             "etaFormatted": clean_eta.clone(),
-            "total_bytes": total_bytes,
-            "totalBytes": total_bytes,
+            "total_bytes": effective_total,
+            "totalBytes": effective_total,
             "downloaded_bytes": downloaded_bytes,
             "downloadedBytes": downloaded_bytes,
             "status": "downloading".to_string(),
@@ -1322,9 +1325,10 @@ fn emit_ffmpeg_progress_update(
         }
     }
 
+    let safe_pct = pct.clamp(0.0, 99.0);
     if let Ok(mut tasks_lock) = media_tasks.lock() {
         if let Some(t) = tasks_lock.get_mut(tid) {
-            t.percent = pct;
+            t.percent = safe_pct;
             if size_bytes > 0 {
                 t.downloaded_bytes = size_bytes;
             }
@@ -1349,7 +1353,7 @@ fn emit_ffmpeg_progress_update(
     let payload = serde_json::json!({
         "id": tid,
         "taskId": tid,
-        "percent": pct,
+        "percent": safe_pct,
         "text": text,
         "speed": speed_out,
         "speed_formatted": speed_out,
@@ -2052,26 +2056,12 @@ fn strip_media_extension_for_stem(raw: &str) -> String {
     current.trim().to_string()
 }
 
-/// Maps a per-format percent (0..100) onto ONE overall bar when yt-dlp downloads several formats
-/// one after another (HLS video, then a separate audio playlist). Without this the bar jumps back
-/// to ~0% when the audio track starts, which looks exactly like "download restarted from zero".
+pub use crate::clipper::{is_audio_format_file, multi_phase_percent};
+
+/// Compatibility wrapper for HLS phase scaling.
+#[allow(dead_code)]
 fn hls_phase_percent(raw: f64, idx: usize, total: usize) -> f64 {
-    let raw = raw.clamp(0.0, 100.0);
-    if total <= 1 {
-        return raw;
-    }
-    let idx = idx.min(total - 1);
-    let (lo, hi) = if total == 2 {
-        if idx == 0 {
-            (0.0, 94.0)
-        } else {
-            (94.0, 99.0)
-        }
-    } else {
-        let span = 99.0 / total as f64;
-        (span * idx as f64, span * (idx as f64 + 1.0))
-    };
-    lo + (hi - lo) * raw / 100.0
+    multi_phase_percent(raw, idx, total, false)
 }
 
 /// Number of formats yt-dlp announces, e.g. `[info] abc: Downloading 1 format(s): 1080p+audio`.
@@ -3553,7 +3543,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
         };
 
         let initial_pct = if is_resume_run && preserved_percent > 0.0 {
-            preserved_percent
+            preserved_percent.clamp(0.0, 98.0)
         } else {
             2.0
         };
@@ -3740,6 +3730,8 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 let last_pct_std = last_percent.clone();
                 let last_tot_std = last_total_bytes.clone();
                 let last_down_std = last_downloaded_bytes.clone();
+                let completed_format_bytes = Arc::new(Mutex::new(0u64));
+                let completed_fmt_std = completed_format_bytes.clone();
 
                 let merge_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let merge_stop_std = merge_stop.clone();
@@ -3791,6 +3783,10 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                             if let Some(fpath) = format_file_from_line(trimmed) {
                                 if !phase_seen.contains(&fpath) {
                                     if !phase_seen.is_empty() {
+                                        let prev_d = *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
+                                        let prev_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                        let prev_fmt_size = if prev_t > 0 { prev_t } else { prev_d };
+                                        *completed_fmt_std.lock().unwrap_or_else(|e| e.into_inner()) += prev_fmt_size;
                                         *last_down_std.lock().unwrap_or_else(|e| e.into_inner()) = 0;
                                         *last_tot_std.lock().unwrap_or_else(|e| e.into_inner()) = 0;
                                     }
@@ -3922,10 +3918,12 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                         *last_tot_std.lock().unwrap_or_else(|e| e.into_inner()) = tot_b;
                                     }
 
-                                    let cur_d = *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
-                                    let cur_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    let done_prior = *completed_fmt_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    let cur_d = done_prior + *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    let stream_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    let cur_t = if stream_t > 0 { done_prior + stream_t } else { 0 };
                                     if pct <= 0.0 && cur_t > 0 && cur_d > 0 {
-                                        pct = ((cur_d as f64 / cur_t as f64) * 100.0).clamp(0.0, 99.9);
+                                        pct = ((cur_d as f64 / cur_t as f64) * 100.0).clamp(0.0, 99.0);
                                     }
 
                                     if let Some(total_dur) = target_clip_duration {
@@ -3933,20 +3931,24 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                             let sec_done = prog_offset_sec + (pct / 100.0) * effective_piece_dur;
                                             pct = ((sec_done / total_dur) * 100.0).clamp(0.0, 99.0);
                                         }
+                                    } else {
+                                        let is_multi_stream = phase_total > 1 || phase_seen.len() > 1 || is_hls;
+                                        if is_multi_stream {
+                                            let first_is_audio = phase_seen.first().map(|f| is_audio_format_file(f)).unwrap_or(false);
+                                            pct = multi_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total.max(phase_seen.len()), first_is_audio);
+                                        } else {
+                                            pct = pct.min(99.0);
+                                        }
                                     }
 
                                     let prev_pct = *last_pct_std.lock().unwrap_or_else(|e| e.into_inner());
-                                    let mut guard_fired = false;
                                     if prev_pct >= 98.0 && tot_b > 0 && prev_tot > 0 && tot_b < prev_tot / 2 {
                                         pct = 99.0;
-                                        guard_fired = true;
                                     }
                                     if pct <= 0.0 {
                                         pct = prev_pct;
-                                    } else if is_hls && !guard_fired {
-                                        pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total);
                                     }
-                                    let smoothed_pct = pct.max(prev_pct);
+                                    let smoothed_pct = pct.max(prev_pct).min(99.0);
                                     *last_pct_std.lock().unwrap_or_else(|e| e.into_inner()) = smoothed_pct;
 
                                     let speed_str = parts[4].to_string();
@@ -3977,14 +3979,20 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                         let sec_done = prog_offset_sec + (pct / 100.0) * effective_piece_dur;
                                         pct = ((sec_done / total_dur) * 100.0).clamp(0.0, 99.0);
                                     }
+                                } else {
+                                    let is_multi_stream = phase_total > 1 || phase_seen.len() > 1 || is_hls;
+                                    if is_multi_stream {
+                                        let first_is_audio = phase_seen.first().map(|f| is_audio_format_file(f)).unwrap_or(false);
+                                        pct = multi_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total.max(phase_seen.len()), first_is_audio);
+                                    } else {
+                                        pct = pct.min(99.0);
+                                    }
                                 }
                                 let prev_pct = *last_pct_std.lock().unwrap_or_else(|e| e.into_inner());
                                 if pct <= 0.0 {
                                     pct = prev_pct;
-                                } else if is_hls {
-                                    pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total);
                                 }
-                                let smoothed = pct.max(prev_pct);
+                                let smoothed = pct.max(prev_pct).min(99.0);
                                 *last_pct_std.lock().unwrap_or_else(|e| e.into_inner()) = smoothed;
 
                                 let cur_t_before = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
@@ -4027,8 +4035,10 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                     "--".to_string()
                                 };
 
-                                let cur_d = *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
-                                let cur_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let done_prior = *completed_fmt_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let cur_d = done_prior + *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let stream_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let cur_t = if stream_t > 0 { done_prior + stream_t } else { 0 };
                                 emit_unified_media_progress(
                                     &app_std,
                                     &media_tasks_std,
@@ -6156,13 +6166,25 @@ mod resume_safety_tests {
 
     #[test]
     fn phase_percent_never_goes_back_to_zero_for_audio() {
-        // 2 formats: video fills 0..94, audio 94..99
-        assert_eq!(hls_phase_percent(100.0, 0, 2), 94.0);
-        assert_eq!(hls_phase_percent(0.0, 1, 2), 94.0);
-        assert!(hls_phase_percent(50.0, 1, 2) > 94.0 && hls_phase_percent(100.0, 1, 2) == 99.0);
-        // single format is untouched, 3 formats are split evenly
-        assert_eq!(hls_phase_percent(42.0, 0, 1), 42.0);
-        assert!((hls_phase_percent(100.0, 2, 3) - 99.0).abs() < 1e-9);
+        // 2 formats: video fills 0..90, audio 90..99
+        assert_eq!(multi_phase_percent(100.0, 0, 2, false), 90.0);
+        assert_eq!(multi_phase_percent(0.0, 1, 2, false), 90.0);
+        assert!(multi_phase_percent(50.0, 1, 2, false) > 90.0 && multi_phase_percent(100.0, 1, 2, false) == 99.0);
+        // Audio first: audio fills 0..15, video fills 15..99
+        assert_eq!(multi_phase_percent(100.0, 0, 2, true), 15.0);
+        assert_eq!(multi_phase_percent(0.0, 1, 2, true), 15.0);
+        assert_eq!(multi_phase_percent(100.0, 1, 2, true), 99.0);
+        // single format is capped at 99.0 during downloading, 3 formats are split evenly
+        assert_eq!(multi_phase_percent(42.0, 0, 1, false), 42.0);
+        assert_eq!(multi_phase_percent(100.0, 0, 1, false), 99.0);
+        assert!((multi_phase_percent(100.0, 2, 3, false) - 99.0).abs() < 1e-9);
+
+        // Audio format file detection
+        assert!(is_audio_format_file("Live.f140.m4a"));
+        assert!(is_audio_format_file("track.f251.webm"));
+        assert!(is_audio_format_file("song.opus"));
+        assert!(!is_audio_format_file("Live.f137.mp4"));
+        assert!(!is_audio_format_file("video.webm"));
     }
 
     #[test]

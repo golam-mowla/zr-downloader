@@ -219,11 +219,10 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
   useEffect(() => {
     if (!task) return;
     const now = Date.now();
-    const clampedPercent = Math.min(100, Math.max(0, task.percent || 0));
     const isFinished =
       task.status === "completed" ||
-      task.status === "completed_with_warning" ||
-      (clampedPercent >= 100 && task.status !== "error");
+      task.status === "completed_with_warning";
+    const clampedPercent = isFinished ? 100 : Math.min(99.0, Math.max(0, task.percent || 0));
 
     if (!isFinished && now - lastTitleUpdateRef.current < 500) {
       return;
@@ -264,10 +263,9 @@ export const StandaloneDownloadWindow: React.FC<StandaloneDownloadWindowProps> =
   const rawPercent = Math.min(100, Math.max(0, task.percent || 0));
   const isWarning = task.status === "completed_with_warning";
   const isError = task.status === "error" && !isWarning;
-  const isCompleted =
-    task.status === "completed" || (rawPercent >= 100 && !isError && !isWarning);
+  const isCompleted = task.status === "completed";
   const isFileReady = isCompleted || isWarning;
-  const clampedPercent = isError && rawPercent >= 100 ? 99 : rawPercent;
+  const clampedPercent = isCompleted ? 100 : Math.min(99.0, isError && rawPercent >= 100 ? 99 : rawPercent);
   const isPaused = task.status === "paused";
   const isAssembling = task.status === "assembling";
 

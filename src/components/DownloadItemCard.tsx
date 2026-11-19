@@ -240,7 +240,9 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
                 ? "bg-amber-600 dark:bg-amber-500"
                 : "bg-blue-600 dark:bg-blue-400"
             }`}
-            style={{ width: `${Math.min(100, Math.max(0, task.percent))}%` }}
+            style={{
+              width: `${isCompleted ? 100 : Math.min(99.0, Math.max(0, isError && task.percent >= 100 ? 99 : task.percent))}%`,
+            }}
           />
         </div>
 
@@ -248,7 +250,7 @@ export const DownloadItemCard: React.FC<DownloadItemCardProps> = ({
         <div className="flex items-center justify-between text-[13px] tabular-nums font-sans">
           <div className="flex items-center space-x-2 text-zr-secondary">
             <span className="font-semibold text-zr-primary">
-              {(isError && task.percent >= 100 ? 99 : task.percent).toFixed(1)}%
+              {(isCompleted ? 100 : Math.min(99.0, Math.max(0, isError && task.percent >= 100 ? 99 : task.percent))).toFixed(1)}%
             </span>
             <span>&bull;</span>
             <span>
