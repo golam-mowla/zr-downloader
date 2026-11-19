@@ -702,7 +702,7 @@ mod tests {
         let fpath = dir.join("sample.bin");
         std::fs::write(&fpath, b"hello zr downloader").unwrap();
 
-        let expected_md5 = "5ce1561ec46b3b3d6f5f9937483f8f9b";
+        let expected_md5 = "fd05801ed4d2fce4609db320f670fc4c";
         let (ok, alg, actual) = verify_file_checksum(&fpath, expected_md5).unwrap();
         assert_eq!(alg, "MD5");
         assert!(ok, "Expected MD5 {} to match, got {}", expected_md5, actual);

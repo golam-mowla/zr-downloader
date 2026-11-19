@@ -1189,6 +1189,45 @@ fn emit_unified_media_progress(
     }
 }
 
+/// Per-task throughput tracker for ffmpeg-based (clip / HLS-via-ffmpeg) progress lines:
+/// (time of last sample, output size at last sample, smoothed bytes/sec).
+static FFMPEG_RATE_TRACK: std::sync::OnceLock<Mutex<HashMap<String, (Instant, u64, u64)>>> =
+    std::sync::OnceLock::new();
+
+/// Real transfer speed (bytes/sec) from successive ffmpeg `size=` values. ffmpeg itself only
+/// reports a media-time multiplier ("0.92x"), which is not a download speed.
+fn ffmpeg_real_speed_bps(tid: &str, size_bytes: u64) -> u64 {
+    if size_bytes == 0 {
+        return 0;
+    }
+    let now = Instant::now();
+    let map = FFMPEG_RATE_TRACK.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = match map.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let entry = guard
+        .entry(tid.to_string())
+        .or_insert((now, size_bytes, 0u64));
+    if size_bytes < entry.1 {
+        // Output restarted from scratch (new ffmpeg run): reset the sample window.
+        *entry = (now, size_bytes, 0u64);
+        return 0;
+    }
+    let dt = now.duration_since(entry.0).as_secs_f64();
+    if dt >= 1.0 {
+        let inst = ((size_bytes - entry.1) as f64 / dt) as u64;
+        entry.2 = if entry.2 == 0 {
+            inst
+        } else {
+            (entry.2 as f64 * 0.6 + inst as f64 * 0.4) as u64
+        };
+        entry.0 = now;
+        entry.1 = size_bytes;
+    }
+    entry.2
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_ffmpeg_progress_update(
     app: &AppHandle,
@@ -1251,32 +1290,79 @@ fn emit_ffmpeg_progress_update(
         )
     };
 
+    // Real MB/s from output growth; falls back to ffmpeg's own multiplier only when no size is known.
+    let speed_bps = ffmpeg_real_speed_bps(tid, size_bytes);
+    let speed_out: String = if speed_bps > 0 {
+        crate::downloader::format_speed(speed_bps)
+    } else if size_bytes > 0 {
+        "Calculating...".to_string()
+    } else {
+        speed.to_string()
+    };
+
+    // Estimated final size for a time-bounded clip: bytes so far / fraction of the clip done.
+    let mut est_total: u64 = 0;
+    let mut eta_out = String::from("--");
+    if let Some(dur) = target_duration.filter(|&d| d > 0.0) {
+        let frac = (sec / dur).clamp(0.0, 1.0);
+        if size_bytes > 0 && frac >= 0.02 {
+            est_total = ((size_bytes as f64) / frac) as u64;
+        }
+        let mult = speed
+            .trim()
+            .trim_end_matches('x')
+            .parse::<f64>()
+            .ok()
+            .filter(|m| *m > 0.01);
+        if let Some(m) = mult {
+            let remaining_secs = (dur - sec).max(0.0) / m;
+            if remaining_secs.is_finite() {
+                eta_out = crate::downloader::format_eta(remaining_secs as u64);
+            }
+        }
+    }
+
     if let Ok(mut tasks_lock) = media_tasks.lock() {
         if let Some(t) = tasks_lock.get_mut(tid) {
             t.percent = pct;
             if size_bytes > 0 {
                 t.downloaded_bytes = size_bytes;
             }
-            if !speed.is_empty() {
-                t.speed_formatted = speed.to_string();
+            if est_total > 0 {
+                t.total_bytes = est_total.max(size_bytes);
             }
+            if !speed_out.is_empty() {
+                t.speed_formatted = speed_out.clone();
+            }
+            t.speed_bps = speed_bps;
+            t.eta_formatted = eta_out.clone();
             t.status = "downloading".to_string();
         }
     }
 
+    // null (not 0) while the size is still unknown, so the UI keeps any previous estimate.
+    let total_json = if est_total > 0 {
+        serde_json::json!(est_total)
+    } else {
+        serde_json::Value::Null
+    };
     let payload = serde_json::json!({
         "id": tid,
         "taskId": tid,
         "percent": pct,
         "text": text,
-        "speed": speed,
-        "speed_formatted": speed,
-        "speedFormatted": speed,
+        "speed": speed_out,
+        "speed_formatted": speed_out,
+        "speedFormatted": speed_out,
+        "speed_bps": speed_bps,
+        "speedBps": speed_bps,
         "downloaded_bytes": size_bytes,
         "downloadedBytes": size_bytes,
-        "eta": "--",
-        "eta_formatted": "--",
-        "etaFormatted": "--",
+        "total_bytes": total_json,
+        "totalBytes": total_json,
+        "eta": eta_out,
+        "eta_formatted": eta_out,
+        "etaFormatted": eta_out,
         "status": "downloading",
     });
     let _ = app.emit("download-progress", payload.clone());
@@ -2652,6 +2738,48 @@ fn is_expired_link_error(diags: &[String]) -> bool {
     })
 }
 
+pub use crate::clipper::*;
+
+pub fn resolve_media_container_ext(container: &str, is_audio: bool) -> &'static str {
+    let upper = container.to_uppercase();
+    if is_audio || upper.contains("(AUDIO)") {
+        if upper.starts_with("MP3") {
+            "mp3"
+        } else if upper.starts_with("M4A") {
+            "m4a"
+        } else if upper.starts_with("OPUS") {
+            "opus"
+        } else if upper.starts_with("FLAC") {
+            "flac"
+        } else if upper.starts_with("WAV") {
+            "wav"
+        } else if upper.starts_with("OGG") {
+            "ogg"
+        } else {
+            "mp3"
+        }
+    } else if upper.starts_with("WEBM") {
+        "webm"
+    } else if upper.starts_with("MKV") {
+        "mkv"
+    } else if upper.starts_with("MOV") {
+        "mov"
+    } else if upper.starts_with("AVI") {
+        "avi"
+    } else if upper.starts_with("TS") {
+        "ts"
+    } else {
+        "mp4"
+    }
+}
+
+#[allow(dead_code)]
+enum PassOutcome {
+    Success(Option<PathBuf>),
+    Cancelled,
+    Error(String),
+}
+
 #[command]
 pub async fn start_download(
     app: AppHandle,
@@ -2878,6 +3006,8 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
         let mut suffix_tag = String::new();
         let mut clip_start_str = String::new();
         let mut clip_end_str = String::new();
+        let mut clip_start_sec: f64 = 0.0;
+        let mut clip_end_sec: f64 = 0.0;
 
         if options.enable_clip && !is_subtitles_only {
             let s_raw = options.start_time.trim();
@@ -2890,22 +3020,35 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 if e_sec > s_sec {
                     is_clipping_active = true;
                     clip_target_duration = Some(e_sec - s_sec);
+                    clip_start_sec = s_sec;
+                    clip_end_sec = e_sec;
                     clip_start_str = format_seconds_to_timestamp(s_sec);
                     clip_end_str = format_seconds_to_timestamp(e_sec);
                     suffix_tag = format!(" [Clip {} to {}]", clip_start_str.replace(':', "-"), clip_end_str.replace(':', "-"));
                 } else if s_sec > 0.0 {
                     is_clipping_active = true;
+                    clip_start_sec = s_sec;
                     clip_start_str = format_seconds_to_timestamp(s_sec);
                     clip_end_str = "inf".to_string();
                     suffix_tag = format!(" [Clip {} to End]", clip_start_str.replace(':', "-"));
                 }
             } else if s_sec > 0.0 || e_raw.eq_ignore_ascii_case("inf") {
                 is_clipping_active = true;
+                clip_start_sec = s_sec;
                 clip_start_str = format_seconds_to_timestamp(s_sec);
                 clip_end_str = "inf".to_string();
                 suffix_tag = format!(" [Clip {} to End]", clip_start_str.replace(':', "-"));
             }
         }
+
+        let is_chunked_clip = is_clipping_active
+            && clip_end_str != "inf"
+            && clip_target_duration.map(|d| d > CLIP_PIECE_SECS).unwrap_or(false);
+
+        let container_upper = options.container.to_uppercase();
+        let is_audio_container = options.download_mode == "audio"
+            || container_upper.contains("(AUDIO)");
+        let media_ext = resolve_media_container_ext(&options.container, is_audio_container);
 
         let out_tmpl = if let Some(ref custom_name) = options.custom_filename {
             let trimmed = custom_name.trim();
@@ -2995,7 +3138,12 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
         };
 
         // When resuming, preserve partial files so yt-dlp continues instead of restarting at 0%.
-        let build_cmd = |attempt_stage: u8, active_url: &str| -> Command {
+        let build_cmd = |attempt_stage: u8,
+                         active_url: &str,
+                         effective_out_tmpl: &str,
+                         section_range: Option<(&str, &str)>,
+                         capture_title: bool|
+         -> Command {
             let mut cmd = make_command("yt-dlp");
             cmd.args([
                 "--newline",
@@ -3059,7 +3207,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
 
             if is_hls || is_youtube {
                 cmd.args([
-                    "-o", &out_tmpl,
+                    "-o", effective_out_tmpl,
                     "--windows-filenames",
                     "--no-playlist",
                     "--no-check-certificates",
@@ -3092,7 +3240,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 }
             } else {
                 cmd.args([
-                    "-o", &out_tmpl,
+                    "-o", effective_out_tmpl,
                     "--windows-filenames",
                     "--no-playlist",
                     "--no-check-certificates",
@@ -3107,7 +3255,9 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                     cmd.args(["--fixup", "warn"]);
                 }
             }
-        if is_resume_run || options.is_resume {
+        if section_range.is_some() {
+            cmd.arg("--force-overwrites");
+        } else if is_resume_run || options.is_resume {
             cmd.arg("--no-overwrites");
         } else if (options.overwrite_files && !options.is_resume) || is_clipping_active || attempt_stage == 2 {
             cmd.arg("--force-overwrites");
@@ -3234,7 +3384,18 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
         }
 
         // Timeframe / Clipping Section (Download only requested timeframe & frame-accurate cut)
-        if is_clipping_active {
+        if let Some((s_str, e_str)) = section_range {
+            let section_arg = format!("*{}-{}", s_str, e_str);
+            cmd.args(["--download-sections", &section_arg]);
+
+            if options.precise_cut {
+                cmd.arg("--force-keyframes-at-cuts");
+                // Accelerate FFmpeg keyframe generation & encoding using all CPU threads and veryfast preset
+                cmd.args(["--downloader-args", "ffmpeg:-preset veryfast -threads 0"]);
+            } else {
+                cmd.arg("--no-force-keyframes-at-cuts");
+            }
+        } else if is_clipping_active {
             let section_arg = format!("*{}-{}", clip_start_str, clip_end_str);
             cmd.args(["--download-sections", &section_arg]);
 
@@ -3380,6 +3541,10 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
             }
         }
 
+        if capture_title {
+            cmd.args(["--print", "before_dl:TITLE:%(title)s"]);
+        }
+
             cmd.arg(active_url.trim());
             cmd.stdin(Stdio::null());
             cmd.stdout(Stdio::piped());
@@ -3412,670 +3577,547 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
 
         let known_duration = Arc::new(Mutex::new(clip_target_duration.or(options.duration)));
         let last_percent = Arc::new(Mutex::new(initial_pct));
-        let run_started_at = std::time::SystemTime::now();
-        let mut attempt_stage: u8 = 0;
-        let mut network_retries: usize = 0;
-        let mut expired_refreshed = false;
-        let mut current_media_url = options.url.clone();
-        let mut last_total_bytes: u64 = preserved_total;
-        let mut last_downloaded_bytes: u64 = preserved_downloaded;
-        let mut current_stem = task_stem.clone();
-        let detected_output_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let run_ytdlp_pass = |
+            target_out_tmpl: &str,
+            target_stem: &str,
+            target_save_folder: &str,
+            section_range: Option<(&str, &str)>,
+            prog_offset_sec: f64,
+            prog_offset_bytes: u64,
+            target_clip_duration: Option<f64>,
+            capture_title: bool,
+            captured_title_out: Arc<Mutex<Option<String>>>,
+            last_percent: &Arc<Mutex<f64>>,
+            known_duration: &Arc<Mutex<Option<f64>>>,
+        | -> PassOutcome {
+            let run_started_at = std::time::SystemTime::now();
+            let mut attempt_stage: u8 = 0;
+            let mut network_retries: usize = 0;
+            let mut expired_refreshed = false;
+            let mut current_media_url = options.url.clone();
+            let last_total_bytes = Arc::new(Mutex::new(0u64));
+            let last_downloaded_bytes = Arc::new(Mutex::new(prog_offset_bytes));
+            let current_stem = Arc::new(Mutex::new(target_stem.to_string()));
+            let detected_output_path: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-        let has_fresh_output_file = |folder: &str| -> bool {
-            let Ok(entries) = fs::read_dir(folder) else {
-                return false;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
-                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                    continue;
+            let is_clip_section = is_clipping_active || section_range.is_some();
+            let effective_piece_dur = section_range.map(|(s, e)| {
+                let s_num = parse_time_to_seconds(s).unwrap_or(0.0);
+                let e_num = parse_time_to_seconds(e).unwrap_or(0.0);
+                (e_num - s_num).max(0.0)
+            }).unwrap_or_else(|| target_clip_duration.unwrap_or(0.0));
+
+            let has_fresh_output_file = |folder: &str| -> bool {
+                let Ok(entries) = fs::read_dir(folder) else {
+                    return false;
                 };
-                let low = name.to_lowercase();
-                if is_partial_media_filename(&low)
-                    || low.ends_with(".tmp")
-                    || low.starts_with(".zr_sparse_meta_")
-                {
-                    continue;
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if !path.is_file() {
+                        continue;
+                    }
+                    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                        continue;
+                    };
+                    let low = name.to_lowercase();
+                    if is_partial_media_filename(&low)
+                        || low.ends_with(".tmp")
+                        || low.starts_with(".zr_sparse_meta_")
+                    {
+                        continue;
+                    }
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.len() > 0 {
+                            if let Ok(mod_time) = meta.modified() {
+                                if mod_time >= run_started_at {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
                 }
-                if let Ok(meta) = entry.metadata() {
-                    if meta.len() > 0 {
-                        if let Ok(mod_time) = meta.modified() {
-                            if mod_time >= run_started_at {
+                false
+            };
+
+            loop {
+                let mut spawned_child = None;
+                let mut last_spawn_err = None;
+                for attempt in 0..6 {
+                    let mut cmd = build_cmd(attempt_stage, &current_media_url, target_out_tmpl, section_range, capture_title);
+                    match cmd.spawn() {
+                        Ok(c) => {
+                            spawned_child = Some(c);
+                            break;
+                        }
+                        Err(e) => {
+                            let is_locked = matches!(e.raw_os_error(), Some(32) | Some(5));
+                            last_spawn_err = Some(e);
+                            if is_locked && attempt < 5 {
+                                std::thread::sleep(Duration::from_millis(500));
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                let mut child = match spawned_child {
+                    Some(c) => c,
+                    None => {
+                        let e_str = last_spawn_err
+                            .map(|e| e.to_string())
+                            .unwrap_or_else(|| "Failed to spawn yt-dlp".to_string());
+                        mark_task_error(&media_tasks, &tid, &e_str);
+                        return PassOutcome::Error(e_str);
+                    }
+                };
+
+                let child_pid = child.id();
+                active_pids.lock().unwrap_or_else(|e| e.into_inner()).insert(tid.clone(), child_pid);
+
+                let app_err = app.clone();
+                let media_tasks_err = media_tasks.clone();
+                let tid_err = tid.clone();
+                let last_pct_err = last_percent.clone();
+                let last_down_bytes_err = last_downloaded_bytes.clone();
+                let err_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+                let err_lines_clone = err_lines.clone();
+                let dur_opt = target_clip_duration.or_else(|| *known_duration.lock().unwrap_or_else(|e| e.into_inner()));
+
+                let stderr_handle = child.stderr.take().map(|stderr| {
+                    std::thread::spawn(move || {
+                        let reader = std::io::BufReader::new(stderr);
+                        read_lines_cr_or_lf(reader, |line| {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
                                 return true;
                             }
-                        }
-                    }
-                }
-            }
-            false
-        };
-
-        loop {
-            let mut spawned_child = None;
-            let mut last_spawn_err = None;
-            for attempt in 0..6 {
-                let mut cmd = build_cmd(attempt_stage, &current_media_url);
-                match cmd.spawn() {
-                    Ok(c) => {
-                        spawned_child = Some(c);
-                        break;
-                    }
-                    Err(e) => {
-                        let is_locked = matches!(e.raw_os_error(), Some(32) | Some(5));
-                        last_spawn_err = Some(e);
-                        if is_locked && attempt < 5 {
-                            std::thread::sleep(Duration::from_millis(500));
-                            continue;
-                        }
-                        break;
-                    }
-                }
-            }
-
-            let mut child = match spawned_child {
-                Some(c) => c,
-                None => {
-                    let err_detail = last_spawn_err
-                        .map(|e| e.to_string())
-                        .unwrap_or_else(|| "Unknown spawn error".to_string());
-                    let err_msg = format!("Failed to start yt-dlp download process: {}", err_detail);
-                    mark_task_error(&media_tasks, &tid, &err_msg);
-                    crate::spawn_save_all_tasks(&app);
-                    let _ = app.emit("download-error", serde_json::json!({ "id": tid.clone(), "error": err_msg }));
-                    let _ = app.emit(
-                        "download-progress",
-                        serde_json::json!({
-                            "id": tid,
-                            "status": "error",
-                            "error_message": err_msg,
-                            "speed_formatted": "0 B/s",
-                            "eta_formatted": "--",
-                        }),
-                    );
-                    let app_q = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        crate::queue::process_queue(&app_q).await;
-                    });
-                    return;
-                }
-            };
-
-            active_pids.lock().unwrap().insert(tid.clone(), child.id());
-
-            let stdout = child.stdout.take();
-            let stderr = child.stderr.take();
-
-            // Read stderr in background thread to capture errors, Duration:, aria2c & FFmpeg progress
-            let err_lines = Arc::new(Mutex::new(Vec::<String>::new()));
-            let err_lines_clone = err_lines.clone();
-            let app_err = app.clone();
-            let tid_err = tid.clone();
-            let media_tasks_err = media_tasks.clone();
-            let known_dur_err = known_duration.clone();
-            let last_pct_err = last_percent.clone();
-            let cancelled_err = cancelled_tasks.clone();
-            let stderr_handle = stderr.map(|se| {
-                std::thread::spawn(move || {
-                    let mut last_stderr_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
-                    let mut stderr_last_dl: u64 = 0;
-                    let mut stderr_last_tot: u64 = 0;
-                    read_lines_cr_or_lf(se, |trimmed| {
-                        if cancelled_err.lock().unwrap().get(&tid_err).copied().unwrap_or(false) {
-                            return false;
-                        }
-
-                        if let Some(dur) = parse_ffmpeg_duration(trimmed) {
-                            let mut kd = known_dur_err.lock().unwrap();
-                            if kd.is_none() {
-                                *kd = Some(dur);
-                            }
-                        }
-
-                        if let Some((pct_raw, down_b, tot_b, speed_str, eta_str)) = parse_aria2c_progress(trimmed) {
-                            if down_b > 0 {
-                                stderr_last_dl = down_b;
-                            }
-                            if tot_b > 0 {
-                                stderr_last_tot = tot_b;
-                            }
-                            let prev_pct = *last_pct_err.lock().unwrap();
-                            let pct = if prev_pct >= 98.0 && tot_b > 0 && stderr_last_tot > 0 && tot_b < stderr_last_tot / 2 {
-                                99.0
-                            } else {
-                                pct_raw
-                            };
-                            if pct > 0.0 {
-                                *last_pct_err.lock().unwrap() = pct;
-                            }
-                            emit_unified_media_progress(
-                                &app_err,
-                                &media_tasks_err,
-                                &tid_err,
-                                pct,
-                                stderr_last_dl,
-                                stderr_last_tot,
-                                &speed_str,
-                                &eta_str,
-                                &mut last_stderr_emit,
-                                false,
-                            );
-                            return true;
-                        }
-
-                        if let Some((sec, size_bytes, speed)) = parse_ffmpeg_progress(trimmed) {
-                            let dur_opt = *known_dur_err.lock().unwrap();
-                            emit_ffmpeg_progress_update(
-                                &app_err,
-                                &media_tasks_err,
-                                &tid_err,
-                                sec,
-                                size_bytes,
-                                &speed,
-                                dur_opt,
-                                &last_pct_err,
-                                is_clipping_active,
-                            );
-                            return true;
-                        }
-
-                        let mut lock = err_lines_clone.lock().unwrap();
-                        if lock.len() >= 250 {
-                            lock.remove(0);
-                        }
-                        lock.push(trimmed.to_string());
-                        true
-                    });
-                })
-            });
-
-            let stdout_diag_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-
-            // Read stdout for progress lines (handles both \r and \n for real-time updates)
-            let mut last_emit_instant = std::time::Instant::now() - std::time::Duration::from_secs(1);
-            // Multi-format HLS (video + separate audio): one overall bar instead of 0..100% per file.
-            let mut phase_total: usize = 1;
-            let mut phase_seen: Vec<String> = Vec::new();
-            let mut phase_done_bytes: u64 = 0;
-            let mut run_max_pct: f64 = 0.0;
-            let merge_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let mut merge_hb_started = false;
-            if let Some(so) = stdout {
-                read_lines_cr_or_lf(so, |trimmed| {
-                    let is_canc = cancelled_tasks.lock().unwrap().get(&tid).copied().unwrap_or(false);
-                    if is_canc {
-                        return false;
-                    }
-
-                    if !merge_hb_started
-                        && (trimmed.starts_with("[Merger]")
-                            || trimmed.starts_with("[Fixup")
-                            || trimmed.starts_with("[VideoRemuxer]")
-                            || trimmed.starts_with("[VideoConvertor]"))
-                    {
-                        merge_hb_started = true;
-                        spawn_merge_heartbeat(
-                            app.clone(),
-                            tid.clone(),
-                            options.save_folder.clone(),
-                            current_stem.clone(),
-                            merge_stop.clone(),
-                        );
-                    }
-
-                    if is_hls {
-                        if let Some(n) = parse_format_count(trimmed) {
-                            phase_total = n.max(1);
-                        }
-                        if let Some(fpath) = format_file_from_line(trimmed) {
-                            let fname_low = Path::new(&fpath)
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("")
-                                .to_lowercase();
-                            if is_ytdlp_format_fragment_name(&fname_low) && !phase_seen.contains(&fpath) {
-                                if !phase_seen.is_empty() {
-                                    // previous format finished: keep its bytes, start the next one
-                                    phase_done_bytes = phase_done_bytes.saturating_add(last_downloaded_bytes);
-                                    last_downloaded_bytes = 0;
-                                    last_total_bytes = 0;
+                            if trimmed.contains("time=")
+                                && (trimmed.contains("frame=")
+                                    || trimmed.contains("size=")
+                                    || trimmed.contains("speed="))
+                            {
+                                if let Some((sec, size_bytes, speed)) = parse_ffmpeg_progress(trimmed) {
+                                    let effective_sec = prog_offset_sec + sec;
+                                    let effective_size = prog_offset_bytes + size_bytes;
+                                    if effective_size > 0 {
+                                        *last_down_bytes_err.lock().unwrap_or_else(|e| e.into_inner()) = effective_size;
+                                    }
+                                    emit_ffmpeg_progress_update(
+                                        &app_err,
+                                        &media_tasks_err,
+                                        &tid_err,
+                                        effective_sec,
+                                        effective_size,
+                                        &speed,
+                                        dur_opt,
+                                        &last_pct_err,
+                                        is_clip_section,
+                                    );
+                                    return true;
                                 }
-                                phase_seen.push(fpath);
-                                let msg = format!(
-                                    "Downloading stream part {}/{}",
-                                    phase_seen.len(),
-                                    phase_total.max(phase_seen.len())
-                                );
-                                let _ = app.emit(
-                                    "download-log",
-                                    serde_json::json!({ "id": tid.clone(), "message": msg, "level": "info" }),
+                            }
+
+                            let mut lock = err_lines_clone.lock().unwrap_or_else(|e| e.into_inner());
+                            if lock.len() >= 250 {
+                                lock.remove(0);
+                            }
+                            lock.push(trimmed.to_string());
+                            true
+                        });
+                    })
+                });
+
+                let stdout_diag_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+                let stdout_diag_clone = stdout_diag_lines.clone();
+                let app_std = app.clone();
+                let media_tasks_std = media_tasks.clone();
+                let tid_std = tid.clone();
+                let captured_title_clone = captured_title_out.clone();
+                let detected_path_clone = detected_output_path.clone();
+                let current_stem_clone = current_stem.clone();
+                let known_dur_std = known_duration.clone();
+                let last_pct_std = last_percent.clone();
+                let last_tot_std = last_total_bytes.clone();
+                let last_down_std = last_downloaded_bytes.clone();
+
+                let merge_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let merge_stop_std = merge_stop.clone();
+                let pass_save_folder = target_save_folder.to_string();
+
+                let stdout_handle = child.stdout.take().map(|stdout| {
+                    std::thread::spawn(move || {
+                        let reader = std::io::BufReader::new(stdout);
+                        let mut phase_seen: Vec<String> = Vec::new();
+                        let mut phase_total: usize = 1;
+                        let mut last_emit_instant = Instant::now();
+                        let mut merge_hb_started = false;
+                        read_lines_cr_or_lf(reader, |line| {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
+                                return true;
+                            }
+
+                            if !merge_hb_started
+                                && (trimmed.starts_with("[Merger]")
+                                    || trimmed.starts_with("[Fixup")
+                                    || trimmed.starts_with("[VideoRemuxer]")
+                                    || trimmed.starts_with("[VideoConvertor]"))
+                            {
+                                merge_hb_started = true;
+                                let stem_val = current_stem_clone.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                                spawn_merge_heartbeat(
+                                    app_std.clone(),
+                                    tid_std.clone(),
+                                    pass_save_folder.clone(),
+                                    stem_val,
+                                    merge_stop_std.clone(),
                                 );
                             }
-                        }
-                    }
 
-                    if let Some(dur) = parse_ffmpeg_duration(trimmed) {
-                        let mut kd = known_duration.lock().unwrap();
-                        if kd.is_none() {
-                            *kd = Some(dur);
-                        }
-                    }
-
-                    if let Some((pct_raw, down_b, tot_b, speed_str, eta_str)) = parse_aria2c_progress(trimmed) {
-                        if down_b > 0 {
-                            last_downloaded_bytes = down_b;
-                        }
-                        let prev_tot = last_total_bytes;
-                        if tot_b > 0 {
-                            last_total_bytes = tot_b;
-                        }
-                        let prev_pct = *last_percent.lock().unwrap();
-                        let pct = if prev_pct >= 98.0 && tot_b > 0 && prev_tot > 0 && tot_b < prev_tot / 2 {
-                            99.0
-                        } else {
-                            pct_raw
-                        };
-                        if pct > 0.0 {
-                            *last_percent.lock().unwrap() = pct;
-                        }
-                        emit_unified_media_progress(
-                            &app,
-                            &media_tasks,
-                            &tid,
-                            pct,
-                            last_downloaded_bytes,
-                            last_total_bytes,
-                            &speed_str,
-                            &eta_str,
-                            &mut last_emit_instant,
-                            false,
-                        );
-                        return true;
-                    }
-
-                    if !trimmed.contains("[ZR_PROG]") {
-                        let low = trimmed.to_lowercase();
-                        if low.contains("error:")
-                            || low.contains("warning:")
-                            || low.contains("postprocessing")
-                            || low.contains("invalid data found")
-                            || low.contains("error opening input")
-                            || low.contains("[aria2c]")
-                            || low.contains("exception")
-                            || low.contains("failed")
-                            || trimmed.starts_with("[Fixup")
-                            || trimmed.starts_with("[Merger]")
-                        {
-                            let mut diag_lock = stdout_diag_lines.lock().unwrap();
-                            if diag_lock.len() >= 150 {
-                                diag_lock.remove(0);
-                            }
-                            diag_lock.push(trimmed.to_string());
-                        }
-                        if let Some(out_path) = parse_ytdlp_output_path(trimmed) {
-                            *detected_output_path.lock().unwrap() = Some(out_path.clone());
-                            if let Some(fname) = Path::new(&out_path).file_name().and_then(|n| n.to_str()) {
-                                let base_stem = strip_format_id_suffix_for_stem(&strip_media_extension_for_stem(fname));
-                                if base_stem.len() >= 3 {
-                                    current_stem = base_stem;
+                            if let Some(t_line) = trimmed.strip_prefix("TITLE:") {
+                                let raw_t = t_line.trim();
+                                if !raw_t.is_empty() {
+                                    let mut lock = captured_title_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                    if lock.is_none() {
+                                        *lock = Some(raw_t.to_string());
+                                    }
                                 }
-                                let flow = fname.to_lowercase();
-                                if !is_partial_media_filename(&flow) {
-                                    if let Ok(mut lock) = media_tasks.lock() {
-                                        if let Some(t) = lock.get_mut(&tid) {
-                                            if t.filename == "Online Media.mp4"
-                                                || t.filename.trim().is_empty()
-                                                || !trimmed.contains(".f")
-                                            {
-                                                t.filename = fname.to_string();
+                            }
+
+                            if let Some(fc) = parse_format_count(trimmed) {
+                                phase_total = fc;
+                            }
+                            if let Some(fpath) = format_file_from_line(trimmed) {
+                                if !phase_seen.contains(&fpath) {
+                                    if !phase_seen.is_empty() {
+                                        *last_down_std.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+                                        *last_tot_std.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+                                    }
+                                    phase_seen.push(fpath);
+                                    let msg = format!(
+                                        "Downloading stream part {}/{}",
+                                        phase_seen.len(),
+                                        phase_total.max(phase_seen.len())
+                                    );
+                                    let _ = app_std.emit(
+                                        "download-log",
+                                        serde_json::json!({ "id": tid_std.clone(), "message": msg, "level": "info" }),
+                                    );
+                                }
+                            }
+
+                            if let Some(dur) = parse_ffmpeg_duration(trimmed) {
+                                let mut kd = known_dur_std.lock().unwrap_or_else(|e| e.into_inner());
+                                if kd.is_none() {
+                                    *kd = Some(dur);
+                                }
+                            }
+
+                            if let Some((pct_raw, down_b, tot_b, speed_str, eta_str)) = parse_aria2c_progress(trimmed) {
+                                let effective_down = prog_offset_bytes + down_b;
+                                if effective_down > 0 {
+                                    *last_down_std.lock().unwrap_or_else(|e| e.into_inner()) = effective_down;
+                                }
+                                let prev_tot = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                if tot_b > 0 {
+                                    *last_tot_std.lock().unwrap_or_else(|e| e.into_inner()) = tot_b;
+                                }
+                                let prev_pct = *last_pct_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let pct = if prev_pct >= 98.0 && tot_b > 0 && prev_tot > 0 && tot_b < prev_tot / 2 {
+                                    99.0
+                                } else {
+                                    pct_raw
+                                };
+                                if pct > 0.0 {
+                                    *last_pct_std.lock().unwrap_or_else(|e| e.into_inner()) = pct;
+                                }
+                                let cur_d = *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let cur_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                emit_unified_media_progress(
+                                    &app_std,
+                                    &media_tasks_std,
+                                    &tid_std,
+                                    pct,
+                                    cur_d,
+                                    cur_t,
+                                    &speed_str,
+                                    &eta_str,
+                                    &mut last_emit_instant,
+                                    false,
+                                );
+                                return true;
+                            }
+
+                            if !trimmed.contains("[ZR_PROG]") {
+                                let low = trimmed.to_lowercase();
+                                if low.contains("error:")
+                                    || low.contains("warning:")
+                                    || low.contains("postprocessing")
+                                    || low.contains("invalid data found")
+                                    || low.contains("error opening input")
+                                    || low.contains("[aria2c]")
+                                    || low.contains("exception")
+                                    || low.contains("failed")
+                                    || trimmed.starts_with("[Fixup")
+                                    || trimmed.starts_with("[Merger]")
+                                {
+                                    let mut diag_lock = stdout_diag_clone.lock().unwrap_or_else(|e| e.into_inner());
+                                    if diag_lock.len() >= 150 {
+                                        diag_lock.remove(0);
+                                    }
+                                    diag_lock.push(trimmed.to_string());
+                                }
+                                if let Some(out_path) = parse_ytdlp_output_path(trimmed) {
+                                    *detected_path_clone.lock().unwrap_or_else(|e| e.into_inner()) = Some(out_path.clone());
+                                    if let Some(fname) = Path::new(&out_path).file_name().and_then(|n| n.to_str()) {
+                                        let base_stem = strip_format_id_suffix_for_stem(&strip_media_extension_for_stem(fname));
+                                        if base_stem.len() >= 3 {
+                                            *current_stem_clone.lock().unwrap_or_else(|e| e.into_inner()) = base_stem;
+                                        }
+                                        let flow = fname.to_lowercase();
+                                        if !is_partial_media_filename(&flow) {
+                                            if !is_chunked_clip {
+                                                if let Ok(mut lock) = media_tasks_std.lock() {
+                                                    if let Some(t) = lock.get_mut(&tid_std) {
+                                                        if t.filename == "Online Media.mp4"
+                                                            || t.filename.trim().is_empty()
+                                                            || !trimmed.contains(".f")
+                                                        {
+                                                            t.filename = fname.to_string();
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
-                    }
 
-                    // Parse structured ZR progress template: [ZR_PROG] 45.2% | 1234567 | 2345678 | NA | 3.80MiB/s | 01:30:00
-                    let is_zr_prog = trimmed.contains("[ZR_PROG]");
-                    if is_zr_prog {
-                        let prog_idx = trimmed.find("[ZR_PROG]").unwrap_or(0);
-                        let payload = trimmed[prog_idx + 9..].trim();
-                        let parts: Vec<&str> = payload.split('|').map(|s| s.trim()).collect();
-                        if parts.len() >= 6 {
-                            let pct_str = parts[0].trim_end_matches('%').trim();
-                            let mut pct = pct_str.parse::<f64>().unwrap_or(0.0);
+                            let is_zr_prog = trimmed.contains("[ZR_PROG]");
+                            if is_zr_prog {
+                                let prog_idx = trimmed.find("[ZR_PROG]").unwrap_or(0);
+                                let payload = trimmed[prog_idx + 9..].trim();
+                                let parts: Vec<&str> = payload.split('|').map(|s| s.trim()).collect();
+                                if parts.len() >= 6 {
+                                    let pct_str = parts[0].trim_end_matches('%').trim();
+                                    let mut pct = pct_str.parse::<f64>().unwrap_or(0.0);
 
-                            let down_b = parts[1].parse::<u64>().unwrap_or(0);
-                            if down_b > 0 {
-                                last_downloaded_bytes = down_b;
-                            }
-
-                            let mut tot_b = parts[2].parse::<u64>().unwrap_or(0);
-                            if tot_b == 0 {
-                                if let Ok(f) = parts[3].parse::<f64>() {
-                                    if f > 0.0 {
-                                        tot_b = f as u64;
+                                    let down_b = parts[1].parse::<u64>().unwrap_or(0);
+                                    let effective_down = prog_offset_bytes + down_b;
+                                    if effective_down > 0 {
+                                        *last_down_std.lock().unwrap_or_else(|e| e.into_inner()) = effective_down;
                                     }
+
+                                    let mut tot_b = parts[2].parse::<u64>().unwrap_or(0);
+                                    if tot_b == 0 {
+                                        if let Ok(f) = parts[3].parse::<f64>() {
+                                            if f > 0.0 {
+                                                tot_b = f as u64;
+                                            }
+                                        }
+                                    }
+                                    let prev_tot = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    if tot_b > 0 {
+                                        *last_tot_std.lock().unwrap_or_else(|e| e.into_inner()) = tot_b;
+                                    }
+
+                                    let cur_d = *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    let cur_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    if pct <= 0.0 && cur_t > 0 && cur_d > 0 {
+                                        pct = ((cur_d as f64 / cur_t as f64) * 100.0).clamp(0.0, 99.9);
+                                    }
+
+                                    if let Some(total_dur) = target_clip_duration {
+                                        if total_dur > 0.0 {
+                                            let sec_done = prog_offset_sec + (pct / 100.0) * effective_piece_dur;
+                                            pct = ((sec_done / total_dur) * 100.0).clamp(0.0, 99.0);
+                                        }
+                                    }
+
+                                    let prev_pct = *last_pct_std.lock().unwrap_or_else(|e| e.into_inner());
+                                    let mut guard_fired = false;
+                                    if prev_pct >= 98.0 && tot_b > 0 && prev_tot > 0 && tot_b < prev_tot / 2 {
+                                        pct = 99.0;
+                                        guard_fired = true;
+                                    }
+                                    if pct <= 0.0 {
+                                        pct = prev_pct;
+                                    } else if is_hls && !guard_fired {
+                                        pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total);
+                                    }
+                                    let smoothed_pct = pct.max(prev_pct);
+                                    *last_pct_std.lock().unwrap_or_else(|e| e.into_inner()) = smoothed_pct;
+
+                                    let speed_str = parts[4].to_string();
+                                    let eta_str = parts[5].to_string();
+
+                                    emit_unified_media_progress(
+                                        &app_std,
+                                        &media_tasks_std,
+                                        &tid_std,
+                                        smoothed_pct,
+                                        cur_d,
+                                        cur_t,
+                                        &speed_str,
+                                        &eta_str,
+                                        &mut last_emit_instant,
+                                        false,
+                                    );
+                                    return true;
                                 }
                             }
-                            let prev_tot = last_total_bytes;
-                            if tot_b > 0 {
-                                last_total_bytes = tot_b;
+
+                            if trimmed.starts_with("[download]") && trimmed.contains('%') {
+                                let after_tag = &trimmed[10..].trim();
+                                let pct_end = after_tag.find('%').unwrap_or(0);
+                                let mut pct = after_tag[..pct_end].trim().parse::<f64>().unwrap_or(0.0);
+                                if let Some(total_dur) = target_clip_duration {
+                                    if total_dur > 0.0 {
+                                        let sec_done = prog_offset_sec + (pct / 100.0) * effective_piece_dur;
+                                        pct = ((sec_done / total_dur) * 100.0).clamp(0.0, 99.0);
+                                    }
+                                }
+                                let prev_pct = *last_pct_std.lock().unwrap_or_else(|e| e.into_inner());
+                                if pct <= 0.0 {
+                                    pct = prev_pct;
+                                } else if is_hls {
+                                    pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total);
+                                }
+                                let smoothed = pct.max(prev_pct);
+                                *last_pct_std.lock().unwrap_or_else(|e| e.into_inner()) = smoothed;
+
+                                let cur_t_before = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let downloaded_bytes = if let Some(of_idx) = after_tag.find("of ") {
+                                    let total_part = after_tag[of_idx + 3..]
+                                        .split_whitespace()
+                                        .next()
+                                        .unwrap_or("");
+                                    let total_bytes = parse_human_size_to_bytes(total_part);
+                                    if total_bytes > 0 {
+                                        *last_tot_std.lock().unwrap_or_else(|e| e.into_inner()) = total_bytes;
+                                    }
+                                    prog_offset_bytes + ((total_bytes as f64) * (pct / 100.0)) as u64
+                                } else if cur_t_before > 0 {
+                                    prog_offset_bytes + ((cur_t_before as f64) * (pct / 100.0)) as u64
+                                } else {
+                                    *last_down_std.lock().unwrap_or_else(|e| e.into_inner())
+                                };
+                                if downloaded_bytes > 0 {
+                                    *last_down_std.lock().unwrap_or_else(|e| e.into_inner()) = downloaded_bytes;
+                                }
+
+                                let speed = if let Some(idx) = after_tag.find("at ") {
+                                    after_tag[idx + 3..]
+                                        .split_whitespace()
+                                        .next()
+                                        .unwrap_or("")
+                                        .to_string()
+                                } else {
+                                    String::new()
+                                };
+
+                                let eta = if let Some(idx) = after_tag.find("ETA ") {
+                                    after_tag[idx + 4..]
+                                        .split_whitespace()
+                                        .next()
+                                        .unwrap_or("--")
+                                        .to_string()
+                                } else {
+                                    "--".to_string()
+                                };
+
+                                let cur_d = *last_down_std.lock().unwrap_or_else(|e| e.into_inner());
+                                let cur_t = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                emit_unified_media_progress(
+                                    &app_std,
+                                    &media_tasks_std,
+                                    &tid_std,
+                                    smoothed,
+                                    cur_d,
+                                    cur_t,
+                                    &speed,
+                                    &eta,
+                                    &mut last_emit_instant,
+                                    false,
+                                );
+                            } else if trimmed.contains("time=")
+                                && (trimmed.contains("frame=")
+                                    || trimmed.contains("size=")
+                                    || trimmed.contains("speed="))
+                            {
+                                if let Some((sec, size_bytes, speed)) = parse_ffmpeg_progress(trimmed) {
+                                    let effective_sec = prog_offset_sec + sec;
+                                    let effective_size = prog_offset_bytes + size_bytes;
+                                    let dur_opt = target_clip_duration.or_else(|| *known_dur_std.lock().unwrap_or_else(|e| e.into_inner()));
+                                    if effective_size > 0 {
+                                        *last_down_std.lock().unwrap_or_else(|e| e.into_inner()) = effective_size;
+                                    }
+                                    emit_ffmpeg_progress_update(
+                                        &app_std,
+                                        &media_tasks_std,
+                                        &tid_std,
+                                        effective_sec,
+                                        effective_size,
+                                        &speed,
+                                        dur_opt,
+                                        &last_pct_std,
+                                        is_clip_section,
+                                    );
+                                }
                             }
-
-                            if pct <= 0.0 && last_total_bytes > 0 && last_downloaded_bytes > 0 {
-                                pct = ((last_downloaded_bytes as f64 / last_total_bytes as f64) * 100.0).clamp(0.0, 99.9);
-                            }
-                            let prev_pct = *last_percent.lock().unwrap();
-                            let mut guard_fired = false;
-                            if prev_pct >= 98.0 && tot_b > 0 && prev_tot > 0 && tot_b < prev_tot / 2 {
-                                pct = 99.0;
-                                guard_fired = true;
-                            }
-                            if pct <= 0.0 {
-                                // yt-dlp prints "N/A" until it can estimate the size (always right after a
-                                // resume). Never push 0% to the UI: that looked like a restart from zero.
-                                pct = prev_pct;
-                            } else if is_hls && !guard_fired {
-                                pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total)
-                                    .max(run_max_pct);
-                            }
-                            run_max_pct = run_max_pct.max(pct);
-                            if pct > 0.0 {
-                                *last_percent.lock().unwrap() = pct;
-                            }
-
-                            let speed_str = if parts[4] == "NA" || parts[4].is_empty() {
-                                String::new()
-                            } else {
-                                parts[4].to_string()
-                            };
-
-                            let eta_str = if parts[5] == "NA" || parts[5] == "Unknown" || parts[5].is_empty() {
-                                "--".to_string()
-                            } else {
-                                parts[5].to_string()
-                            };
-
-                            emit_unified_media_progress(
-                                &app,
-                                &media_tasks,
-                                &tid,
-                                pct,
-                                last_downloaded_bytes.saturating_add(phase_done_bytes),
-                                last_total_bytes.saturating_add(phase_done_bytes),
-                                &speed_str,
-                                &eta_str,
-                                &mut last_emit_instant,
-                                false,
-                            );
-                            return true;
-                        }
-                    }
-
-                    // Parse standard yt-dlp progress line fallback: [download]  45.2% of 84.60MiB at  6.42MiB/s ETA 00:06
-                    if trimmed.starts_with("[download]") && trimmed.contains('%') {
-                        let after_tag = trimmed.trim_start_matches("[download]").trim();
-                        let pct_part = after_tag.split('%').next().unwrap_or("0").trim();
-                        let mut pct = pct_part.parse::<f64>().unwrap_or(0.0);
-
-                        let mut parsed_tot = 0_u64;
-                        if let Some(of_idx) = after_tag.find("of ") {
-                            let after_of = &after_tag[of_idx + 3..];
-                            let size_str = after_of.split_whitespace().next().unwrap_or("");
-                            parsed_tot = parse_human_size_to_bytes(size_str.trim_start_matches('~'));
-                            if parsed_tot > 0 {
-                                last_total_bytes = parsed_tot;
-                            }
-                        }
-
-                        let prev_pct = *last_percent.lock().unwrap();
-                        let mut guard_fired = false;
-                        if prev_pct >= 98.0 && parsed_tot > 0 && last_total_bytes > 0 && parsed_tot < last_total_bytes / 2 {
-                            pct = 99.0;
-                            guard_fired = true;
-                        }
-                        if pct <= 0.0 {
-                            pct = prev_pct;
-                        } else if is_hls && !guard_fired {
-                            pct = hls_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total)
-                                .max(run_max_pct);
-                        }
-                        run_max_pct = run_max_pct.max(pct);
-                        if pct > 0.0 {
-                            *last_percent.lock().unwrap() = pct;
-                        }
-
-                        let downloaded_bytes = if last_total_bytes > 0 {
-                            ((last_total_bytes as f64) * (pct / 100.0)) as u64
-                        } else {
-                            last_downloaded_bytes
-                        };
-                        if downloaded_bytes > 0 {
-                            last_downloaded_bytes = downloaded_bytes;
-                        }
-
-                        let speed = if let Some(idx) = after_tag.find("at ") {
-                            after_tag[idx + 3..]
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or("")
-                                .to_string()
-                        } else {
-                            String::new()
-                        };
-
-                        let eta = if let Some(idx) = after_tag.find("ETA ") {
-                            after_tag[idx + 4..]
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or("--")
-                                .to_string()
-                        } else {
-                            "--".to_string()
-                        };
-
-                        emit_unified_media_progress(
-                            &app,
-                            &media_tasks,
-                            &tid,
-                            pct,
-                            last_downloaded_bytes,
-                            last_total_bytes,
-                            &speed,
-                            &eta,
-                            &mut last_emit_instant,
-                            false,
-                        );
-                    } else if trimmed.contains("time=")
-                        && (trimmed.contains("frame=")
-                            || trimmed.contains("size=")
-                            || trimmed.contains("speed="))
-                    {
-                        if let Some((sec, size_bytes, speed)) = parse_ffmpeg_progress(trimmed) {
-                            let dur_opt = *known_duration.lock().unwrap();
-                            if size_bytes > 0 {
-                                last_downloaded_bytes = size_bytes;
-                            }
-                            emit_ffmpeg_progress_update(
-                                &app,
-                                &media_tasks,
-                                &tid,
-                                sec,
-                                size_bytes,
-                                &speed,
-                                dur_opt,
-                                &last_percent,
-                                is_clipping_active,
-                            );
-                        }
-                    } else if trimmed.contains("Downloading 1 time ranges") {
-                        let _ = app.emit(
-                            "download-progress",
-                            serde_json::json!({
-                                "id": tid.clone(),
-                                "percent": 5.0,
-                                "text": format!("Extracting timeframe section: {}", trimmed),
-                                "speed": "".to_string(),
-                                "speed_formatted": "0 B/s".to_string(),
-                                "eta": "".to_string(),
-                                "eta_formatted": "--".to_string(),
-                                "status": "downloading".to_string(),
-                            }),
-                        );
-                    } else if trimmed.starts_with("[Merger]")
-                        || trimmed.starts_with("[ExtractAudio]")
-                        || trimmed.starts_with("[EmbedSubtitle]")
-                        || trimmed.starts_with("[Metadata]")
-                        || trimmed.starts_with("[Fixup")
-                        || trimmed.starts_with("[VideoRemuxer]")
-                        || trimmed.starts_with("[VideoConvertor]")
-                    {
-                        let _ = app.emit(
-                            "download-progress",
-                            serde_json::json!({
-                                "id": tid.clone(),
-                                "percent": 99.0,
-                                "text": format!("Post-processing: {}", trimmed),
-                                "speed": "".to_string(),
-                                "speed_formatted": "Finishing...".to_string(),
-                                "eta": "00:00".to_string(),
-                                "eta_formatted": "0s".to_string(),
-                                "status": "assembling".to_string(),
-                            }),
-                        );
-                    }
-                    true
+                            true
+                        });
+                    })
                 });
-            }
 
-            let status = child.wait();
-            merge_stop.store(true, std::sync::atomic::Ordering::Relaxed);
-            if let Some(handle) = stderr_handle {
-                let _ = handle.join();
-            }
-            active_pids.lock().unwrap().remove(&tid);
-
-            let still_tracked = media_tasks.lock().unwrap().contains_key(&tid);
-            if !still_tracked {
-                return;
-            }
-
-            let was_cancelled = cancelled_tasks.lock().unwrap().remove(&tid).unwrap_or(false);
-            if was_cancelled {
-                if let Ok(mut tasks_lock) = media_tasks.lock() {
-                    if let Some(t) = tasks_lock.get_mut(&tid) {
-                        t.status = "paused".to_string();
-                        t.speed_bps = 0;
-                        t.speed_formatted = "0 B/s".to_string();
-                        t.eta_formatted = "--".to_string();
+                let mut status = None;
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(s)) => {
+                            status = Some(s);
+                            break;
+                        }
+                        Ok(None) => {
+                            let was_cancelled = cancelled_tasks.lock().unwrap_or_else(|e| e.into_inner()).get(&tid).copied().unwrap_or(false);
+                            if was_cancelled {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        Err(_) => {
+                            break;
+                        }
                     }
                 }
-                crate::spawn_save_all_tasks(&app);
-                let _ = app.emit(
-                    "download-progress",
-                    serde_json::json!({
-                        "id": tid.clone(),
-                        "status": "paused",
-                        "speed": "0 B/s",
-                        "speed_formatted": "0 B/s",
-                        "eta": "--",
-                        "eta_formatted": "--"
-                    }),
-                );
-                let app_q = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    crate::queue::process_queue(&app_q).await;
-                });
-                return;
-            }
 
-            let exit_ok = status.as_ref().map(|s| s.success()).unwrap_or(false);
-            let combined_diags: Vec<String> = {
-                let errs = err_lines.lock().unwrap();
-                let std_diags = stdout_diag_lines.lock().unwrap();
-                errs.iter().chain(std_diags.iter()).cloned().collect()
-            };
-            let has_postprocess_marker = combined_diags.iter().any(|l| {
-                let low = l.to_lowercase();
-                low.contains("postprocessing")
-                    || low.contains("invalid data found")
-                    || low.contains("error opening input")
-            });
-            // A post-process failure only counts when yt-dlp actually exited with an error.
-            // (exit code 0 + a harmless "Invalid data found" warning used to trigger a full restart)
-            let postprocess_failed = has_postprocess_marker && !exit_ok;
-
-            // Out of disk space: never throw the download away or start over. Keep every
-            // downloaded file, drop only the half-written ffmpeg temp output (frees space) and
-            // let the user press Resume after freeing space.
-            if !exit_ok || postprocess_failed {
-                let disk_full = is_disk_full_error(&combined_diags);
-                if disk_full || postprocess_failed {
-                    clean_postprocess_leftovers(&options.save_folder, &current_stem);
+                if let Some(h) = stderr_handle {
+                    let _ = h.join();
                 }
-                let need = last_total_bytes.max(last_downloaded_bytes);
-                let free = free_space_bytes(Path::new(&options.save_folder));
-                let has_kept_final = {
-                    let det = detected_output_path.lock().unwrap().clone();
-                    find_fresh_kept_output_file(
-                        &options.save_folder,
-                        &current_stem,
-                        run_started_at,
-                        det.as_deref(),
-                    )
-                    .is_some()
-                };
-                let too_small = postprocess_failed
-                    && !has_kept_final
-                    && need > 0
-                    && free.map(|f| f < need.saturating_add(need / 20)).unwrap_or(false);
-                if disk_full || too_small {
-                    let msg = match free {
-                        Some(f) => format!(
-                            "Not enough free disk space to finish (free {}, need about {}). Your downloaded data was kept - free some space and press Resume.",
-                            fmt_gb(f),
-                            fmt_gb(need)
-                        ),
-                        None => "Not enough free disk space to finish. Your downloaded data was kept - free some space and press Resume.".to_string(),
-                    };
-                    let tail_log: Vec<String> = combined_diags
-                        .iter()
-                        .filter(|l| !l.trim().is_empty())
-                        .rev()
-                        .take(40)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect();
-                    mark_task_error_with_log(&media_tasks, &tid, &msg, tail_log.clone());
-                    crate::append_failure_log(
-                        &app,
-                        &tid,
-                        &current_stem,
-                        &current_media_url,
-                        &msg,
-                        &tail_log,
-                    );
-                    let error_pct = (*last_percent.lock().unwrap()).min(99.0);
+                if let Some(h) = stdout_handle {
+                    let _ = h.join();
+                }
+                active_pids.lock().unwrap_or_else(|e| e.into_inner()).remove(&tid);
+                merge_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+
+                let was_cancelled = cancelled_tasks.lock().unwrap_or_else(|e| e.into_inner()).get(&tid).copied().unwrap_or(false);
+                if was_cancelled {
+                    if let Ok(mut tasks_lock) = media_tasks.lock() {
+                        if let Some(t) = tasks_lock.get_mut(&tid) {
+                            t.status = "paused".to_string();
+                            t.speed_bps = 0;
+                            t.speed_formatted = "0 B/s".to_string();
+                            t.eta_formatted = "--".to_string();
+                        }
+                    }
                     crate::spawn_save_all_tasks(&app);
-                    let _ = app.emit(
-                        "download-error",
-                        serde_json::json!({ "id": tid.clone(), "error": msg, "errorLog": tail_log }),
-                    );
                     let _ = app.emit(
                         "download-progress",
                         serde_json::json!({
                             "id": tid.clone(),
-                            "percent": error_pct,
-                            "status": "error",
-                            "error_message": msg,
-                            "errorLog": tail_log,
+                            "status": "paused",
                             "speed": "0 B/s",
                             "speed_formatted": "0 B/s",
                             "eta": "--",
@@ -4086,324 +4128,672 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                     tauri::async_runtime::spawn(async move {
                         crate::queue::process_queue(&app_q).await;
                     });
-                    return;
+                    return PassOutcome::Cancelled;
                 }
-            }
 
-            if attempt_stage == 0 && postprocess_failed {
-                attempt_stage = 1;
-                // Keep ALL downloaded data; only drop the broken ffmpeg temp output.
-                clean_postprocess_leftovers(&options.save_folder, &current_stem);
-                let msg = "Post-processing failed - retrying the merge/fix-up only (downloaded data kept, --fixup warn)...".to_string();
-                eprintln!("[media] [{}] {}", tid, msg);
-                let _ = app.emit("download-log", serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }));
-                let fb_payload = serde_json::json!({
-                    "id": tid.clone(),
-                    "taskId": tid.clone(),
-                    "percent": *last_percent.lock().unwrap(),
-                    "text": msg,
-                    "speed": "".to_string(),
-                    "speed_formatted": "Retrying...".to_string(),
-                    "speedFormatted": "Retrying...".to_string(),
-                    "eta": "--".to_string(),
-                    "eta_formatted": "--".to_string(),
-                    "status": "connecting".to_string(),
+                let exit_ok = status.as_ref().map(|s| s.success()).unwrap_or(false);
+                let combined_diags: Vec<String> = {
+                    let errs = err_lines.lock().unwrap_or_else(|e| e.into_inner());
+                    let std_diags = stdout_diag_lines.lock().unwrap_or_else(|e| e.into_inner());
+                    errs.iter().chain(std_diags.iter()).cloned().collect()
+                };
+                let has_postprocess_marker = combined_diags.iter().any(|l| {
+                    let low = l.to_lowercase();
+                    low.contains("postprocessing")
+                        || low.contains("invalid data found")
+                        || low.contains("error opening input")
                 });
-                let _ = app.emit("download-progress", fb_payload.clone());
-                let _ = app.emit("ytdlp-progress", fb_payload);
-                continue;
-            }
+                let postprocess_failed = has_postprocess_marker && !exit_ok;
 
-            // NOTE: the old "stage 1 -> 2" escalation (full ffmpeg re-download from 0%) was removed.
-            // If the retried post-process fails again, the downloaded files are kept (see the
-            // kept_file handling below) instead of deleting 10+ GB and downloading it again.
+                let active_stem = current_stem.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let cur_tot = *last_total_bytes.lock().unwrap_or_else(|e| e.into_inner());
+                let cur_down = *last_downloaded_bytes.lock().unwrap_or_else(|e| e.into_inner());
 
-            // The ffmpeg fallback restarts from 0% (--no-continue --force-overwrites). It used to fire on
-            // ANY failed HLS run, even at 99% (network blip, 403...). Now it only fires when nothing
-            // was downloaded yet; otherwise fall through to the 403-refresh / network-retry logic,
-            // and a later Resume continues with --continue.
-            // NOTE: last_percent starts at 2.0 on a fresh run, so it can NOT be used to detect progress
-            // (the previous check was always true, which silently disabled the ffmpeg fallback).
-            let hls_made_progress = last_downloaded_bytes > 0
-                || phase_done_bytes > 0
-                || !phase_seen.is_empty()
-                || has_partial_data(&options.save_folder, &current_stem);
-            if is_hls
-                && attempt_stage == 0
-                && !exit_ok
-                && !hls_made_progress
-                && !has_fresh_output_file(&options.save_folder)
-            {
-                attempt_stage = 2;
-                let keep_pct = (*last_percent.lock().unwrap()).min(95.0).max(2.0);
-                let fb_payload = serde_json::json!({
-                    "id": tid.clone(),
-                    "taskId": tid.clone(),
-                    "percent": keep_pct,
-                    "text": "Retrying HLS stream via FFmpeg fallback...".to_string(),
-                    "speed": "".to_string(),
-                    "speed_formatted": "Connecting...".to_string(),
-                    "speedFormatted": "Connecting...".to_string(),
-                    "eta": "--".to_string(),
-                    "eta_formatted": "--".to_string(),
-                    "status": "downloading".to_string(),
-                });
-                let _ = app.emit("download-progress", fb_payload.clone());
-                let _ = app.emit("ytdlp-progress", fb_payload);
-                continue;
-            }
-
-            let detected_ref = detected_output_path.lock().unwrap().clone();
-            let kept_file = find_fresh_kept_output_file(
-                &options.save_folder,
-                &current_stem,
-                run_started_at,
-                detected_ref.as_deref(),
-            );
-
-            // find_fresh_kept_output_file() also returns ANY recently written file in the folder. When the
-            // merge failed, only a file that really belongs to THIS task may end the task as "kept" -
-            // otherwise clean_partial_files() below would delete the fully downloaded video/audio parts
-            // and the next attempt would start from zero.
-            let kept_file_for_warn = kept_file.clone().filter(|p| {
-                if let Some(d) = detected_ref.as_deref() {
-                    if Path::new(d) == p.as_path() {
-                        return true;
+                if !exit_ok || postprocess_failed {
+                    let disk_full = is_disk_full_error(&combined_diags);
+                    if disk_full || postprocess_failed {
+                        clean_postprocess_leftovers(target_save_folder, &active_stem);
                     }
-                }
-                !current_stem.is_empty()
-                    && p.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| name_matches_stem(&n.to_lowercase(), &current_stem))
-                        .unwrap_or(false)
-            });
-
-            if postprocess_failed {
-                if let Some(ref kept_path) = kept_file_for_warn {
-                    let kept_name = kept_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| options.custom_filename.clone().unwrap_or_else(|| "Online Media.mp4".to_string()));
-                    let kept_size = fs::metadata(kept_path).map(|m| m.len()).unwrap_or(0);
-                    let final_sz = if kept_size > 0 {
-                        kept_size
-                    } else if last_total_bytes > 0 {
-                        last_total_bytes
-                    } else {
-                        last_downloaded_bytes
+                    let need = cur_tot.max(cur_down);
+                    let free = free_space_bytes(Path::new(target_save_folder));
+                    let has_kept_final = {
+                        let det = detected_output_path.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        find_fresh_kept_output_file(
+                            target_save_folder,
+                            &active_stem,
+                            run_started_at,
+                            det.as_deref(),
+                        )
+                        .is_some()
                     };
-                    let warn_msg = "Downloaded, but conversion failed — file kept";
-                    mark_task_completed_with_warning(
-                        &media_tasks,
-                        &tid,
-                        warn_msg,
-                        Some(kept_name.clone()),
-                        Some(final_sz),
-                    );
-                    crate::spawn_save_all_tasks(&app);
-                    if !current_stem.is_empty() {
-                        clean_partial_files(&options.save_folder, &current_stem);
+                    let too_small = postprocess_failed
+                        && !has_kept_final
+                        && need > 0
+                        && free.map(|f| f < need.saturating_add(need / 20)).unwrap_or(false);
+                    if disk_full || too_small {
+                        let msg = match free {
+                            Some(f) => format!(
+                                "Not enough free disk space to finish (free {}, need about {}). Your downloaded data was kept - free some space and press Resume.",
+                                fmt_gb(f),
+                                fmt_gb(need)
+                            ),
+                            None => "Not enough free disk space to finish. Your downloaded data was kept - free some space and press Resume.".to_string(),
+                        };
+                        let tail_log: Vec<String> = combined_diags
+                            .iter()
+                            .filter(|l| !l.trim().is_empty())
+                            .rev()
+                            .take(40)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        mark_task_error_with_log(&media_tasks, &tid, &msg, tail_log.clone());
+                        crate::append_failure_log(
+                            &app,
+                            &tid,
+                            &active_stem,
+                            &current_media_url,
+                            &msg,
+                            &tail_log,
+                        );
+                        let error_pct = (*last_percent.lock().unwrap_or_else(|e| e.into_inner())).min(99.0);
+                        crate::spawn_save_all_tasks(&app);
+                        let _ = app.emit(
+                            "download-error",
+                            serde_json::json!({ "id": tid.clone(), "error": msg, "errorLog": tail_log }),
+                        );
+                        let _ = app.emit(
+                            "download-progress",
+                            serde_json::json!({
+                                "id": tid.clone(),
+                                "percent": error_pct,
+                                "status": "error",
+                                "error_message": msg,
+                                "errorLog": tail_log,
+                                "speed": "0 B/s",
+                                "speed_formatted": "0 B/s",
+                                "eta": "--",
+                                "eta_formatted": "--"
+                            }),
+                        );
+                        let app_q = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            crate::queue::process_queue(&app_q).await;
+                        });
+                        return PassOutcome::Error(msg);
                     }
-                    let warn_payload = serde_json::json!({
-                        "id": tid.clone(),
-                        "taskId": tid.clone(),
-                        "filename": kept_name.clone(),
-                        "percent": 100.0,
-                        "text": warn_msg,
-                        "error_message": warn_msg,
-                        "speed": "0 B/s",
-                        "speed_formatted": "0 B/s",
-                        "speedFormatted": "0 B/s",
-                        "eta": "Done",
-                        "eta_formatted": "Done",
-                        "etaFormatted": "Done",
-                        "total_bytes": final_sz,
-                        "totalBytes": final_sz,
-                        "downloaded_bytes": final_sz,
-                        "downloadedBytes": final_sz,
-                        "status": "completed_with_warning",
-                    });
-                    let _ = app.emit("download-progress", warn_payload.clone());
-                    let _ = app.emit("ytdlp-progress", warn_payload);
-                    let _ = app.emit(
-                        "download-complete",
-                        serde_json::json!({
-                            "id": tid.clone(),
-                            "filename": kept_name,
-                            "save_path": options.save_folder,
-                            "percent": 100.0,
-                            "total_bytes": final_sz,
-                            "downloaded_bytes": final_sz,
-                            "status": "completed_with_warning",
-                            "error_message": warn_msg,
-                        }),
-                    );
-                    let app_q = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        crate::queue::process_queue(&app_q).await;
-                    });
-                    return;
                 }
-            }
 
-            if exit_ok && kept_file.is_some() {
-                break;
-            }
-            if exit_ok && !has_postprocess_marker {
-                break;
-            }
-
-            // Requirement F: Expired link refresh (403/410) via yt-dlp re-extraction
-            if !expired_refreshed && is_expired_link_error(&combined_diags) {
-                expired_refreshed = true;
-                let msg = "HTTP 403/410 expired link detected — refreshing URL and resuming...".to_string();
-                let _ = app.emit(
-                    "download-log",
-                    serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }),
-                );
-                let _ = app.emit(
-                    "download-progress",
-                    serde_json::json!({
+                if attempt_stage == 0 && postprocess_failed {
+                    attempt_stage = 1;
+                    clean_postprocess_leftovers(target_save_folder, &active_stem);
+                    let msg = "Post-processing failed - retrying the merge/fix-up only (downloaded data kept, --fixup warn)...".to_string();
+                    eprintln!("[media] [{}] {}", tid, msg);
+                    let _ = app.emit("download-log", serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }));
+                    let fb_payload = serde_json::json!({
                         "id": tid.clone(),
                         "taskId": tid.clone(),
-                        "percent": *last_percent.lock().unwrap(),
+                        "percent": *last_percent.lock().unwrap_or_else(|e| e.into_inner()),
                         "text": msg,
-                        "speed_formatted": "Refreshing link...".to_string(),
-                        "status": "downloading".to_string(),
-                    }),
-                );
-                // Re-extract via yt-dlp -g on webpage URL (keeps options.url updated if webpage returns a fresh direct CDN URL)
-                let cur_settings = app
-                    .try_state::<crate::settings::SettingsState>()
-                    .map(|s| s.get_blocking())
-                    .unwrap_or_else(|| app_settings.clone());
-                let extract_res = resolve_fresh_direct_url_sync(&cur_settings, &options.url);
-                if let Ok(fresh_url) = extract_res {
-                    if options.url.to_lowercase().contains(".m3u8") || current_media_url != fresh_url {
-                        current_media_url = fresh_url;
-                    }
-                }
-                continue;
-            }
-
-            // Requirement F: Auto retry up to 5 times with backoff [2, 5, 15, 30, 60] s on network errors
-            if is_transient_ytdlp_error(&combined_diags)
-                && network_retries < crate::downloader::NETWORK_RETRY_BACKOFF_SECS.len()
-            {
-                let wait_s = crate::downloader::NETWORK_RETRY_BACKOFF_SECS[network_retries];
-                network_retries += 1;
-                let msg = format!(
-                    "Network error — auto-retrying in {}s (attempt {}/5)...",
-                    wait_s, network_retries
-                );
-                let _ = app.emit(
-                    "download-log",
-                    serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }),
-                );
-                let _ = app.emit(
-                    "download-progress",
-                    serde_json::json!({
-                        "id": tid.clone(),
-                        "taskId": tid.clone(),
-                        "percent": *last_percent.lock().unwrap(),
-                        "text": msg,
-                        "speed_formatted": format!("Retry in {}s", wait_s),
-                        "status": "downloading".to_string(),
-                    }),
-                );
-                let mut cancelled_during_wait = false;
-                for _ in 0..(wait_s * 4) {
-                    std::thread::sleep(Duration::from_millis(250));
-                    if cancelled_tasks.lock().unwrap().get(&tid).copied().unwrap_or(false) {
-                        cancelled_during_wait = true;
-                        break;
-                    }
-                }
-                if !cancelled_during_wait {
+                        "speed": "".to_string(),
+                        "speed_formatted": "Retrying...".to_string(),
+                        "speedFormatted": "Retrying...".to_string(),
+                        "eta": "--".to_string(),
+                        "eta_formatted": "--".to_string(),
+                        "status": "connecting".to_string(),
+                    });
+                    let _ = app.emit("download-progress", fb_payload.clone());
+                    let _ = app.emit("ytdlp-progress", fb_payload);
                     continue;
                 }
+
+                let hls_made_progress = cur_down > 0
+                    || has_partial_data(target_save_folder, &active_stem);
+                if is_hls
+                    && attempt_stage == 0
+                    && !exit_ok
+                    && !hls_made_progress
+                    && !has_fresh_output_file(target_save_folder)
+                {
+                    attempt_stage = 2;
+                    let keep_pct = (*last_percent.lock().unwrap_or_else(|e| e.into_inner())).min(95.0).max(2.0);
+                    let fb_payload = serde_json::json!({
+                        "id": tid.clone(),
+                        "taskId": tid.clone(),
+                        "percent": keep_pct,
+                        "text": "Retrying HLS stream via FFmpeg fallback...".to_string(),
+                        "speed": "".to_string(),
+                        "speed_formatted": "Connecting...".to_string(),
+                        "speedFormatted": "Connecting...".to_string(),
+                        "eta": "--".to_string(),
+                        "eta_formatted": "--".to_string(),
+                        "status": "downloading".to_string(),
+                    });
+                    let _ = app.emit("download-progress", fb_payload.clone());
+                    let _ = app.emit("ytdlp-progress", fb_payload);
+                    continue;
+                }
+
+                let detected_ref = detected_output_path.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let kept_file = find_fresh_kept_output_file(
+                    target_save_folder,
+                    &active_stem,
+                    run_started_at,
+                    detected_ref.as_deref(),
+                );
+
+                let kept_file_for_warn = kept_file.clone().filter(|p| {
+                    if let Some(d) = detected_ref.as_deref() {
+                        if Path::new(d) == p.as_path() {
+                            return true;
+                        }
+                    }
+                    !active_stem.is_empty()
+                        && p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| name_matches_stem(&n.to_lowercase(), &active_stem))
+                            .unwrap_or(false)
+                });
+
+                if postprocess_failed {
+                    if let Some(ref kept_path) = kept_file_for_warn {
+                        let kept_name = kept_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| options.custom_filename.clone().unwrap_or_else(|| "Online Media.mp4".to_string()));
+                        let kept_size = fs::metadata(kept_path).map(|m| m.len()).unwrap_or(0);
+                        let final_sz = if kept_size > 0 {
+                            kept_size
+                        } else if cur_tot > 0 {
+                            cur_tot
+                        } else {
+                            cur_down
+                        };
+                        let warn_msg = "Downloaded, but conversion failed — file kept";
+                        mark_task_completed_with_warning(
+                            &media_tasks,
+                            &tid,
+                            warn_msg,
+                            Some(kept_name.clone()),
+                            Some(final_sz),
+                        );
+                        crate::spawn_save_all_tasks(&app);
+                        if !active_stem.is_empty() {
+                            clean_partial_files(target_save_folder, &active_stem);
+                        }
+                        let warn_payload = serde_json::json!({
+                            "id": tid.clone(),
+                            "taskId": tid.clone(),
+                            "filename": kept_name.clone(),
+                            "percent": 100.0,
+                            "text": warn_msg,
+                            "error_message": warn_msg,
+                            "speed": "0 B/s",
+                            "speed_formatted": "0 B/s",
+                            "speedFormatted": "0 B/s",
+                            "eta": "Done",
+                            "eta_formatted": "Done",
+                            "etaFormatted": "Done",
+                            "total_bytes": final_sz,
+                            "totalBytes": final_sz,
+                            "downloaded_bytes": final_sz,
+                            "downloadedBytes": final_sz,
+                            "status": "completed_with_warning",
+                        });
+                        let _ = app.emit("download-progress", warn_payload.clone());
+                        let _ = app.emit("ytdlp-progress", warn_payload);
+                        let _ = app.emit(
+                            "download-complete",
+                            serde_json::json!({
+                                "id": tid.clone(),
+                                "filename": kept_name,
+                                "save_path": target_save_folder,
+                                "percent": 100.0,
+                                "total_bytes": final_sz,
+                                "downloaded_bytes": final_sz,
+                                "status": "completed_with_warning",
+                                "error_message": warn_msg,
+                            }),
+                        );
+                        let app_q = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            crate::queue::process_queue(&app_q).await;
+                        });
+                        return PassOutcome::Success(kept_file_for_warn);
+                    }
+                }
+
+                if exit_ok && kept_file.is_some() {
+                    return PassOutcome::Success(kept_file);
+                }
+                if exit_ok && !has_postprocess_marker {
+                    return PassOutcome::Success(kept_file);
+                }
+
+                if !expired_refreshed && is_expired_link_error(&combined_diags) {
+                    expired_refreshed = true;
+                    let msg = "HTTP 403/410 expired link detected — refreshing URL and resuming...".to_string();
+                    let _ = app.emit(
+                        "download-log",
+                        serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }),
+                    );
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({
+                            "id": tid.clone(),
+                            "taskId": tid.clone(),
+                            "percent": *last_percent.lock().unwrap_or_else(|e| e.into_inner()),
+                            "text": msg,
+                            "speed_formatted": "Refreshing link...".to_string(),
+                            "status": "downloading".to_string(),
+                        }),
+                    );
+                    let cur_settings = app
+                        .try_state::<crate::settings::SettingsState>()
+                        .map(|s| s.get_blocking())
+                        .unwrap_or_else(|| app_settings.clone());
+                    let extract_res = resolve_fresh_direct_url_sync(&cur_settings, &options.url);
+                    if let Ok(fresh_url) = extract_res {
+                        if options.url.to_lowercase().contains(".m3u8") || current_media_url != fresh_url {
+                            current_media_url = fresh_url;
+                        }
+                    }
+                    continue;
+                }
+
+                if is_transient_ytdlp_error(&combined_diags)
+                    && network_retries < crate::downloader::NETWORK_RETRY_BACKOFF_SECS.len()
+                {
+                    let wait_s = crate::downloader::NETWORK_RETRY_BACKOFF_SECS[network_retries];
+                    network_retries += 1;
+                    let msg = format!(
+                        "Network error — auto-retrying in {}s (attempt {}/5)...",
+                        wait_s, network_retries
+                    );
+                    let _ = app.emit(
+                        "download-log",
+                        serde_json::json!({ "id": tid.clone(), "message": msg.clone(), "level": "warn" }),
+                    );
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({
+                            "id": tid.clone(),
+                            "taskId": tid.clone(),
+                            "percent": *last_percent.lock().unwrap_or_else(|e| e.into_inner()),
+                            "text": msg,
+                            "speed_formatted": format!("Retry in {}s", wait_s),
+                            "status": "downloading".to_string(),
+                        }),
+                    );
+                    let mut cancelled_during_wait = false;
+                    for _ in 0..(wait_s * 4) {
+                        std::thread::sleep(Duration::from_millis(250));
+                        if cancelled_tasks.lock().unwrap_or_else(|e| e.into_inner()).get(&tid).copied().unwrap_or(false) {
+                            cancelled_during_wait = true;
+                            break;
+                        }
+                    }
+                    if !cancelled_during_wait {
+                        continue;
+                    }
+                }
+
+                let meaningful_err = combined_diags
+                    .iter()
+                    .rev()
+                    .find(|l| l.starts_with("ERROR:") || l.starts_with("error:"))
+                    .or_else(|| combined_diags.iter().rev().find(|l| {
+                        let low = l.to_lowercase();
+                        (low.contains("error") || low.contains("failed") || low.contains("not found"))
+                            && !low.contains("[download]")
+                            && !low.contains("warning")
+                    }))
+                    .or_else(|| combined_diags.iter().rev().find(|l| !l.trim().is_empty()))
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown yt-dlp error".to_string());
+
+                let tail_log: Vec<String> = combined_diags
+                    .iter()
+                    .filter(|l| !l.trim().is_empty())
+                    .rev()
+                    .take(40)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+
+                mark_task_error_with_log(&media_tasks, &tid, &meaningful_err, tail_log.clone());
+                crate::append_failure_log(
+                    &app,
+                    &tid,
+                    &active_stem,
+                    &current_media_url,
+                    &meaningful_err,
+                    &tail_log,
+                );
+                let error_pct = (*last_percent.lock().unwrap_or_else(|e| e.into_inner())).min(99.0);
+                crate::spawn_save_all_tasks(&app);
+                let _ = app.emit(
+                    "download-error",
+                    serde_json::json!({
+                        "id": tid.clone(),
+                        "error": meaningful_err,
+                        "errorLog": tail_log
+                    }),
+                );
+                let _ = app.emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "id": tid.clone(),
+                        "percent": error_pct,
+                        "status": "error",
+                        "error_message": meaningful_err,
+                        "errorLog": tail_log,
+                        "speed": "0 B/s",
+                        "speed_formatted": "0 B/s",
+                        "eta": "--",
+                        "eta_formatted": "--"
+                    }),
+                );
+                let app_q = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::queue::process_queue(&app_q).await;
+                });
+                return PassOutcome::Error(meaningful_err);
+            }
+        };
+
+        let final_kept_file: Option<PathBuf>;
+
+        if is_chunked_clip {
+            let working_dir = clip_working_dir(&options.save_folder, &tid);
+            let mut clip_state = match load_clip_state(&working_dir) {
+                Some(st) => st,
+                None => {
+                    if working_dir.exists() {
+                        let _ = fs::remove_dir_all(&working_dir);
+                    }
+                    if let Err(e) = fs::create_dir_all(&working_dir) {
+                        let err_msg = format!("Failed to create clip temporary folder: {}", e);
+                        mark_task_error(&media_tasks, &tid, &err_msg);
+                        return;
+                    }
+                    let pieces = plan_clip_pieces(clip_start_sec, clip_end_sec, CLIP_PIECE_SECS, media_ext);
+                    let st = ClipState {
+                        task_id: tid.clone(),
+                        total_clip_duration: clip_target_duration.unwrap_or(clip_end_sec - clip_start_sec),
+                        target_filename: String::new(),
+                        pieces,
+                    };
+                    let _ = save_clip_state(&working_dir, &st);
+                    st
+                }
+            };
+
+            if clip_state.target_filename.is_empty() {
+                let trimmed = options.custom_filename.as_deref().unwrap_or("").trim();
+                if !trimmed.is_empty() {
+                    let name_without_ext = if let Some(dot_idx) = trimmed.rfind('.') {
+                        let ext = &trimmed[dot_idx + 1..];
+                        if ext.len() <= 4 && ext.chars().all(|c| c.is_alphanumeric()) {
+                            &trimmed[..dot_idx]
+                        } else {
+                            trimmed
+                        }
+                    } else {
+                        trimmed
+                    };
+                    let sanitized = crate::downloader::sanitize_filename(name_without_ext);
+                    clip_state.target_filename = if options.include_media_id {
+                        format!("{}{} [%(id)s].{}", sanitized, suffix_tag, media_ext)
+                    } else {
+                        format!("{}{}.{}", sanitized, suffix_tag, media_ext)
+                    };
+                } else if let Some(ref real_name) = existing_real_filename {
+                    let base = strip_media_extension_for_stem(real_name);
+                    if !base.is_empty() && !base.eq_ignore_ascii_case("Online Media") {
+                        let sanitized = crate::downloader::sanitize_filename(&base);
+                        clip_state.target_filename = if sanitized.contains("[Clip ") {
+                            format!("{}.{}", sanitized, media_ext)
+                        } else {
+                            format!("{}{}.{}", sanitized, suffix_tag, media_ext)
+                        };
+                    }
+                }
+                if !clip_state.target_filename.is_empty() {
+                    let _ = save_clip_state(&working_dir, &clip_state);
+                }
             }
 
-            let meaningful_err = combined_diags
-                .iter()
-                .rev()
-                .find(|l| l.starts_with("ERROR:") || l.starts_with("error:"))
-                .or_else(|| combined_diags.iter().rev().find(|l| {
-                    let low = l.to_lowercase();
-                    (low.contains("error") || low.contains("failed") || low.contains("not found"))
-                        && !low.contains("[download]")
-                        && !low.contains("warning")
-                }))
-                .or_else(|| combined_diags.iter().rev().find(|l| !l.trim().is_empty()))
-                .cloned()
-                .unwrap_or_else(|| "Unknown yt-dlp error".to_string());
+            for piece in &mut clip_state.pieces {
+                let p_path = working_dir.join(&piece.filename);
+                if piece.completed {
+                    if !p_path.exists() || fs::metadata(&p_path).map(|m| m.len()).unwrap_or(0) == 0 {
+                        piece.completed = false;
+                    }
+                } else {
+                    if p_path.exists() {
+                        let _ = fs::remove_file(&p_path);
+                    }
+                    let p_stem = format!("piece_{:04}", piece.index);
+                    if let Ok(entries) = fs::read_dir(&working_dir) {
+                        for entry in entries.flatten() {
+                            if let Some(name) = entry.file_name().to_str() {
+                                if name.starts_with(&p_stem) && name != piece.filename {
+                                    let _ = fs::remove_file(entry.path());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let _ = save_clip_state(&working_dir, &clip_state);
 
-            let tail_log: Vec<String> = combined_diags
-                .iter()
-                .filter(|l| !l.trim().is_empty())
-                .rev()
-                .take(40)
-                .cloned()
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
+            let mut completed_dur = 0.0;
+            let mut completed_bytes = 0u64;
+            for piece in &clip_state.pieces {
+                if piece.completed {
+                    completed_dur += piece.end_sec - piece.start_sec;
+                    let p_path = working_dir.join(&piece.filename);
+                    completed_bytes += fs::metadata(&p_path).map(|m| m.len()).unwrap_or(0);
+                }
+            }
 
-            mark_task_error_with_log(&media_tasks, &tid, &meaningful_err, tail_log.clone());
-            crate::append_failure_log(
-                &app,
-                &tid,
-                &current_stem,
-                &current_media_url,
-                &meaningful_err,
-                &tail_log,
+            let total_clip_dur = clip_state.total_clip_duration.max(0.001);
+            let base_pct = ((completed_dur / total_clip_dur) * 100.0).clamp(0.0, 99.0);
+            let initial_pct = base_pct.max(preserved_percent);
+            *last_percent.lock().unwrap_or_else(|e| e.into_inner()) = initial_pct;
+
+            let captured_title: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+            for piece_idx in 0..clip_state.pieces.len() {
+                if clip_state.pieces[piece_idx].completed {
+                    continue;
+                }
+
+                let piece = clip_state.pieces[piece_idx].clone();
+                let piece_stem = format!("piece_{:04}", piece.index);
+                let piece_out_tmpl = format!(
+                    "{}/{}.%(ext)s",
+                    working_dir.to_string_lossy().replace('\\', "/"),
+                    piece_stem
+                );
+                let piece_start_str = format_seconds_to_timestamp(piece.start_sec);
+                let piece_end_str = format_seconds_to_timestamp(piece.end_sec);
+
+                let pass_res = run_ytdlp_pass(
+                    &piece_out_tmpl,
+                    &piece_stem,
+                    working_dir.to_str().unwrap_or(&options.save_folder),
+                    Some((&piece_start_str, &piece_end_str)),
+                    completed_dur,
+                    completed_bytes,
+                    Some(total_clip_dur),
+                    clip_state.target_filename.is_empty(),
+                    captured_title.clone(),
+                    &last_percent,
+                    &known_duration,
+                );
+
+                if clip_state.target_filename.is_empty() {
+                    if let Some(ref title) = *captured_title.lock().unwrap_or_else(|e| e.into_inner()) {
+                        let clean_title = crate::downloader::sanitize_filename(title);
+                        let shortened = if clean_title.chars().count() > 140 {
+                            clean_title.chars().take(140).collect::<String>()
+                        } else {
+                            clean_title
+                        };
+                        let constructed = format!("{}{}.{}", shortened, suffix_tag, media_ext);
+                        clip_state.target_filename = constructed.clone();
+                        let _ = save_clip_state(&working_dir, &clip_state);
+                        if let Ok(mut lock) = media_tasks.lock() {
+                            if let Some(t) = lock.get_mut(&tid) {
+                                t.filename = constructed;
+                            }
+                        }
+                    }
+                }
+
+                match pass_res {
+                    PassOutcome::Success(_) => {
+                        let p_path = working_dir.join(&piece.filename);
+                        let piece_size = fs::metadata(&p_path).map(|m| m.len()).unwrap_or(0);
+                        if piece_size > 0 {
+                            clip_state.pieces[piece_idx].completed = true;
+                            completed_dur += piece.end_sec - piece.start_sec;
+                            completed_bytes += piece_size;
+                            let _ = save_clip_state(&working_dir, &clip_state);
+                        } else {
+                            let err_msg = format!("Piece {} output file missing or empty", piece.index);
+                            mark_task_error(&media_tasks, &tid, &err_msg);
+                            return;
+                        }
+                    }
+                    PassOutcome::Cancelled => {
+                        return;
+                    }
+                    PassOutcome::Error(_) => {
+                        return;
+                    }
+                }
+            }
+
+            let list_txt_path = working_dir.join("list.txt");
+            let piece_filenames: Vec<String> = clip_state.pieces.iter().map(|p| p.filename.clone()).collect();
+            let list_content = generate_concat_list_content(&piece_filenames);
+            if let Err(e) = fs::write(&list_txt_path, list_content) {
+                let err_msg = format!("Failed to create FFmpeg concat list: {}", e);
+                mark_task_error(&media_tasks, &tid, &err_msg);
+                return;
+            }
+
+            let ffmpeg_bin = ensure_ffmpeg_available().unwrap_or_else(|| PathBuf::from("ffmpeg"));
+            let final_target_name = if !clip_state.target_filename.is_empty() {
+                clip_state.target_filename.clone()
+            } else if let Some(ref rf) = existing_real_filename {
+                rf.clone()
+            } else {
+                format!("Online Media{}.{}", suffix_tag, media_ext)
+            };
+            let final_target_path = Path::new(&options.save_folder).join(&final_target_name);
+            let temp_joined_path = working_dir.join(format!("joined_output.{}", media_ext));
+
+            let _ = app.emit("download-progress", serde_json::json!({
+                "id": tid.clone(),
+                "taskId": tid.clone(),
+                "percent": 99.0,
+                "text": "Joining clip pieces with FFmpeg...".to_string(),
+                "speed_formatted": "Joining...".to_string(),
+                "speedFormatted": "Joining...".to_string(),
+                "eta_formatted": "--".to_string(),
+                "status": "downloading".to_string(),
+            }));
+
+            let mut ffmpeg_cmd = Command::new(ffmpeg_bin);
+            ffmpeg_cmd.arg("-y");
+            ffmpeg_cmd.args(["-f", "concat", "-safe", "0", "-i"]);
+            ffmpeg_cmd.arg(&list_txt_path);
+            ffmpeg_cmd.args(["-c", "copy"]);
+            if media_ext == "mp4" || media_ext == "m4a" || media_ext == "mov" {
+                ffmpeg_cmd.args(["-movflags", "+faststart"]);
+            }
+            ffmpeg_cmd.arg(&temp_joined_path);
+            #[cfg(target_os = "windows")]
+            ffmpeg_cmd.creation_flags(CREATE_NO_WINDOW);
+
+            let concat_res = ffmpeg_cmd.output();
+            let concat_ok = match concat_res {
+                Ok(ref out) => out.status.success() && temp_joined_path.exists() && fs::metadata(&temp_joined_path).map(|m| m.len()).unwrap_or(0) > 0,
+                Err(_) => false,
+            };
+
+            if concat_ok {
+                if final_target_path.exists() {
+                    let _ = fs::remove_file(&final_target_path);
+                }
+                if let Err(e) = fs::rename(&temp_joined_path, &final_target_path) {
+                    let err_msg = format!("Failed to move joined file to target path: {}", e);
+                    mark_task_error(&media_tasks, &tid, &err_msg);
+                    return;
+                }
+                let _ = fs::remove_dir_all(&working_dir);
+                final_kept_file = Some(final_target_path);
+            } else {
+                let err_msg = "Clip join failed — downloaded pieces kept. Press Resume to retry join.".to_string();
+                let stderr_tail: Vec<String> = concat_res.ok().map(|o| {
+                    String::from_utf8_lossy(&o.stderr)
+                        .lines()
+                        .rev()
+                        .take(20)
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect()
+                }).unwrap_or_default();
+                mark_task_error_with_log(&media_tasks, &tid, &err_msg, stderr_tail.clone());
+                crate::append_failure_log(&app, &tid, &task_stem, &options.url, &err_msg, &stderr_tail);
+                crate::spawn_save_all_tasks(&app);
+                let _ = app.emit("download-error", serde_json::json!({ "id": tid.clone(), "error": err_msg, "errorLog": stderr_tail }));
+                return;
+            }
+        } else {
+            let pass_res = run_ytdlp_pass(
+                &out_tmpl,
+                &task_stem,
+                &options.save_folder,
+                if is_clipping_active { Some((&clip_start_str, &clip_end_str)) } else { None },
+                0.0,
+                0,
+                clip_target_duration.or(options.duration),
+                false,
+                Arc::new(Mutex::new(None)),
+                &last_percent,
+                &known_duration,
             );
-            let error_pct = (*last_percent.lock().unwrap()).min(99.0);
-            crate::spawn_save_all_tasks(&app);
-            let _ = app.emit(
-                "download-error",
-                serde_json::json!({
-                    "id": tid.clone(),
-                    "error": meaningful_err,
-                    "errorLog": tail_log
-                }),
-            );
-            let _ = app.emit(
-                "download-progress",
-                serde_json::json!({
-                    "id": tid.clone(),
-                    "percent": error_pct,
-                    "status": "error",
-                    "error_message": meaningful_err,
-                    "errorLog": tail_log,
-                    "speed": "0 B/s",
-                    "speed_formatted": "0 B/s",
-                    "eta": "--",
-                    "eta_formatted": "--"
-                }),
-            );
-            let app_q = app.clone();
-            tauri::async_runtime::spawn(async move {
-                crate::queue::process_queue(&app_q).await;
-            });
-            return;
+            match pass_res {
+                PassOutcome::Success(kf) => {
+                    final_kept_file = kf;
+                }
+                PassOutcome::Cancelled => {
+                    return;
+                }
+                PassOutcome::Error(_) => {
+                    return;
+                }
+            }
         }
-
-        let detected_ref = detected_output_path.lock().unwrap().clone();
-        let kept_file = find_fresh_kept_output_file(
-            &options.save_folder,
-            &current_stem,
-            run_started_at,
-            detected_ref.as_deref(),
-        );
 
         let live_settings = app
             .try_state::<crate::settings::SettingsState>()
             .map(|s| s.get_blocking())
             .unwrap_or_else(|| app_settings.clone());
 
-        let final_kept_file = kept_file.map(|p| {
+        let final_kept_file = final_kept_file.map(|p| {
             crate::settings::maybe_move_to_auto_category(&live_settings, &p)
         });
 
@@ -4425,10 +4815,6 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
 
         let final_total = if disk_size > 0 {
             disk_size
-        } else if last_total_bytes > 0 {
-            last_total_bytes
-        } else if last_downloaded_bytes > 0 {
-            last_downloaded_bytes
         } else {
             media_tasks
                 .lock()
@@ -4437,7 +4823,7 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 .unwrap_or(0)
         };
 
-        if !media_tasks.lock().unwrap().contains_key(&tid) {
+        if !media_tasks.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&tid) {
             return;
         }
 
@@ -5890,5 +6276,111 @@ mod resume_safety_tests {
             "OSError: [Errno 28] No space left on device".to_string()
         ]));
         assert!(!is_disk_full_error(&["HTTP Error 403: Forbidden".to_string()]));
+    }
+}
+
+
+#[cfg(test)]
+mod clip_chunk_tests {
+    use super::*;
+
+    #[test]
+    fn piece_planning_exact_multiple() {
+        let pieces = plan_clip_pieces(0.0, 600.0, CLIP_PIECE_SECS, "mp4");
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[0].index, 1);
+        assert_eq!(pieces[0].start_sec, 0.0);
+        assert_eq!(pieces[0].end_sec, 300.0);
+        assert_eq!(pieces[0].filename, "piece_0001.mp4");
+        assert!(!pieces[0].completed);
+
+        assert_eq!(pieces[1].index, 2);
+        assert_eq!(pieces[1].start_sec, 300.0);
+        assert_eq!(pieces[1].end_sec, 600.0);
+        assert_eq!(pieces[1].filename, "piece_0002.mp4");
+        assert!(!pieces[1].completed);
+    }
+
+    #[test]
+    fn piece_planning_remainder() {
+        let pieces = plan_clip_pieces(100.0, 750.0, CLIP_PIECE_SECS, "mp4");
+        assert_eq!(pieces.len(), 3);
+        assert_eq!(pieces[0].start_sec, 100.0);
+        assert_eq!(pieces[0].end_sec, 400.0);
+        assert_eq!(pieces[0].filename, "piece_0001.mp4");
+
+        assert_eq!(pieces[1].start_sec, 400.0);
+        assert_eq!(pieces[1].end_sec, 700.0);
+        assert_eq!(pieces[1].filename, "piece_0002.mp4");
+
+        assert_eq!(pieces[2].start_sec, 700.0);
+        assert_eq!(pieces[2].end_sec, 750.0);
+        assert_eq!(pieces[2].filename, "piece_0003.mp4");
+    }
+
+    #[test]
+    fn piece_planning_short_clip() {
+        let pieces = plan_clip_pieces(0.0, 150.0, CLIP_PIECE_SECS, "mp4");
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].start_sec, 0.0);
+        assert_eq!(pieces[0].end_sec, 150.0);
+
+        let clip_duration = 150.0;
+        let is_chunked = clip_duration > CLIP_PIECE_SECS;
+        assert!(!is_chunked);
+    }
+
+    #[test]
+    fn piece_planning_inf_end() {
+        let clip_end_str = "inf";
+        let is_chunked = clip_end_str != "inf";
+        assert!(!is_chunked);
+    }
+
+    #[test]
+    fn state_json_save_load_round_trip() {
+        let tmp = env::temp_dir().join(format!("zr_clip_state_test_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        let state = ClipState {
+            task_id: "test_task_abc".to_string(),
+            total_clip_duration: 650.0,
+            target_filename: "Nature Video [Clip 00-01-40 to 00-12-30].mp4".to_string(),
+            pieces: plan_clip_pieces(100.0, 750.0, CLIP_PIECE_SECS, "mp4"),
+        };
+
+        let save_res = save_clip_state(&tmp, &state);
+        assert!(save_res.is_ok());
+
+        let loaded = load_clip_state(&tmp);
+        assert_eq!(loaded, Some(state));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn state_json_corrupt_file_fallback() {
+        let tmp = env::temp_dir().join(format!("zr_clip_corrupt_test_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        fs::write(tmp.join("state.json"), "{ invalid json: true, not complete }").unwrap();
+
+        let loaded = load_clip_state(&tmp);
+        assert_eq!(loaded, None);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn concat_list_file_generation_paths_with_spaces_and_apostrophes() {
+        let paths = vec![
+            "piece 1.mp4".to_string(),
+            "C:\\Videos\\Rock 'n' Roll\\piece '2'.mp4".to_string(),
+        ];
+        let content = generate_concat_list_content(&paths);
+        assert_eq!(
+            content,
+            "file 'piece 1.mp4'\nfile 'C:/Videos/Rock '\\''n'\\'' Roll/piece '\\''2'\\''.mp4'\n"
+        );
     }
 }
