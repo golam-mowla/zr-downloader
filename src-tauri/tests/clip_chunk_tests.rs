@@ -139,3 +139,33 @@ fn clip_working_dir_path_and_cleanup() {
 
     let _ = fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn multi_stream_progress_scaling_tests() {
+    // 2 formats: video fills 0..90, audio 90..99
+    assert_eq!(multi_phase_percent(100.0, 0, 2, false), 90.0);
+    assert_eq!(multi_phase_percent(0.0, 1, 2, false), 90.0);
+    assert!(multi_phase_percent(50.0, 1, 2, false) > 90.0 && multi_phase_percent(100.0, 1, 2, false) == 99.0);
+
+    // Audio first: audio fills 0..15, video fills 15..99
+    assert_eq!(multi_phase_percent(100.0, 0, 2, true), 15.0);
+    assert_eq!(multi_phase_percent(0.0, 1, 2, true), 15.0);
+    assert_eq!(multi_phase_percent(100.0, 1, 2, true), 99.0);
+
+    // Single format capped at 99.0 during downloading
+    assert_eq!(multi_phase_percent(42.0, 0, 1, false), 42.0);
+    assert_eq!(multi_phase_percent(100.0, 0, 1, false), 99.0);
+
+    // 3 formats split evenly
+    assert!((multi_phase_percent(100.0, 2, 3, false) - 99.0).abs() < 1e-9);
+
+    // Audio format file detection
+    assert!(is_audio_format_file("Live.f140.m4a"));
+    assert!(is_audio_format_file("track.f251.webm"));
+    assert!(is_audio_format_file("song.opus"));
+    assert!(is_audio_format_file("audio.mp3"));
+    assert!(is_audio_format_file("sound.aac"));
+    assert!(!is_audio_format_file("Live.f137.mp4"));
+    assert!(!is_audio_format_file("video.webm"));
+    assert!(!is_audio_format_file("movie.mkv"));
+}
