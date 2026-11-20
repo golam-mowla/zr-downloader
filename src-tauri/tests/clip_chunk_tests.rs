@@ -169,3 +169,20 @@ fn multi_stream_progress_scaling_tests() {
     assert!(!is_audio_format_file("video.webm"));
     assert!(!is_audio_format_file("movie.mkv"));
 }
+
+#[test]
+fn sized_phase_percent_uses_real_stream_size() {
+    // 10 min video, 20 MB video stream: audio ~ 9.6 MB => video span ~ 67%, NOT 90%.
+    let end_of_video = multi_phase_percent_sized(100.0, 0, 2, false, 20_000_000, Some(600.0));
+    assert!(end_of_video > 60.0 && end_of_video < 75.0, "got {}", end_of_video);
+    // audio part continues from there and ends at 99
+    let start_audio = multi_phase_percent_sized(0.0, 1, 2, false, 20_000_000, Some(600.0));
+    assert!((start_audio - end_of_video).abs() < 1e-9);
+    assert_eq!(multi_phase_percent_sized(100.0, 1, 2, false, 20_000_000, Some(600.0)), 99.0);
+    // big video: audio is a small share, so the video span is large but below 97
+    let big = multi_phase_percent_sized(100.0, 0, 2, false, 2_000_000_000, Some(600.0));
+    assert!(big > 95.0 && big <= 97.0, "got {}", big);
+    // unknown size / duration falls back to the fixed 90/9 split
+    assert_eq!(multi_phase_percent_sized(100.0, 0, 2, false, 0, Some(600.0)), 90.0);
+    assert_eq!(multi_phase_percent_sized(100.0, 0, 2, false, 20_000_000, None), 90.0);
+}

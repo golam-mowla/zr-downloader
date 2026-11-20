@@ -1150,6 +1150,13 @@ fn emit_unified_media_progress(
 
     if let Ok(mut tasks_lock) = media_tasks.lock() {
         if let Some(t) = tasks_lock.get_mut(tid) {
+            if t.status == "paused"
+                || t.status == "error"
+                || t.status == "completed"
+                || t.status == "completed_with_warning"
+            {
+                return;
+            }
             t.percent = safe_pct;
             if downloaded_bytes > 0 {
                 t.downloaded_bytes = downloaded_bytes;
@@ -1328,6 +1335,13 @@ fn emit_ffmpeg_progress_update(
     let safe_pct = pct.clamp(0.0, 99.0);
     if let Ok(mut tasks_lock) = media_tasks.lock() {
         if let Some(t) = tasks_lock.get_mut(tid) {
+            if t.status == "paused"
+                || t.status == "error"
+                || t.status == "completed"
+                || t.status == "completed_with_warning"
+            {
+                return;
+            }
             t.percent = safe_pct;
             if size_bytes > 0 {
                 t.downloaded_bytes = size_bytes;
@@ -2056,7 +2070,7 @@ fn strip_media_extension_for_stem(raw: &str) -> String {
     current.trim().to_string()
 }
 
-pub use crate::clipper::{is_audio_format_file, multi_phase_percent};
+pub use crate::clipper::{is_audio_format_file, multi_phase_percent, multi_phase_percent_sized};
 
 /// Compatibility wrapper for HLS phase scaling.
 #[allow(dead_code)]
@@ -3935,7 +3949,9 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                         let is_multi_stream = phase_total > 1 || phase_seen.len() > 1 || is_hls;
                                         if is_multi_stream {
                                             let first_is_audio = phase_seen.first().map(|f| is_audio_format_file(f)).unwrap_or(false);
-                                            pct = multi_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total.max(phase_seen.len()), first_is_audio);
+                                            let first_bytes = if phase_seen.len() <= 1 { stream_t } else { done_prior };
+                                            let dur_hint = *known_dur_std.lock().unwrap_or_else(|e| e.into_inner());
+                                            pct = multi_phase_percent_sized(pct, phase_seen.len().saturating_sub(1), phase_total.max(phase_seen.len()), first_is_audio, first_bytes, dur_hint);
                                         } else {
                                             pct = pct.min(99.0);
                                         }
@@ -3983,7 +3999,11 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                                     let is_multi_stream = phase_total > 1 || phase_seen.len() > 1 || is_hls;
                                     if is_multi_stream {
                                         let first_is_audio = phase_seen.first().map(|f| is_audio_format_file(f)).unwrap_or(false);
-                                        pct = multi_phase_percent(pct, phase_seen.len().saturating_sub(1), phase_total.max(phase_seen.len()), first_is_audio);
+                                        let done_prior_dl = *completed_fmt_std.lock().unwrap_or_else(|e| e.into_inner());
+                                        let stream_t_dl = *last_tot_std.lock().unwrap_or_else(|e| e.into_inner());
+                                        let first_bytes = if phase_seen.len() <= 1 { stream_t_dl } else { done_prior_dl };
+                                        let dur_hint = *known_dur_std.lock().unwrap_or_else(|e| e.into_inner());
+                                        pct = multi_phase_percent_sized(pct, phase_seen.len().saturating_sub(1), phase_total.max(phase_seen.len()), first_is_audio, first_bytes, dur_hint);
                                     } else {
                                         pct = pct.min(99.0);
                                     }
@@ -4091,6 +4111,10 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                         Ok(None) => {
                             let was_cancelled = cancelled_tasks.lock().unwrap_or_else(|e| e.into_inner()).get(&tid).copied().unwrap_or(false);
                             if was_cancelled {
+                                // Kill the WHOLE tree (yt-dlp.exe -> python -> ffmpeg/aria2c). Killing only
+                                // the parent orphans ffmpeg, which keeps downloading and keeps emitting
+                                // progress, so the task flips back to "downloading" right after Pause.
+                                kill_process_tree(child.id());
                                 let _ = child.kill();
                                 let _ = child.wait();
                                 break;
@@ -4625,6 +4649,31 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                     continue;
                 }
 
+                // Pause pressed between two pieces: stop here instead of starting the next piece.
+                if cancelled_tasks.lock().unwrap_or_else(|e| e.into_inner()).get(&tid).copied().unwrap_or(false) {
+                    if let Ok(mut tasks_lock) = media_tasks.lock() {
+                        if let Some(t) = tasks_lock.get_mut(&tid) {
+                            t.status = "paused".to_string();
+                            t.speed_bps = 0;
+                            t.speed_formatted = "0 B/s".to_string();
+                            t.eta_formatted = "--".to_string();
+                        }
+                    }
+                    crate::spawn_save_all_tasks(&app);
+                    let _ = app.emit(
+                        "download-progress",
+                        serde_json::json!({
+                            "id": tid.clone(),
+                            "status": "paused",
+                            "speed": "0 B/s",
+                            "speed_formatted": "0 B/s",
+                            "eta": "--",
+                            "eta_formatted": "--"
+                        }),
+                    );
+                    return;
+                }
+
                 let piece = clip_state.pieces[piece_idx].clone();
                 let piece_stem = format!("piece_{:04}", piece.index);
                 let piece_out_tmpl = format!(
@@ -4973,6 +5022,21 @@ pub async fn resume_media_download(
 // Command 3: Cancel / Pause Active Download
 // ---------------------------------------------------------------------------
 
+/// Kills a process and all of its descendants (taskkill /T on Windows).
+fn kill_process_tree(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        let mut kill_cmd = Command::new("taskkill");
+        kill_cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
+        kill_cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = kill_cmd.output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+    }
+}
+
 #[command]
 pub async fn cancel_download(
     app: AppHandle,
@@ -4982,8 +5046,8 @@ pub async fn cancel_download(
     let mut pids_to_kill = Vec::new();
     let mut affected_ids = Vec::new();
     {
-        let mut pids = state.active_pids.lock().unwrap();
-        let mut cancels = state.cancelled_tasks.lock().unwrap();
+        let mut pids = state.active_pids.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cancels = state.cancelled_tasks.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref tid) = task_id {
             cancels.insert(tid.clone(), true);
             affected_ids.push(tid.clone());
@@ -5014,17 +5078,7 @@ pub async fn cancel_download(
         }
     }
     for pid in pids_to_kill {
-        #[cfg(target_os = "windows")]
-        {
-            let mut kill_cmd = Command::new("taskkill");
-            kill_cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
-            kill_cmd.creation_flags(CREATE_NO_WINDOW);
-            let _ = kill_cmd.output();
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
-        }
+        kill_process_tree(pid);
     }
     crate::spawn_save_all_tasks(&app);
     Ok(())
@@ -5913,6 +5967,134 @@ fn pick_update_asset(assets: &[serde_json::Value]) -> Option<(String, String, u6
     best.map(|(_, n, u, sz)| (n, u, sz))
 }
 
+fn build_update_http_client(
+    current: &str,
+    proxy: &Option<String>,
+    follow_redirects: bool,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .user_agent(format!("ZR-Downloader/{}", current));
+    if !follow_redirects {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
+    if let Some(p) = proxy {
+        if !p.trim().is_empty() {
+            if let Ok(px) = reqwest::Proxy::all(p.trim()) {
+                builder = builder.proxy(px);
+            }
+        }
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+/// Collects `/<repo>/releases/download/<tag>/<file>` links from a GitHub "expanded_assets" HTML
+/// fragment, in the same shape pick_update_asset expects (size is unknown there, so 0).
+fn parse_release_assets_html(html: &str, repo: &str) -> Vec<serde_json::Value> {
+    let prefix = format!("/{}/releases/download/", repo);
+    let mut assets: Vec<serde_json::Value> = Vec::new();
+    let mut rest = html;
+    while let Some(i) = rest.find(&prefix) {
+        let after = &rest[i..];
+        let end = after.find('"').unwrap_or(after.len());
+        let path = &after[..end];
+        rest = &after[end..];
+        let name = path.rsplit('/').next().unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let full = format!("https://github.com{}", path);
+        let dup = assets
+            .iter()
+            .any(|a| a.get("browser_download_url").and_then(|v| v.as_str()) == Some(full.as_str()));
+        if dup {
+            continue;
+        }
+        assets.push(serde_json::json!({
+            "name": name,
+            "browser_download_url": full,
+            "size": 0,
+        }));
+    }
+    assets
+}
+
+/// Rate-limit-free fallback for check_app_update: github.com/<repo>/releases/latest redirects to
+/// .../releases/tag/<tag>, and releases/expanded_assets/<tag> lists the downloadable files.
+async fn check_app_update_via_web(
+    current: &str,
+    proxy: &Option<String>,
+) -> Result<AppUpdateInfo, String> {
+    let no_redirect = build_update_http_client(current, proxy, false)?;
+    let latest_url = format!("https://github.com/{}/releases/latest", APP_UPDATE_REPO);
+    let resp = no_redirect
+        .get(&latest_url)
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach github.com: {}", e))?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        // No published releases found
+        return Ok(AppUpdateInfo {
+            current_version: current.to_string(),
+            ..Default::default()
+        });
+    }
+    if status.is_client_error() || status.is_server_error() {
+        return Err(format!("github.com returned HTTP {}", status.as_u16()));
+    }
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let marker = "/releases/tag/";
+    let tag = match location.find(marker) {
+        Some(i) => location[i + marker.len()..]
+            .split(|c: char| c == '?' || c == '#')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/')
+            .to_string(),
+        None => String::new(),
+    };
+    if tag.is_empty() {
+        // no published release yet
+        return Ok(AppUpdateInfo {
+            current_version: current.to_string(),
+            ..Default::default()
+        });
+    }
+
+    let client = build_update_http_client(current, proxy, true)?;
+    let assets_url = format!(
+        "https://github.com/{}/releases/expanded_assets/{}",
+        APP_UPDATE_REPO, tag
+    );
+    let html = match client.get(&assets_url).send().await {
+        Ok(r) if r.status().is_success() => r.text().await.unwrap_or_default(),
+        _ => String::new(),
+    };
+    let assets = parse_release_assets_html(&html, APP_UPDATE_REPO);
+    let (asset_name, asset_url, asset_size) = pick_update_asset(&assets).unwrap_or_default();
+
+    Ok(AppUpdateInfo {
+        update_available: is_newer_version(&tag, current),
+        current_version: current.to_string(),
+        latest_version: tag
+            .trim_start_matches(|c: char| c == 'v' || c == 'V')
+            .to_string(),
+        release_name: tag.clone(),
+        release_notes: String::new(),
+        release_url: format!("https://github.com/{}/releases/tag/{}", APP_UPDATE_REPO, tag),
+        published_at: String::new(),
+        asset_name,
+        asset_url,
+        asset_size,
+    })
+}
+
 /// Checks GitHub Releases for a newer app version. Never installs anything by itself.
 #[command]
 pub async fn check_app_update(app: AppHandle) -> Result<AppUpdateInfo, String> {
@@ -5922,28 +6104,26 @@ pub async fn check_app_update(app: AppHandle) -> Result<AppUpdateInfo, String> {
         .map(|s| s.get_blocking())
         .and_then(|s| s.effective_proxy_url());
 
-    let mut builder = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .user_agent(format!("ZR-Downloader/{}", current));
-    if let Some(p) = proxy {
-        if !p.trim().is_empty() {
-            if let Ok(px) = reqwest::Proxy::all(p.trim()) {
-                builder = builder.proxy(px);
-            }
-        }
-    }
-    let client = builder.build().map_err(|e| e.to_string())?;
+    let client = build_update_http_client(&current, &proxy, true)?;
 
     let url = format!(
         "https://api.github.com/repos/{}/releases/latest",
         APP_UPDATE_REPO
     );
-    let resp = client
+    let resp = match client
         .get(&url)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| format!("Could not reach GitHub: {}", e))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            // api.github.com unreachable (blocked / DNS / proxy): try the plain github.com pages.
+            return check_app_update_via_web(&current, &proxy)
+                .await
+                .map_err(|fe| format!("Could not reach GitHub: {} ({})", e, fe));
+        }
+    };
 
     let code = resp.status().as_u16();
     if code == 404 {
@@ -5951,6 +6131,16 @@ pub async fn check_app_update(app: AppHandle) -> Result<AppUpdateInfo, String> {
         return Ok(AppUpdateInfo {
             current_version: current,
             ..Default::default()
+        });
+    }
+    if code == 403 || code == 429 {
+        // The unauthenticated GitHub API allows only 60 requests/hour per IP (shared IPs hit this
+        // quickly). github.com/<repo>/releases/latest has no such limit, so use it instead.
+        return check_app_update_via_web(&current, &proxy).await.map_err(|fe| {
+            format!(
+                "GitHub API rate limit reached (HTTP {}). Please try again in a while. ({})",
+                code, fe
+            )
         });
     }
     if !resp.status().is_success() {
@@ -6162,6 +6352,23 @@ mod resume_safety_tests {
             .collect();
         v.sort();
         v
+    }
+
+    #[test]
+    fn sized_phase_percent_uses_real_stream_size() {
+        // 10 min video, 20 MB video stream: audio ~ 9.6 MB => video span ~ 67%, NOT 90%.
+        let end_of_video = multi_phase_percent_sized(100.0, 0, 2, false, 20_000_000, Some(600.0));
+        assert!(end_of_video > 60.0 && end_of_video < 75.0, "got {}", end_of_video);
+        // audio part continues from there and ends at 99
+        let start_audio = multi_phase_percent_sized(0.0, 1, 2, false, 20_000_000, Some(600.0));
+        assert!((start_audio - end_of_video).abs() < 1e-9);
+        assert_eq!(multi_phase_percent_sized(100.0, 1, 2, false, 20_000_000, Some(600.0)), 99.0);
+        // big video: audio is a small share, so the video span is large but below 97
+        let big = multi_phase_percent_sized(100.0, 0, 2, false, 2_000_000_000, Some(600.0));
+        assert!(big > 95.0 && big <= 97.0, "got {}", big);
+        // unknown size / duration falls back to the fixed 90/9 split
+        assert_eq!(multi_phase_percent_sized(100.0, 0, 2, false, 0, Some(600.0)), 90.0);
+        assert_eq!(multi_phase_percent_sized(100.0, 0, 2, false, 20_000_000, None), 90.0);
     }
 
     #[test]
