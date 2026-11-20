@@ -148,3 +148,29 @@ pub fn multi_phase_percent(raw: f64, idx: usize, total: usize, first_is_audio: b
     };
     (lo + (hi - lo) * raw / 100.0).clamp(0.0, 99.0)
 }
+
+/// Like `multi_phase_percent`, but for the common "video then audio" pair it splits the bar by
+/// the REAL size of the first stream instead of a fixed 90/9 guess. The audio size is estimated
+/// from the media duration (~128 kbps), so a small low-resolution video no longer shows ~90%
+/// when its (relatively large) audio stream has not even started downloading.
+/// Falls back to `multi_phase_percent` whenever the size or duration is not known yet.
+pub fn multi_phase_percent_sized(
+    raw: f64,
+    idx: usize,
+    total: usize,
+    first_is_audio: bool,
+    first_stream_bytes: u64,
+    duration_secs: Option<f64>,
+) -> f64 {
+    if total == 2 && !first_is_audio && first_stream_bytes > 0 {
+        if let Some(dur) = duration_secs.filter(|d| d.is_finite() && *d > 1.0) {
+            let v = first_stream_bytes as f64;
+            let a = (dur * 16_000.0).clamp(65_536.0, v.max(65_536.0));
+            let span = (99.0 * v / (v + a)).clamp(40.0, 97.0);
+            let raw = raw.clamp(0.0, 100.0);
+            let (lo, hi) = if idx == 0 { (0.0, span) } else { (span, 99.0) };
+            return (lo + (hi - lo) * raw / 100.0).clamp(0.0, 99.0);
+        }
+    }
+    multi_phase_percent(raw, idx, total, first_is_audio)
+}
