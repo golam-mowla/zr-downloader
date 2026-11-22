@@ -1299,11 +1299,6 @@
       header.addEventListener("click", (e) => {
         e.stopPropagation();
         hideDropdown();
-        showToast(
-          "ZR Downloader 🚀",
-          `Starting Best Quality download in ZR Downloader...`,
-          "success"
-        );
         const isLowSpace = Boolean(cachedLowDiskSpace);
         const payload = {
           action: "SEND_TO_ZR",
@@ -1312,16 +1307,35 @@
           quality: "Best",
           autoStart: true,
           lowDiskSpace: isLowSpace,
+          referrer: window.location.href,
+          isDirectFile: Boolean(optionsToRender[0]?.isDirectFile),
+        };
+        const handleResponse = (resp) => {
+          if (resp && resp.success) {
+            showToast(
+              "ZR Downloader 🚀",
+              "Starting Best Quality download in ZR Downloader...",
+              "success"
+            );
+          } else {
+            const reasonMsg =
+              resp?.reason === "unauthorized"
+                ? "Token mismatch: open ZR Downloader → Preferences → copy pair token into the extension popup"
+                : "ZR Downloader is not running";
+            showToast("ZR Downloader ⚠️", reasonMsg, "error");
+          }
         };
         try {
-          chrome.runtime.sendMessage(payload, () => {
+          chrome.runtime.sendMessage(payload, (resp) => {
             if (chrome.runtime.lastError) {
-              chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+              chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" }, handleResponse);
+            } else {
+              handleResponse(resp);
             }
           });
         } catch (err) {
           try {
-            chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+            chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" }, handleResponse);
           } catch {}
         }
       });
@@ -1398,11 +1412,6 @@
           if (activeGrabberButton) {
             activeGrabberButton.style.display = "none";
           }
-          showToast(
-            "ZR Downloader 🚀",
-            `Starting ${opt.quality} download in ZR Downloader...`,
-            "success"
-          );
           const isLowSpace = Boolean(cachedLowDiskSpace);
           const payload = {
             action: "SEND_TO_ZR",
@@ -1417,15 +1426,32 @@
             isDirectFile: Boolean(opt.isDirectFile),
             lowDiskSpace: isLowSpace,
           };
+          const handleResponse = (resp) => {
+            if (resp && resp.success) {
+              showToast(
+                "ZR Downloader 🚀",
+                `Starting ${opt.quality} download in ZR Downloader...`,
+                "success"
+              );
+            } else {
+              const reasonMsg =
+                resp?.reason === "unauthorized"
+                  ? "Token mismatch: open ZR Downloader → Preferences → copy pair token into the extension popup"
+                  : "ZR Downloader is not running";
+              showToast("ZR Downloader ⚠️", reasonMsg, "error");
+            }
+          };
           try {
-            chrome.runtime.sendMessage(payload, () => {
+            chrome.runtime.sendMessage(payload, (resp) => {
               if (chrome.runtime.lastError) {
-                chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+                chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" }, handleResponse);
+              } else {
+                handleResponse(resp);
               }
             });
           } catch (err) {
             try {
-              chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" });
+              chrome.runtime.sendMessage({ ...payload, action: "SEND_TO_GDM" }, handleResponse);
             } catch {}
           }
         });

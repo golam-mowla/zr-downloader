@@ -228,6 +228,8 @@ async fn start_http_download(
     post_download_program: Option<String>,
     auth_username: Option<String>,
     auth_password: Option<String>,
+    cookies: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<String, String> {
     let app_settings = settings_state.get().await;
     let unwrapped = url_utils::unwrap_custom_url_scheme(&url);
@@ -453,6 +455,8 @@ async fn start_http_download(
         auth_username: u_val,
         auth_password: p_val,
         last_modified: meta.last_modified.clone(),
+        cookies,
+        user_agent,
         ..Default::default()
     };
 
@@ -861,6 +865,22 @@ fn build_unique_filename(folder: &str, filename: &str) -> String {
         }
     }
     format!("{}_{}", chrono::Utc::now().timestamp(), filename)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BridgeStatusInfo {
+    pub port: u16,
+    pub listening: bool,
+}
+
+#[command]
+async fn get_bridge_status() -> BridgeStatusInfo {
+    let port = ACTIVE_BRIDGE_PORT.load(Ordering::Relaxed);
+    let listening = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .is_ok();
+    BridgeStatusInfo { port, listening }
 }
 
 #[command]
@@ -1516,6 +1536,23 @@ pub fn decode_percent_encoded(input: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+pub fn is_ping_request(first_line: &str) -> bool {
+    let mut parts = first_line.split_whitespace();
+    let method = match parts.next() {
+        Some(m) => m,
+        None => return false,
+    };
+    if !method.eq_ignore_ascii_case("GET") {
+        return false;
+    }
+    let uri = match parts.next() {
+        Some(u) => u,
+        None => return false,
+    };
+    let path = uri.split('?').next().unwrap_or(uri);
+    path == "/ping"
+}
+
 pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
     let mut target_url = None;
     let mut target_filename = None;
@@ -1527,6 +1564,8 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
     let mut auto_start = false;
     let mut is_direct_file = false;
     let mut low_disk_space = false;
+    let mut target_cookies = None;
+    let mut target_user_agent = None;
 
     for part in query_str.split('&') {
         if part.is_empty() {
@@ -1545,8 +1584,9 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
         } else if lower.starts_with("istorrent=") {
             let val = &part[10..];
             is_torrent = val == "true" || val == "1";
-        } else if lower.starts_with("referrer=") {
-            target_referrer = Some(decode_percent_encoded(&part[9..]));
+        } else if lower.starts_with("referrer=") || lower.starts_with("referer=") {
+            let offset = if lower.starts_with("referrer=") { 9 } else { 8 };
+            target_referrer = Some(decode_percent_encoded(&part[offset..]));
         } else if lower.starts_with("container=") {
             target_container = Some(decode_percent_encoded(&part[10..]));
         } else if lower.starts_with("formatid=") {
@@ -1557,6 +1597,10 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
         } else if lower.starts_with("lowdiskspace=") {
             let val = &part[13..];
             low_disk_space = val == "true" || val == "1";
+        } else if lower.starts_with("cookies=") {
+            target_cookies = Some(decode_percent_encoded(&part[8..]));
+        } else if lower.starts_with("useragent=") {
+            target_user_agent = Some(decode_percent_encoded(&part[10..]));
         }
     }
 
@@ -1577,8 +1621,39 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
                 "container": target_container,
                 "formatId": target_format_id,
                 "isDirectFile": is_direct_file,
-                "lowDiskSpace": low_disk_space
+                "lowDiskSpace": low_disk_space,
+                "cookies": target_cookies,
+                "userAgent": target_user_agent,
             }));
+        }
+    }
+    None
+}
+
+pub fn parse_open_json(body: &str) -> Option<serde_json::Value> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
+            let clean = url.trim().to_string();
+            if !clean.is_empty() {
+                let is_torrent = v.get("isTorrent").and_then(|t| t.as_bool()).unwrap_or(false)
+                    || clean.starts_with("magnet:")
+                    || clean.ends_with(".torrent")
+                    || clean.contains(".torrent");
+                return Some(serde_json::json!({
+                    "url": clean,
+                    "filename": v.get("filename").and_then(|f| f.as_str()),
+                    "quality": v.get("quality").and_then(|q| q.as_str()),
+                    "autoStart": v.get("autoStart").and_then(|a| a.as_bool()).unwrap_or(false),
+                    "isTorrent": is_torrent,
+                    "referrer": v.get("referrer").or_else(|| v.get("referer")).and_then(|r| r.as_str()),
+                    "container": v.get("container").and_then(|c| c.as_str()),
+                    "formatId": v.get("formatId").and_then(|f| f.as_str()),
+                    "isDirectFile": v.get("isDirectFile").and_then(|d| d.as_bool()).unwrap_or(false),
+                    "lowDiskSpace": v.get("lowDiskSpace").and_then(|l| l.as_bool()).unwrap_or(false),
+                    "cookies": v.get("cookies").and_then(|c| c.as_str()),
+                    "userAgent": v.get("userAgent").and_then(|u| u.as_str()),
+                }));
+            }
         }
     }
     None
@@ -1730,25 +1805,65 @@ async fn start_local_bridge(app_handle: AppHandle) {
             let port = actual_port;
             tauri::async_runtime::spawn(async move {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                let mut buf = [0u8; 16384];
-                let n = match stream.read(&mut buf).await {
-                    Ok(n) if n > 0 => n,
+
+                // Read loop: read until "\r\n\r\n" is found and Content-Length payload is read, capped at 64 KB with 3s timeout
+                let read_result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                    let mut data = Vec::with_capacity(4096);
+                    let mut chunk = [0u8; 4096];
+                    let mut body_needed: Option<usize> = None;
+                    loop {
+                        let n = stream.read(&mut chunk).await.ok()?;
+                        if n == 0 {
+                            break;
+                        }
+                        data.extend_from_slice(&chunk[..n]);
+                        if data.len() > 65536 {
+                            break;
+                        }
+                        if body_needed.is_none() {
+                            if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                                let header_part = String::from_utf8_lossy(&data[..pos]);
+                                let content_len = extract_header_value(&header_part, "content-length")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                                    .unwrap_or(0);
+                                let body_so_far = data.len() - (pos + 4);
+                                if body_so_far >= content_len {
+                                    break;
+                                }
+                                body_needed = Some(pos + 4 + content_len);
+                            }
+                        } else if let Some(target_len) = body_needed {
+                            if data.len() >= target_len {
+                                break;
+                            }
+                        }
+                    }
+                    Some(data)
+                })
+                .await;
+
+                let data = match read_result {
+                    Ok(Some(d)) if !d.is_empty() => d,
                     _ => return,
                 };
-                let req_str = String::from_utf8_lossy(&buf[..n]);
+                let req_str = String::from_utf8_lossy(&data).to_string();
 
-                // Origin allow-list: ONLY browser extensions (chrome-extension:// and moz-extension://)
+                // Origin allow-list: browser extensions and Tauri webview origins
                 let origin = extract_header_value(&req_str, "origin");
-                let is_allowed_ext = origin.as_deref().map_or(false, |o| {
+                let is_allowed_origin = origin.as_deref().map_or(false, |o| {
                     let ol = o.to_ascii_lowercase();
-                    ol.starts_with("chrome-extension://") || ol.starts_with("moz-extension://")
+                    ol.starts_with("chrome-extension://")
+                        || ol.starts_with("moz-extension://")
+                        || ol == "http://tauri.localhost"
+                        || ol == "https://tauri.localhost"
+                        || ol == "tauri://localhost"
                 });
 
                 let first_line = req_str.lines().next().unwrap_or("").to_string();
 
                 // Handle OPTIONS preflight
                 if first_line.starts_with("OPTIONS") {
-                    if is_allowed_ext {
+                    if is_allowed_origin {
                         let resp = format!(
                             "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: X-ZR-Token, Content-Type, Authorization\r\nAccess-Control-Max-Age: 86400\r\nConnection: close\r\n\r\n",
                             origin.as_deref().unwrap_or("")
@@ -1761,9 +1876,8 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     return;
                 }
 
-                // Prepare CORS header: Only extensions receive Access-Control-Allow-Origin;
-                // normal web origins receive NO CORS headers at all.
-                let cors_header = if is_allowed_ext {
+                // Prepare CORS header
+                let cors_header = if is_allowed_origin {
                     format!(
                         "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Headers: X-ZR-Token, Content-Type, Authorization\r\nVary: Origin\r\n",
                         origin.as_deref().unwrap_or("")
@@ -1772,14 +1886,15 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     String::new()
                 };
 
-                // Health check GET /ping is the ONLY unauthenticated endpoint
-                if first_line.starts_with("GET /ping") || (req_str.contains("/ping") && !first_line.contains("/open?")) {
+                // Health check GET /ping is the ONLY unauthenticated endpoint (exact path match on request line)
+                if is_ping_request(&first_line) {
                     let body = serde_json::json!({
                         "status": "alive",
                         "app": "ZR Downloader",
                         "version": env!("CARGO_PKG_VERSION"),
                         "port": port,
-                    }).to_string();
+                    })
+                    .to_string();
                     let resp = format!(
                         "HTTP/1.1 200 OK\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         cors_header,
@@ -1802,6 +1917,24 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     let body = "{\"error\":\"unauthorized\",\"message\":\"Valid X-ZR-Token required\"}";
                     let resp = format!(
                         "HTTP/1.1 401 Unauthorized\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        cors_header,
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                let mut parts = first_line.split_whitespace();
+                let req_method = parts.next().unwrap_or("");
+                let req_uri = parts.next().unwrap_or("");
+                let req_path = req_uri.split('?').next().unwrap_or(req_uri);
+
+                // Pairing verification endpoint: requires valid token and returns {"ok":true}
+                if req_method.eq_ignore_ascii_case("GET") && req_path == "/auth-check" {
+                    let body = "{\"ok\":true}";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         cors_header,
                         body.len(),
                         body
@@ -1878,6 +2011,11 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     let end_idx = query_str.find(|c: char| c == ' ' || c == '\r' || c == '\n').unwrap_or(query_str.len());
                     let clean_query = &query_str[..end_idx];
                     payload_opt = parse_open_query(clean_query);
+                } else if req_path == "/open" {
+                    if let Some(body_start) = req_str.find("\r\n\r\n") {
+                        let body = &req_str[body_start + 4..];
+                        payload_opt = parse_open_json(body);
+                    }
                 }
 
                 if let Some(payload) = payload_opt {
@@ -2305,7 +2443,8 @@ pub fn run() {
                 &addr,
                 std::time::Duration::from_millis(350),
             ) {
-                use std::io::Write;
+                use std::io::{Read, Write};
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(1500)));
                 let auth_hdr = if !ipc_token.is_empty() {
                     format!("X-ZR-Token: {}\r\n", ipc_token)
                 } else {
@@ -2315,8 +2454,16 @@ pub fn run() {
                     "GET /{} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}Connection: close\r\n\r\n",
                     req_path, ipc_port, auth_hdr
                 );
-                let _ = stream.write_all(req.as_bytes());
-                std::process::exit(0);
+                if stream.write_all(req.as_bytes()).is_ok() {
+                    let mut buf = [0u8; 1024];
+                    if let Ok(n) = stream.read(&mut buf) {
+                        let resp = String::from_utf8_lossy(&buf[..n]);
+                        let first_resp_line = resp.lines().next().unwrap_or("");
+                        if first_resp_line.contains("200") {
+                            std::process::exit(0);
+                        }
+                    }
+                }
             }
         }
     }
@@ -2330,7 +2477,7 @@ pub fn run() {
                 std::time::Duration::from_millis(350),
             ) {
                 use std::io::{Read, Write};
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(800)));
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(1500)));
                 let auth_hdr = if !ipc_token.is_empty() {
                     format!("X-ZR-Token: {}\r\n", ipc_token)
                 } else {
@@ -2340,11 +2487,14 @@ pub fn run() {
                     "GET /focus HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}Connection: close\r\n\r\n",
                     ipc_port, auth_hdr
                 );
-                let _ = stream.write_all(req.as_bytes());
-                let mut buf = [0u8; 512];
-                if let Ok(n) = stream.read(&mut buf) {
-                    if String::from_utf8_lossy(&buf[..n]).contains("ZR Downloader") {
-                        std::process::exit(0);
+                if stream.write_all(req.as_bytes()).is_ok() {
+                    let mut buf = [0u8; 1024];
+                    if let Ok(n) = stream.read(&mut buf) {
+                        let resp = String::from_utf8_lossy(&buf[..n]);
+                        let first_resp_line = resp.lines().next().unwrap_or("");
+                        if first_resp_line.contains("200") && resp.contains("ZR Downloader") {
+                            std::process::exit(0);
+                        }
                     }
                 }
             }
@@ -2603,6 +2753,7 @@ pub fn run() {
             get_app_settings,
             save_app_settings,
             get_active_bridge_port,
+            get_bridge_status,
             regenerate_bridge_token,
             get_active_aria2_rpc_status,
             regenerate_aria2_token,
@@ -2676,7 +2827,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod bridge_tests {
-    use super::{extract_bridge_token, extract_header_value};
+    use super::{extract_bridge_token, extract_header_value, is_ping_request, parse_open_query};
 
     #[test]
     fn test_extract_bridge_token_header_and_query() {
@@ -2714,5 +2865,26 @@ mod bridge_tests {
         assert!(is_allowed(moz_origin));
         assert!(!is_allowed(web_origin));
         assert!(!is_allowed("http://localhost:3000"));
+    }
+
+    #[test]
+    fn test_ping_exact_match_logic() {
+        assert!(is_ping_request("GET /ping HTTP/1.1"));
+        assert!(is_ping_request("GET /ping?token=secret HTTP/1.1"));
+        assert!(is_ping_request("get /ping HTTP/1.0"));
+        assert!(!is_ping_request("GET /formats?url=https%3A%2F%2Fx.com%2Fping HTTP/1.1"));
+        assert!(!is_ping_request("POST /ping HTTP/1.1"));
+        assert!(!is_ping_request("GET /ping_other HTTP/1.1"));
+        assert!(!is_ping_request("GET /open?url=http://example.com/ping HTTP/1.1"));
+    }
+
+    #[test]
+    fn test_parse_open_query_parses_cookies_and_user_agent() {
+        let query = "url=https%3A%2F%2Fexample.com%2Ffile.zip&filename=file.zip&cookies=session%3Dabc123%3B%20user%3Dtest&userAgent=Mozilla%2F5.0%20TestBrowser";
+        let parsed = parse_open_query(query).expect("Should parse query");
+        assert_eq!(parsed["url"], "https://example.com/file.zip");
+        assert_eq!(parsed["filename"], "file.zip");
+        assert_eq!(parsed["cookies"], "session=abc123; user=test");
+        assert_eq!(parsed["userAgent"], "Mozilla/5.0 TestBrowser");
     }
 }

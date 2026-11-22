@@ -109,6 +109,10 @@ pub struct DownloadTask {
     pub custom_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub proxy: Option<String>,
+    #[serde(default)]
+    pub cookies: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 impl Default for DownloadTask {
@@ -150,6 +154,8 @@ impl Default for DownloadTask {
             last_modified: None,
             custom_headers: None,
             proxy: None,
+            cookies: None,
+            user_agent: None,
         }
     }
 }
@@ -909,13 +915,27 @@ async fn run_chunk_worker(mut p: ChunkWorkerParams) -> Result<(), String> {
             req = req.header(k, v);
         }
 
-        if let Some(task_headers) = p.state.tasks.read().await.get(&p.task_id).and_then(|t| t.custom_headers.clone()) {
-            for (k, v) in task_headers {
-                req = req.header(k, v);
+        if let Some(task_item) = p.state.tasks.read().await.get(&p.task_id) {
+            if let Some(ref task_headers) = task_item.custom_headers {
+                for (k, v) in task_headers {
+                    req = req.header(k, v);
+                }
+            }
+            if let Some(ref ua) = task_item.user_agent {
+                if !ua.trim().is_empty() {
+                    req = req.header(USER_AGENT, ua.trim());
+                }
+            }
+            if let Some(ref c) = task_item.cookies {
+                if !c.trim().is_empty() {
+                    req = req.header("Cookie", c.trim());
+                }
             }
         }
 
-        if url.contains("safefilehosting.com") {
+        if !p.origin_page_url.trim().is_empty() {
+            req = req.header("Referer", p.origin_page_url.trim());
+        } else if url.contains("safefilehosting.com") {
             req = req.header("Referer", "https://igetintopc.com/");
         } else if let Ok(parsed) = reqwest::Url::parse(&url) {
             if let Some(host) = parsed.host_str() {

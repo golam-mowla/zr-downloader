@@ -16,29 +16,40 @@ const tokenStatusBadge = document.getElementById("token-status-badge");
 
 let detectedUrl = "";
 
-function updateTokenBadge(hasToken) {
+function updateTokenBadge(state) {
   if (!tokenStatusBadge) return;
-  if (hasToken) {
+  if (state === "paired") {
     tokenStatusBadge.textContent = "Paired ✓";
     tokenStatusBadge.style.background = "#065f46";
     tokenStatusBadge.style.color = "#34d399";
-  } else {
-    tokenStatusBadge.textContent = "Token Required";
+  } else if (state === "invalid") {
+    tokenStatusBadge.textContent = "Token Required / Invalid";
     tokenStatusBadge.style.background = "#78350f";
     tokenStatusBadge.style.color = "#fcd34d";
+  } else {
+    tokenStatusBadge.textContent = "Offline";
+    tokenStatusBadge.style.background = "#374151";
+    tokenStatusBadge.style.color = "#9ca3af";
   }
 }
 
-// Check ZR Downloader Desktop App status on open
+// Check ZR Downloader Desktop App status on open (3 states: Offline, Token Invalid/Required, Paired)
 function checkStatus() {
   chrome.runtime.sendMessage({ action: "CHECK_ZR_STATUS" }, (response) => {
-    if (response && response.online) {
+    if (!response || !response.online) {
+      statusPill.className = "status-pill offline";
+      statusText.textContent = "Offline";
+      updateTokenBadge("offline");
+    } else if (!response.authenticated) {
       statusPill.className = "status-pill online";
       const port = response.port || (bridgePortInput ? bridgePortInput.value : 9666);
-      statusText.textContent = `Engine Online (:${port})`;
+      statusText.textContent = `Online (:${port}) - Token Invalid`;
+      updateTokenBadge("invalid");
     } else {
-      statusPill.className = "status-pill";
-      statusText.textContent = "Offline / Closed";
+      statusPill.className = "status-pill online";
+      const port = response.port || (bridgePortInput ? bridgePortInput.value : 9666);
+      statusText.textContent = `Online (:${port}) - Paired ✓`;
+      updateTokenBadge("paired");
     }
   });
 }
@@ -53,9 +64,6 @@ chrome.storage.local.get(["interceptDownloads", "lowDiskSpace", "bridgeToken", "
   }
   if (bridgeTokenInput && result.bridgeToken) {
     bridgeTokenInput.value = result.bridgeToken;
-    updateTokenBadge(true);
-  } else {
-    updateTokenBadge(false);
   }
   if (bridgePortInput && result.bridgePort) {
     bridgePortInput.value = result.bridgePort;
@@ -67,7 +75,6 @@ function saveBridgeConfig() {
   const token = (bridgeTokenInput ? bridgeTokenInput.value : "").trim();
   const port = parseInt(bridgePortInput ? bridgePortInput.value : "9666", 10) || 9666;
   chrome.storage.local.set({ bridgeToken: token, bridgePort: port }, () => {
-    updateTokenBadge(Boolean(token));
     if (btnSaveToken) {
       btnSaveToken.textContent = "Saved!";
       setTimeout(() => {

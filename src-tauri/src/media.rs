@@ -232,6 +232,10 @@ pub struct DownloadOptions {
     pub auth_username: String,
     #[serde(default)]
     pub auth_password: String,
+    #[serde(default, alias = "cookies")]
+    pub cookies: Option<String>,
+    #[serde(default, alias = "userAgent", alias = "user_agent")]
+    pub user_agent: Option<String>,
 }
 
 impl Default for DownloadOptions {
@@ -294,6 +298,8 @@ impl Default for DownloadOptions {
             post_download_program: String::new(),
             auth_username: String::new(),
             auth_password: String::new(),
+            cookies: None,
+            user_agent: None,
         }
     }
 }
@@ -3184,6 +3190,21 @@ pub fn launch_media_worker(app: AppHandle, task_id: String) {
                 if !eff_origin.is_empty() {
                     cmd.args(["--add-header", &format!("Origin:{}", eff_origin)]);
                 }
+            }
+
+            if let Some(ref c) = options.cookies {
+                let c_trimmed = c.trim();
+                if !c_trimmed.is_empty() {
+                    cmd.args(["--add-header", &format!("Cookie:{}", c_trimmed)]);
+                }
+            }
+
+            if let Some(ref ua) = options.user_agent {
+                let ua_trimmed = ua.trim();
+                if !ua_trimmed.is_empty() {
+                    cmd.args(["--user-agent", ua_trimmed]);
+                }
+            } else if !effective_referer.is_empty() {
                 cmd.args([
                     "--add-header",
                     "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",

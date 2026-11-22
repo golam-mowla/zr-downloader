@@ -6847,7 +6847,7 @@ dependencies = [
 
 [[package]]
 name = "zr-downloader"
-version = "1.2.43"
+version = "1.2.44"
 dependencies = [
  "arboard",
  "base64 0.22.1",

@@ -186,3 +186,108 @@ fn sized_phase_percent_uses_real_stream_size() {
     assert_eq!(multi_phase_percent_sized(100.0, 0, 2, false, 0, Some(600.0)), 90.0);
     assert_eq!(multi_phase_percent_sized(100.0, 0, 2, false, 20_000_000, None), 90.0);
 }
+
+pub fn url_encode(input: &str) -> String {
+    let mut out = String::new();
+    for b in input.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+#[path = "../src/settings.rs"]
+mod settings;
+
+fn is_ping_request(request_line: &str) -> bool {
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    if !method.eq_ignore_ascii_case("get") {
+        return false;
+    }
+    let path_and_query = parts.next().unwrap_or("");
+    let path = path_and_query.split('?').next().unwrap_or("");
+    path == "/ping"
+}
+
+fn parse_open_query(query: &str) -> Option<std::collections::HashMap<String, String>> {
+    let mut map = std::collections::HashMap::new();
+    for pair in query.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        let k = kv.next()?.trim();
+        let v = kv.next().unwrap_or("").trim();
+        if !k.is_empty() {
+            let decoded = url_decode_simple(v);
+            map.insert(k.to_string(), decoded);
+        }
+    }
+    if !map.contains_key("url") {
+        return None;
+    }
+    Some(map)
+}
+
+fn url_decode_simple(input: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut chars = input.bytes();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next();
+            let h2 = chars.next();
+            if let (Some(c1), Some(c2)) = (h1, h2) {
+                if let Ok(byte) = u8::from_str_radix(&format!("{}{}", c1 as char, c2 as char), 16) {
+                    bytes.push(byte);
+                    continue;
+                }
+            }
+        } else if b == b'+' {
+            bytes.push(b' ');
+        } else {
+            bytes.push(b);
+        }
+    }
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+#[test]
+fn load_or_default_persists_token_and_keeps_same_token() {
+    let temp_dir = std::env::temp_dir().join(format!("zr_test_handoff_settings_{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let settings_file = temp_dir.join("settings.json");
+
+    assert!(!settings_file.exists());
+    let state1 = settings::SettingsState::load_or_default(Some(settings_file.clone()));
+    let token1 = state1.get_blocking().bridge_pair_token;
+    assert!(!token1.is_empty(), "Token should be generated on initial missing settings");
+    assert!(settings_file.exists(), "settings.json should be persisted immediately to keep token stable");
+
+    let state2 = settings::SettingsState::load_or_default(Some(settings_file.clone()));
+    let token2 = state2.get_blocking().bridge_pair_token;
+    assert_eq!(token1, token2, "Token must remain identical on subsequent launches");
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn ping_exact_match_logic_test() {
+    assert!(is_ping_request("GET /ping HTTP/1.1"));
+    assert!(is_ping_request("GET /ping?token=secret HTTP/1.1"));
+    assert!(is_ping_request("get /ping HTTP/1.0"));
+    assert!(!is_ping_request("GET /formats?url=https%3A%2F%2Fx.com%2Fping HTTP/1.1"));
+    assert!(!is_ping_request("POST /ping HTTP/1.1"));
+    assert!(!is_ping_request("GET /ping_other HTTP/1.1"));
+    assert!(!is_ping_request("GET /open?url=http://example.com/ping HTTP/1.1"));
+}
+
+#[test]
+fn parse_open_query_parses_cookies_and_user_agent_test() {
+    let query = "url=https%3A%2F%2Fexample.com%2Ffile.zip&filename=file.zip&cookies=session%3Dabc123%3B%20user%3Dtest&userAgent=Mozilla%2F5.0%20TestBrowser";
+    let parsed = parse_open_query(query).expect("Should parse open query");
+    assert_eq!(parsed["url"], "https://example.com/file.zip");
+    assert_eq!(parsed["filename"], "file.zip");
+    assert_eq!(parsed["cookies"], "session=abc123; user=test");
+    assert_eq!(parsed["userAgent"], "Mozilla/5.0 TestBrowser");
+}

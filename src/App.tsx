@@ -77,6 +77,9 @@ export const App: React.FC = () => {
   const [modalInitialUrl, setModalInitialUrl] = useState("");
   const [modalInitialFilename, setModalInitialFilename] = useState("");
   const [modalBatchText, setModalBatchText] = useState("");
+  const [modalInitialReferer, setModalInitialReferer] = useState("");
+  const [modalInitialCookies, setModalInitialCookies] = useState("");
+  const [modalInitialUserAgent, setModalInitialUserAgent] = useState("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [helpInitialTab, setHelpInitialTab] = useState<"help" | "logs">("help");
@@ -253,7 +256,7 @@ export const App: React.FC = () => {
   const defaultDirRef = useRef(defaultDir);
   defaultDirRef.current = defaultDir;
   const handleAddMediaDownloadRef = useRef<(options: any) => Promise<void>>(() => Promise.resolve());
-  const handleAddDirectDownloadRef = useRef<(url: string, savePath: string, filename: string, connections: number, lowDiskSpace?: boolean) => Promise<void>>(() => Promise.resolve());
+  const handleAddDirectDownloadRef = useRef<(url: string, savePath: string, filename: string, connections: number, lowDiskSpace?: boolean, extras?: DirectDownloadExtras) => Promise<void>>(() => Promise.resolve());
   const handleAddTorrentDownloadRef = useRef<(urlOrPath: string, savePath: string, sequential: boolean) => Promise<void>>(() => Promise.resolve());
   const handleOpenUrlRef = useRef<(payload: any) => void>(() => {});
 
@@ -553,6 +556,20 @@ export const App: React.FC = () => {
           return;
         }
 
+        const effectiveReferer =
+          typeof raw.referrer === "string"
+            ? raw.referrer
+            : typeof raw.referer === "string"
+            ? raw.referer
+            : "";
+        const effectiveCookies = typeof raw.cookies === "string" ? raw.cookies : "";
+        const effectiveUserAgent =
+          typeof raw.userAgent === "string"
+            ? raw.userAgent
+            : typeof raw.user_agent === "string"
+            ? raw.user_agent
+            : "";
+
         if (autoStart) {
           const isDirectFile =
             raw.isDirectFile ||
@@ -583,7 +600,12 @@ export const App: React.FC = () => {
               defaultDirRef.current,
               targetFilename,
               16,
-              Boolean(raw.lowDiskSpace)
+              Boolean(raw.lowDiskSpace),
+              {
+                originPageUrl: effectiveReferer || undefined,
+                cookies: effectiveCookies || undefined,
+                userAgent: effectiveUserAgent || undefined,
+              }
             );
           } else {
             const isAudio = targetQuality.toLowerCase().includes("audio");
@@ -652,12 +674,17 @@ export const App: React.FC = () => {
               usePartFiles: !Boolean(raw.lowDiskSpace || raw.low_disk_space || localStorage.getItem("zr_low_disk_space") === "true"),
               lowDiskSpace: Boolean(raw.lowDiskSpace || raw.low_disk_space || localStorage.getItem("zr_low_disk_space") === "true"),
               concurrentConnections: 8,
-              referer: typeof raw.referrer === "string" ? raw.referrer : (typeof raw.referer === "string" ? raw.referer : ""),
+              referer: effectiveReferer,
+              cookies: effectiveCookies || undefined,
+              userAgent: effectiveUserAgent || undefined,
             });
           }
         } else {
           setModalInitialUrl(clean);
           setModalInitialFilename(targetFilename.trim());
+          setModalInitialReferer(effectiveReferer);
+          setModalInitialCookies(effectiveCookies);
+          setModalInitialUserAgent(effectiveUserAgent);
           setIsAddModalOpen(true);
         }
       }
@@ -731,12 +758,15 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Check local bridge status periodically
+  // Check local bridge status periodically via Tauri command
   useEffect(() => {
     const checkBridge = async () => {
       try {
-        const resp = await fetch(`http://127.0.0.1:${bridgePort}/ping`);
-        setBridgeOnline(resp.ok);
+        const status = await invoke<{ port: number; listening: boolean }>("get_bridge_status");
+        setBridgeOnline(Boolean(status?.listening));
+        if (status?.port && status.port !== bridgePort) {
+          setBridgePort(status.port);
+        }
       } catch {
         setBridgeOnline(false);
       }
@@ -1143,6 +1173,8 @@ export const App: React.FC = () => {
         postDownloadProgram: extras?.postDownloadProgram ?? null,
         authUsername: extras?.authUsername ?? null,
         authPassword: extras?.authPassword ?? null,
+        cookies: extras?.cookies ?? null,
+        userAgent: extras?.userAgent ?? null,
       });
       if (cleanDirectUrl) {
         lastHandledClipRef.current = cleanDirectUrl;
@@ -2003,10 +2035,16 @@ export const App: React.FC = () => {
           setModalInitialUrl("");
           setModalInitialFilename("");
           setModalBatchText("");
+          setModalInitialReferer("");
+          setModalInitialCookies("");
+          setModalInitialUserAgent("");
         }}
         defaultUrl={modalInitialUrl}
         defaultFilename={modalInitialFilename}
         defaultBatchText={modalBatchText}
+        defaultReferrer={modalInitialReferer}
+        defaultCookies={modalInitialCookies}
+        defaultUserAgent={modalInitialUserAgent}
         onAddDirectDownload={handleAddDirectDownload}
         onAddMediaDownload={handleAddMediaDownload}
         onAddTorrentDownload={handleAddTorrentDownload}
