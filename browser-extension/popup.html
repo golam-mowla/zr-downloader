@@ -79,6 +79,25 @@
     </div>
   </div>
 
+  <!-- Bridge Security & Pair Token -->
+  <div class="card" style="margin-top: 8px;">
+    <div class="card-header" style="justify-content: space-between;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <span class="card-icon">🔐</span>
+        <span class="card-title">Bridge Security &amp; Token</span>
+      </div>
+      <span id="token-status-badge" style="font-size:10px; font-weight:600; padding:2px 6px; border-radius:4px; background:#374151; color:#9ca3af;">Not Paired</span>
+    </div>
+    <div class="input-row" style="margin-bottom: 6px;">
+      <input type="password" id="bridge-token-input" placeholder="Paste Token from ZR Settings" spellcheck="false" style="font-family: monospace;" />
+      <button class="btn btn-secondary" id="btn-save-token" style="width: auto; padding: 7px 12px; white-space: nowrap;">Save</button>
+    </div>
+    <div style="display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #94a3b8;">
+      <span>Port (Default 9666):</span>
+      <input type="number" id="bridge-port-input" value="9666" style="width: 70px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 2px 6px; color: #fff; font-size: 11px; text-align: center;" />
+    </div>
+  </div>
+
   <!-- Footer Tip -->
   <div class="zr-footer">
     <span>💡 <b>Tip:</b> Hover over videos or right-click any link to download instantly.</span>

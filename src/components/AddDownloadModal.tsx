@@ -484,6 +484,8 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         videoStreams,
         audioStreams,
         subtitles: parsed.subtitles || [],
+        isLive: Boolean(parsed.isLive || parsed.is_live),
+        liveStatus: parsed.liveStatus || parsed.live_status,
       };
 
       setMediaInfo(info);
@@ -1158,9 +1160,17 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
                   />
                 )}
                 <div className="min-w-0 flex-1">
-                  <h4 className="text-[14px] font-semibold text-zr-primary truncate">
-                    {mediaInfo.title}
-                  </h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-[14px] font-semibold text-zr-primary truncate">
+                      {mediaInfo.title}
+                    </h4>
+                    {mediaInfo.isLive && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-bold tracking-wider animate-pulse shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                        LIVE
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[12px] text-zr-secondary truncate">
                     {mediaInfo.uploader}
                   </p>

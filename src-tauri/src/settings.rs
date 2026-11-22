@@ -56,6 +56,97 @@ fn default_true() -> bool {
     true
 }
 
+pub fn generate_bridge_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
+fn default_bridge_port() -> u16 {
+    9666
+}
+fn default_bridge_token() -> String {
+    generate_bridge_token()
+}
+fn default_name_conflict() -> String {
+    "keep_both".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HeaderPreset {
+    pub name: String,
+    pub user_agent: String,
+    pub headers: std::collections::HashMap<String, String>,
+}
+
+impl Default for HeaderPreset {
+    fn default() -> Self {
+        Self {
+            name: "Chrome (Windows)".to_string(),
+            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string(),
+            headers: [
+                ("Accept".to_string(), "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8".to_string()),
+                ("Accept-Language".to_string(), "en-US,en;q=0.9".to_string()),
+            ].into_iter().collect(),
+        }
+    }
+}
+
+pub fn default_header_presets() -> Vec<HeaderPreset> {
+    vec![
+        HeaderPreset {
+            name: "Chrome (Windows)".to_string(),
+            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string(),
+            headers: [
+                ("Accept".to_string(), "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8".to_string()),
+                ("Accept-Language".to_string(), "en-US,en;q=0.9".to_string()),
+            ].into_iter().collect(),
+        },
+        HeaderPreset {
+            name: "Firefox (Windows)".to_string(),
+            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:130.0) Gecko/20100101 Firefox/130.0".to_string(),
+            headers: [
+                ("Accept".to_string(), "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8".to_string()),
+                ("Accept-Language".to_string(), "en-US,en;q=0.5".to_string()),
+            ].into_iter().collect(),
+        },
+        HeaderPreset {
+            name: "Edge (Windows)".to_string(),
+            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0".to_string(),
+            headers: [
+                ("Accept".to_string(), "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8".to_string()),
+                ("Accept-Language".to_string(), "en-US,en;q=0.9".to_string()),
+            ].into_iter().collect(),
+        },
+        HeaderPreset {
+            name: "Android Chrome".to_string(),
+            user_agent: "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36".to_string(),
+            headers: [
+                ("Accept".to_string(), "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8".to_string()),
+                ("Accept-Language".to_string(), "en-US,en;q=0.9".to_string()),
+            ].into_iter().collect(),
+        },
+        HeaderPreset {
+            name: "curl".to_string(),
+            user_agent: "curl/8.9.1".to_string(),
+            headers: [
+                ("Accept".to_string(), "*/*".to_string()),
+            ].into_iter().collect(),
+        },
+    ]
+}
+
+fn default_active_header_preset() -> String {
+    "Chrome (Windows)".to_string()
+}
+fn default_aria2_port() -> u16 {
+    16800
+}
+fn default_github_mirror() -> String {
+    "https://ghproxy.net/".to_string()
+}
+fn default_hf_mirror() -> String {
+    "https://hf-mirror.com/".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
@@ -81,6 +172,18 @@ pub struct AppSettings {
     #[serde(default = "default_post_action")]
     pub post_download_action: String, // "none" | "open_file" | "open_folder" | "run_program" | "defender_scan"
     pub post_download_program: String,
+    #[serde(default = "default_name_conflict")]
+    pub name_conflict: String, // "keep_both" | "overwrite" | "ask"
+    #[serde(default)]
+    pub preserve_last_modified: bool,
+    #[serde(default = "default_true")]
+    pub verify_ssl: bool,
+    #[serde(default = "default_true")]
+    pub use_system_dns: bool,
+    #[serde(default)]
+    pub delete_files_on_remove: bool,
+    #[serde(default)]
+    pub remove_missing_tasks: bool,
 
     // Network & Credentials
     pub proxy_enabled: bool,
@@ -102,6 +205,38 @@ pub struct AppSettings {
     pub minimize_to_tray: bool,
     #[serde(default = "default_true")]
     pub close_to_tray: bool,
+
+    // Browser Bridge Integration
+    #[serde(default = "default_bridge_port")]
+    pub bridge_port: u16,
+    #[serde(default = "default_true")]
+    pub bridge_auto_port: bool,
+    #[serde(default = "default_bridge_token")]
+    pub bridge_pair_token: String,
+
+    // Header & User-Agent Presets
+    #[serde(default = "default_header_presets")]
+    pub header_presets: Vec<HeaderPreset>,
+    #[serde(default = "default_active_header_preset")]
+    pub active_header_preset: String,
+
+    // aria2 JSON-RPC
+    #[serde(default)]
+    pub aria2_rpc_enabled: bool,
+    #[serde(default = "default_aria2_port")]
+    pub aria2_rpc_port: u16,
+    #[serde(default)]
+    pub aria2_rpc_token: String,
+
+    // Mirror Rewriting
+    #[serde(default)]
+    pub github_mirror_enabled: bool,
+    #[serde(default = "default_github_mirror")]
+    pub github_mirror_url: String,
+    #[serde(default)]
+    pub huggingface_mirror_enabled: bool,
+    #[serde(default = "default_hf_mirror")]
+    pub huggingface_mirror_url: String,
 }
 
 impl Default for AppSettings {
@@ -119,6 +254,12 @@ impl Default for AppSettings {
             auto_category_root: String::new(),
             post_download_action: "none".to_string(),
             post_download_program: String::new(),
+            name_conflict: "keep_both".to_string(),
+            preserve_last_modified: false,
+            verify_ssl: true,
+            use_system_dns: true,
+            delete_files_on_remove: false,
+            remove_missing_tasks: false,
             proxy_enabled: false,
             proxy_type: "http".to_string(),
             proxy_host: String::new(),
@@ -132,11 +273,57 @@ impl Default for AppSettings {
             start_with_windows: false,
             minimize_to_tray: false,
             close_to_tray: true,
+            bridge_port: 9666,
+            bridge_auto_port: true,
+            bridge_pair_token: generate_bridge_token(),
+            header_presets: default_header_presets(),
+            active_header_preset: default_active_header_preset(),
+            aria2_rpc_enabled: false,
+            aria2_rpc_port: 16800,
+            aria2_rpc_token: String::new(),
+            github_mirror_enabled: false,
+            github_mirror_url: default_github_mirror(),
+            huggingface_mirror_enabled: false,
+            huggingface_mirror_url: default_hf_mirror(),
         }
     }
 }
 
 impl AppSettings {
+    pub fn get_active_user_agent(&self) -> String {
+        self.header_presets
+            .iter()
+            .find(|p| p.name == self.active_header_preset)
+            .map(|p| p.user_agent.clone())
+            .unwrap_or_else(|| {
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string()
+            })
+    }
+
+    pub fn get_active_headers(&self) -> std::collections::HashMap<String, String> {
+        self.header_presets
+            .iter()
+            .find(|p| p.name == self.active_header_preset)
+            .map(|p| p.headers.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn effective_gh_mirror(&self) -> Option<&str> {
+        if self.github_mirror_enabled && !self.github_mirror_url.trim().is_empty() {
+            Some(self.github_mirror_url.trim())
+        } else {
+            None
+        }
+    }
+
+    pub fn effective_hf_mirror(&self) -> Option<&str> {
+        if self.huggingface_mirror_enabled && !self.huggingface_mirror_url.trim().is_empty() {
+            Some(self.huggingface_mirror_url.trim())
+        } else {
+            None
+        }
+    }
+
     pub fn global_speed_limit_kbps(&self) -> u64 {
         if !self.speed_limit_enabled || self.speed_limit_value == 0 {
             return 0;
@@ -187,6 +374,15 @@ impl AppSettings {
             self.connection_mode = "fixed".to_string();
         }
         self.default_connections = self.default_connections.clamp(1, 32);
+        if !matches!(self.name_conflict.as_str(), "keep_both" | "overwrite" | "ask") {
+            self.name_conflict = "keep_both".to_string();
+        }
+        if self.bridge_port == 0 {
+            self.bridge_port = 9666;
+        }
+        if self.bridge_pair_token.trim().is_empty() {
+            self.bridge_pair_token = generate_bridge_token();
+        }
         self
     }
 }
@@ -252,6 +448,10 @@ pub fn build_reqwest_client(settings: &AppSettings) -> reqwest::Client {
         .pool_max_idle_per_host(64)
         .tcp_nodelay(true)
         .tcp_keepalive(Duration::from_secs(30));
+
+    if !settings.verify_ssl {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
 
     if let Some(proxy_url) = settings.effective_proxy_url() {
         if let Ok(proxy) = reqwest::Proxy::all(&proxy_url) {
@@ -721,5 +921,20 @@ mod tests {
         assert_eq!(auto_category_subfolder("archive.zip"), "Compressed");
         assert_eq!(auto_category_subfolder("setup.exe"), "Programs");
         assert_eq!(auto_category_subfolder("report.pdf"), "Documents");
+    }
+
+    #[test]
+    fn bridge_settings_defaults_and_backward_compatibility() {
+        // Deserializing empty JSON or legacy settings.json without bridge fields
+        let legacy_json = r#"{"defaultDownloadDir":"C:\\Downloads","maxActiveDownloads":3}"#;
+        let settings: AppSettings = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(settings.bridge_port, 9666);
+        assert!(settings.bridge_auto_port);
+        assert!(!settings.bridge_pair_token.is_empty());
+        assert!(settings.bridge_pair_token.len() >= 16);
+
+        let sanitized = settings.sanitized();
+        assert_eq!(sanitized.bridge_port, 9666);
+        assert!(!sanitized.bridge_pair_token.is_empty());
     }
 }

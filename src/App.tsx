@@ -22,6 +22,7 @@ import { HelpModal } from "./components/HelpModal";
 import { DownloadStatusDialog } from "./components/DownloadStatusDialog";
 import { TorrentDetailsDrawer } from "./components/TorrentDetailsDrawer";
 import { ContextMenu } from "./components/ContextMenu";
+import { RelinkModal } from "./components/RelinkModal";
 import { DownloadTask, AppSettings, getIsResumable } from "./types";
 import { extractUrlsFromText } from "./lib/batchUrls";
 
@@ -82,6 +83,7 @@ export const App: React.FC = () => {
   const [helpFocusedTaskId, setHelpFocusedTaskId] = useState<string | null>(null);
   const [defaultDir, setDefaultDir] = useState("D:\\Downloads");
   const [bridgeOnline, setBridgeOnline] = useState(true);
+  const [bridgePort, setBridgePort] = useState<number>(9666);
   const [speedLimitEnabled, setSpeedLimitEnabled] = useState(false);
   const [speedLimitLabel, setSpeedLimitLabel] = useState("5 MB/s");
   const [clipboardNoticeUrl, setClipboardNoticeUrl] = useState<string | null>(null);
@@ -93,6 +95,7 @@ export const App: React.FC = () => {
   const [deleteConfirmTask, setDeleteConfirmTask] = useState<DownloadTask | null>(null);
   const [isDeletingTask, setIsDeletingTask] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; taskId: string } | null>(null);
+  const [relinkTask, setRelinkTask] = useState<DownloadTask | null>(null);
   const tasksRef = useRef<DownloadTask[]>([]);
   tasksRef.current = tasks;
   // IDs the user just deleted: a late progress event must not resurrect them in the list.
@@ -136,10 +139,16 @@ export const App: React.FC = () => {
     setSpeedLimitEnabled(Boolean(s.speedLimitEnabled));
     setSpeedLimitLabel(`${s.speedLimitValue || 5} ${s.speedLimitUnit === "KB" ? "KB/s" : "MB/s"}`);
     if (s.defaultDownloadDir) setDefaultDir(s.defaultDownloadDir);
+    if (s.bridgePort) setBridgePort(s.bridgePort);
   };
 
   useEffect(() => {
     if ((window as any).GMAndroidBridge) return;
+    invoke<number>("get_active_bridge_port")
+      .then((p) => {
+        if (p) setBridgePort(p);
+      })
+      .catch(() => {});
     invoke<AppSettings>("get_app_settings")
       .then((res) => {
         if (res) applySettingsSummary(res);
@@ -726,7 +735,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     const checkBridge = async () => {
       try {
-        const resp = await fetch("http://127.0.0.1:9666/ping");
+        const resp = await fetch(`http://127.0.0.1:${bridgePort}/ping`);
         setBridgeOnline(resp.ok);
       } catch {
         setBridgeOnline(false);
@@ -735,7 +744,7 @@ export const App: React.FC = () => {
     checkBridge();
     const interval = setInterval(checkBridge, 4000);
     return () => clearInterval(interval);
-  }, []);
+  }, [bridgePort]);
 
   // Windows Taskbar Dynamic Progress Bar Sync
   useEffect(() => {
@@ -1752,6 +1761,7 @@ export const App: React.FC = () => {
         categoryCounts={categoryCounts}
         statusCounts={statusCounts}
         bridgeOnline={bridgeOnline}
+        bridgePort={bridgePort}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenHelp={(tab = "help") => {
           setHelpFocusedTaskId(null);
@@ -2160,9 +2170,20 @@ export const App: React.FC = () => {
               onOpenFile={handleOpenFile}
               onOpenFolder={handleOpenFolder}
               onCopyLink={handleCopyLink}
+              onRelink={(t) => setRelinkTask(t)}
             />
           );
         })()}
+
+      {/* Relink / Refresh Link Modal */}
+      <RelinkModal
+        isOpen={Boolean(relinkTask)}
+        task={relinkTask}
+        onClose={() => setRelinkTask(null)}
+        onSuccess={() => {
+          invoke<DownloadTask[]>("get_all_downloads").then(setTasks).catch(() => {});
+        }}
+      />
 
       {/* 30-second Scheduled Shutdown Cancel Dialog */}
       {shutdownSeconds !== null && (
