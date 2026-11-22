@@ -35,8 +35,19 @@ function updateTokenBadge(state) {
 
 // Check ZR Downloader Desktop App status on open (3 states: Offline, Token Invalid/Required, Paired)
 function checkStatus() {
+  let answered = false;
+  const timer = setTimeout(() => {
+    if (!answered) {
+      statusPill.className = "status-pill offline";
+      statusText.textContent = "Offline";
+      updateTokenBadge("offline");
+    }
+  }, 2000);
+
   chrome.runtime.sendMessage({ action: "CHECK_ZR_STATUS" }, (response) => {
-    if (!response || !response.online) {
+    answered = true;
+    clearTimeout(timer);
+    if (chrome.runtime.lastError || !response || !response.online) {
       statusPill.className = "status-pill offline";
       statusText.textContent = "Offline";
       updateTokenBadge("offline");
