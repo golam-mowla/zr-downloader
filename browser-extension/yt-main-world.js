@@ -184,6 +184,8 @@
   });
   window.addEventListener("yt-player-updated", broadcastData);
   document.addEventListener("playback-quality-change", broadcastData);
+  document.addEventListener("play", () => setTimeout(broadcastData, 100), true);
+  document.addEventListener("loadedmetadata", () => setTimeout(broadcastData, 100), true);
 
   // Initial broadcast after DOM ready
   if (document.readyState === "loading") {

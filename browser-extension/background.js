@@ -3,8 +3,30 @@
 
 const DEFAULT_ZR_BRIDGE_PORT = 9666;
 
+async function autoPairBridge(config) {
+  try {
+    const res = await fetch(`${config.url}/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client: "ZR-Extension" }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.token) {
+        await chrome.storage.local.set({
+          bridgeToken: data.token,
+          bridgePort: data.port || config.port,
+        });
+        config.token = data.token;
+        return data.token;
+      }
+    }
+  } catch (e) {}
+  return config.token || "";
+}
+
 async function getBridgeConfig() {
-  return new Promise((resolve) => {
+  const cfg = await new Promise((resolve) => {
     chrome.storage.local.get(["bridgePort", "bridgeToken"], (res) => {
       const port = parseInt(res.bridgePort, 10) || DEFAULT_ZR_BRIDGE_PORT;
       const token = res.bridgeToken ? String(res.bridgeToken).trim() : "";
@@ -15,6 +37,10 @@ async function getBridgeConfig() {
       });
     });
   });
+  if (!cfg.token) {
+    await autoPairBridge(cfg);
+  }
+  return cfg;
 }
 
 // Interceptable file extensions for IDM-style capture
@@ -52,18 +78,21 @@ async function getCookiesHeader(url) {
   }
 }
 
-// Sends an open request to the local bridge (timeout 2.5s)
+// Sends an open request to the local bridge (timeout 3.5s)
 // Returns { ok: true, status: 200 } on HTTP 200 with token,
 // { ok: false, reason: "unauthorized" } on 401 or missing token,
 // or { ok: false, reason: "offline" | "error" } otherwise.
 async function sendBridgeOpen(payload) {
-  const config = await getBridgeConfig();
+  let config = await getBridgeConfig();
+  if (!config.token) {
+    config.token = await autoPairBridge(config);
+  }
   if (!config.token) {
     return { ok: false, reason: "unauthorized", message: "Token missing" };
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 2500);
+  const timeoutId = setTimeout(() => controller.abort(), 3500);
 
   try {
     const filenameParam = payload.filename ? `&filename=${encodeURIComponent(payload.filename)}` : "";
@@ -123,6 +152,16 @@ async function sendBridgeOpen(payload) {
     if (resp.status === 200) {
       return { ok: true, status: 200 };
     } else if (resp.status === 401) {
+      const freshToken = await autoPairBridge(config);
+      if (freshToken && freshToken !== config.token) {
+        config.token = freshToken;
+        headers["X-ZR-Token"] = freshToken;
+        const retryUrl = `${config.url}/open?url=${encodeURIComponent(payload.url)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}${formatParam}&token=${encodeURIComponent(freshToken)}${cookiesParam}${uaParam}`;
+        const retryResp = await fetch(retryUrl, { method: "GET", headers });
+        if (retryResp.status === 200) {
+          return { ok: true, status: 200 };
+        }
+      }
       return { ok: false, reason: "unauthorized", status: 401 };
     } else {
       return { ok: false, reason: "error", status: resp.status };
@@ -336,16 +375,26 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
 });
 
-// Create Context Menu on installation
-chrome.runtime.onInstalled.addListener(() => {
+// Setup Context Menu reliably across install, startup, and background wake-up
+function setupContextMenu() {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "download-with-zr",
-      title: "Download with ZR Downloader 🚀",
-      contexts: ["all"],
-    });
+    chrome.contextMenus.create(
+      {
+        id: "download-with-zr",
+        title: "Download with ZR Downloader 🚀",
+        contexts: ["all", "page", "video", "audio", "link", "selection", "image"],
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          // Ignore duplicate creation
+        }
+      }
+    );
   });
-});
+}
+chrome.runtime.onInstalled.addListener(setupContextMenu);
+chrome.runtime.onStartup.addListener(setupContextMenu);
+setupContextMenu();
 
 // Intercept standard HTTP/HTTPS file downloads (IDM style)
 async function handleDownloadInterception(downloadItem, suggest) {
@@ -382,16 +431,39 @@ async function handleDownloadInterception(downloadItem, suggest) {
       } catch (e) {}
     }
 
+    const mime = (downloadItem.mime || "").toLowerCase();
     const isTorrent =
       ext === "torrent" ||
-      (downloadItem.mime && downloadItem.mime.toLowerCase().includes("bittorrent")) ||
+      mime.includes("bittorrent") ||
       rawUrl.toLowerCase().includes(".torrent");
 
-    const isBigFile =
-      downloadItem.fileSize > 5 * 1024 * 1024 &&
-      !(downloadItem.mime && downloadItem.mime.toLowerCase().includes("text/html"));
+    const totalBytes = Math.max(
+      downloadItem.fileSize || 0,
+      downloadItem.totalBytes || 0
+    );
+    const isBigFile = totalBytes > 5 * 1024 * 1024;
+    const isMediaMime =
+      mime.startsWith("video/") ||
+      mime.startsWith("audio/") ||
+      mime.includes("matroska") ||
+      mime.includes("mp4") ||
+      mime.includes("webm") ||
+      mime.includes("avi");
+    const isBinaryMime =
+      mime === "application/octet-stream" ||
+      mime === "application/x-zip-compressed" ||
+      mime === "application/x-rar-compressed" ||
+      mime === "application/x-7z-compressed" ||
+      mime === "application/zip";
 
-    if (INTERCEPT_EXTENSIONS.has(ext) || isTorrent || isBigFile) {
+    const isInterceptable =
+      INTERCEPT_EXTENSIONS.has(ext) ||
+      isTorrent ||
+      isBigFile ||
+      isMediaMime ||
+      (isBinaryMime && ext && ext !== "html" && ext !== "htm");
+
+    if (isInterceptable) {
       const storage = await chrome.storage.local.get(["interceptDownloads", "showNotifications"]);
       if (storage.interceptDownloads === false) {
         return false; // User disabled interception in popup/settings
@@ -575,18 +647,31 @@ function getRealFormats(url) {
   if (hit && Date.now() - hit.t < 10 * 60 * 1000) return hit.promise;
   const promise = (async () => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 45000);
+    const timer = setTimeout(() => controller.abort(), 15000);
     try {
-      const config = await getBridgeConfig();
+      let config = await getBridgeConfig();
+      if (!config.token) {
+        config.token = await autoPairBridge(config);
+      }
       const headers = {};
       if (config.token) {
         headers["X-ZR-Token"] = config.token;
       }
       const tokenParam = config.token ? `&token=${encodeURIComponent(config.token)}` : "";
-      const res = await fetch(`${config.url}/formats?url=${encodeURIComponent(key)}${tokenParam}`, {
+      let res = await fetch(`${config.url}/formats?url=${encodeURIComponent(key)}${tokenParam}`, {
         headers,
         signal: controller.signal,
       });
+      if (res.status === 401) {
+        const freshToken = await autoPairBridge(config);
+        if (freshToken) {
+          headers["X-ZR-Token"] = freshToken;
+          res = await fetch(`${config.url}/formats?url=${encodeURIComponent(key)}&token=${encodeURIComponent(freshToken)}`, {
+            headers,
+            signal: controller.signal,
+          });
+        }
+      }
       if (!res.ok) throw new Error("formats " + res.status);
       return await res.json();
     } catch (e) {
@@ -861,16 +946,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       } catch {}
 
-      if (isOnline && config.token) {
-        try {
-          const authRes = await fetch(`${config.url}/auth-check`, {
-            method: "GET",
-            headers: { "X-ZR-Token": config.token },
-          });
-          if (authRes.ok) {
-            isAuthenticated = true;
-          }
-        } catch {}
+      if (isOnline) {
+        if (!config.token) {
+          config.token = await autoPairBridge(config);
+        }
+        if (config.token) {
+          try {
+            let authRes = await fetch(`${config.url}/auth-check`, {
+              method: "GET",
+              headers: { "X-ZR-Token": config.token },
+            });
+            if (authRes.ok) {
+              isAuthenticated = true;
+            } else if (authRes.status === 401) {
+              const freshToken = await autoPairBridge(config);
+              if (freshToken) {
+                config.token = freshToken;
+                authRes = await fetch(`${config.url}/auth-check`, {
+                  method: "GET",
+                  headers: { "X-ZR-Token": freshToken },
+                });
+                if (authRes.ok) {
+                  isAuthenticated = true;
+                }
+              }
+            }
+          } catch {}
+        }
       }
 
       // Update badge

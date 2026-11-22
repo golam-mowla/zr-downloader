@@ -50,6 +50,14 @@ function checkStatus() {
       const port = response.port || (bridgePortInput ? bridgePortInput.value : 9666);
       statusText.textContent = `Online (:${port}) - Paired ✓`;
       updateTokenBadge("paired");
+      chrome.storage.local.get(["bridgeToken", "bridgePort"], (res) => {
+        if (bridgeTokenInput && res.bridgeToken) {
+          bridgeTokenInput.value = res.bridgeToken;
+        }
+        if (bridgePortInput && res.bridgePort) {
+          bridgePortInput.value = res.bridgePort;
+        }
+      });
     }
   });
 }

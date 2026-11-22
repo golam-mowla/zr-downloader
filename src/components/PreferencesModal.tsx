@@ -544,7 +544,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 select-none">
-      <div className="w-full max-w-2xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden transition-colors">
+      <div className="w-full max-w-4xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden transition-colors">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-zr bg-zr-tableHead transition-colors">
           <div className="flex items-center space-x-2.5">
@@ -563,7 +563,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-4 overflow-x-auto transition-colors">
+        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-3 overflow-x-auto scrollbar-thin transition-colors">
           <button
             onClick={() => setActiveTab("general")}
             className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${

@@ -42,6 +42,33 @@
     window.dispatchEvent(new CustomEvent("ZR_REQUEST_YT_DATA"));
   }
 
+  async function getYouTubeDataWithTimeout(timeoutMs = 150) {
+    if (lastYouTubeData && lastYouTubeData.qualities && lastYouTubeData.qualities.length > 0) {
+      return lastYouTubeData;
+    }
+    return new Promise((resolve) => {
+      let done = false;
+      const handler = (e) => {
+        if (done) return;
+        if (e && e.detail) {
+          done = true;
+          window.removeEventListener("ZR_RESPONSE_YT_DATA", handler);
+          lastYouTubeData = e.detail;
+          resolve(e.detail);
+        }
+      };
+      window.addEventListener("ZR_RESPONSE_YT_DATA", handler);
+      window.dispatchEvent(new CustomEvent("ZR_REQUEST_YT_DATA"));
+      setTimeout(() => {
+        if (!done) {
+          done = true;
+          window.removeEventListener("ZR_RESPONSE_YT_DATA", handler);
+          resolve(lastYouTubeData || parseYouTubeFromDom());
+        }
+      }, timeoutMs);
+    });
+  }
+
   // Synchronous fallback: parse ytInitialPlayerResponse directly from DOM script tags
   function parseYouTubeFromDom() {
     try {
@@ -813,6 +840,8 @@
       currentTargetVideo = mediaTarget.videoEl;
     }
 
+    mediaTarget = mediaTarget || {};
+
     let sniffedStreams = [];
     try {
       const resp = await chrome.runtime.sendMessage({
@@ -825,7 +854,7 @@
 
     if (!stillOpen()) return;
 
-    const title = mediaTarget.title || "Video";
+    const title = mediaTarget.title || document.title.replace(/ - YouTube$/, "").trim() || "Video";
     const hostname = window.location.hostname;
     const vid = mediaTarget.videoEl || currentTargetVideo;
     const directSrc =
@@ -865,39 +894,19 @@
 
     const options = [];
 
-    // 0. REAL formats straight from yt-dlp via the ZR app (fast 250ms cache hit check; live-upgrades open menu)
-    let realOptions = null;
-    let pendingRealFormats = null;
-    {
-      const hasDirectSniffed = sniffedStreams.some((st) => !st.isAudio && st.contentLength > 50000);
-      const knownHost = ZR_FORMAT_HOSTS.test(hostname);
-      if (knownHost || !hasDirectSniffed) {
-        let pageUrl = mediaTarget.postUrl || mediaTarget.url || window.location.href;
-        if (/^(blob:|data:)/i.test(pageUrl)) pageUrl = window.location.href;
-        if (hostname.includes("youtube.com") && !/[?&]v=/.test(pageUrl) && !pageUrl.includes("youtu.be/")) {
-          pageUrl = window.location.href;
-        }
-        const formatsPromise = fetchRealFormats(pageUrl);
-        const info = await Promise.race([
-          formatsPromise,
-          new Promise((r) => setTimeout(() => r(undefined), 250)),
-        ]);
-        if (!stillOpen()) return;
-        if (info === undefined) {
-          pendingRealFormats = { promise: formatsPromise, pageUrl, title, durStr };
-        } else if (info) {
-          const built = buildRealFormatOptions(info, pageUrl, title, durStr);
-          if (built.length) realOptions = built;
-        }
+    // 0. Build base options immediately so the menu opens with zero lag
+    const pageUrl = (function () {
+      let p = mediaTarget.postUrl || mediaTarget.url || window.location.href;
+      if (/^(blob:|data:)/i.test(p)) p = window.location.href;
+      if (hostname.includes("youtube.com") && !/[?&]v=/.test(p) && !p.includes("youtu.be/")) {
+        p = window.location.href;
       }
-    }
+      return p;
+    })();
 
     // 1. YouTube - Query REAL available qualities from player API, subtitles, and thumbnail
-    if (realOptions && realOptions.length) {
-      options.push(...realOptions);
-    } else if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) {
-      requestYouTubeData();
-      let ytData = lastYouTubeData;
+    if (hostname.includes("youtube.com") || hostname.includes("youtu.be")) {
+      let ytData = await getYouTubeDataWithTimeout(80);
       if (!ytData || !ytData.qualities || ytData.qualities.length === 0) {
         ytData = parseYouTubeFromDom() || ytData;
       }
@@ -1482,25 +1491,26 @@
       activeDropdown = dropdown;
     };
 
-    renderDropdownPanel(options, Boolean(pendingRealFormats));
+    renderDropdownPanel(options, false);
 
-    if (pendingRealFormats) {
-      pendingRealFormats.promise.then((lateInfo) => {
-        if (!stillOpen()) return;
-        if (lateInfo) {
-          const lateBuilt = buildRealFormatOptions(
-            lateInfo,
-            pendingRealFormats.pageUrl,
-            pendingRealFormats.title,
-            pendingRealFormats.durStr
-          );
-          if (lateBuilt.length) {
-            renderDropdownPanel(lateBuilt, false);
-            return;
+    // Asynchronously fetch exact formats from yt-dlp backend in the background to refine sizes and streams
+    if (ZR_FORMAT_HOSTS.test(hostname)) {
+      fetchRealFormats(pageUrl)
+        .then((lateInfo) => {
+          if (!stillOpen()) return;
+          if (lateInfo) {
+            const lateBuilt = buildRealFormatOptions(
+              lateInfo,
+              pageUrl,
+              title,
+              durStr
+            );
+            if (lateBuilt.length) {
+              renderDropdownPanel(lateBuilt, false);
+            }
           }
-        }
-        renderDropdownPanel(options, false);
-      });
+        })
+        .catch(() => {});
     }
   }
 

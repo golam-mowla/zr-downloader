@@ -1553,6 +1553,23 @@ pub fn is_ping_request(first_line: &str) -> bool {
     path == "/ping"
 }
 
+pub fn is_pair_request(first_line: &str) -> bool {
+    let mut parts = first_line.split_whitespace();
+    let method = match parts.next() {
+        Some(m) => m,
+        None => return false,
+    };
+    if !method.eq_ignore_ascii_case("POST") && !method.eq_ignore_ascii_case("GET") {
+        return false;
+    }
+    let uri = match parts.next() {
+        Some(u) => u,
+        None => return false,
+    };
+    let path = uri.split('?').next().unwrap_or(uri);
+    path == "/pair" || path == "/pair/"
+}
+
 pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
     let mut target_url = None;
     let mut target_filename = None;
@@ -1886,7 +1903,7 @@ async fn start_local_bridge(app_handle: AppHandle) {
                     String::new()
                 };
 
-                // Health check GET /ping is the ONLY unauthenticated endpoint (exact path match on request line)
+                // Health check GET /ping is unauthenticated (exact path match on request line)
                 if is_ping_request(&first_line) {
                     let body = serde_json::json!({
                         "status": "alive",
@@ -1902,6 +1919,33 @@ async fn start_local_bridge(app_handle: AppHandle) {
                         body
                     );
                     let _ = stream.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                // Extension auto-pairing endpoint: strictly restricted to allowed extension/webview origins
+                if is_pair_request(&first_line) {
+                    if is_allowed_origin {
+                        let settings_state = handle.state::<SettingsState>();
+                        let expected_token = settings_state.get_blocking().bridge_pair_token;
+                        let body = serde_json::json!({
+                            "ok": true,
+                            "app": "ZR Downloader",
+                            "version": env!("CARGO_PKG_VERSION"),
+                            "port": port,
+                            "token": expected_token,
+                        })
+                        .to_string();
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            cors_header,
+                            body.as_bytes().len(),
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    } else {
+                        let resp = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
                     return;
                 }
 
