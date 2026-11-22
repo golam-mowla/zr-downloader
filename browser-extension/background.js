@@ -5,11 +5,15 @@ const DEFAULT_ZR_BRIDGE_PORT = 9666;
 
 async function autoPairBridge(config) {
   try {
+    const controller = new AbortController();
+    const tId = setTimeout(() => controller.abort(), 1500);
     const res = await fetch(`${config.url}/pair`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ client: "ZR-Extension" }),
+      signal: controller.signal,
     });
+    clearTimeout(tId);
     if (res.ok) {
       const data = await res.json();
       if (data && data.token) {
@@ -685,65 +689,6 @@ function getRealFormats(url) {
   return promise;
 }
 
-async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "", isDirectFile = false, lowDiskSpace = false, formatId = "") {
-  let cleanUrl = normalizeMediaUrl((mediaUrl || "").trim());
-  if (!cleanUrl) return;
-
-  // Resolve active tab if not passed
-  let effectiveTabId = tabId;
-  if (!effectiveTabId) {
-    try {
-      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (activeTab && activeTab.id) {
-        effectiveTabId = activeTab.id;
-      }
-    } catch {}
-  }
-
-  // Resolve Instagram reel/post page URL if direct video-only CDN URL was intercepted
-  if (
-    cleanUrl.includes("cdninstagram.com") ||
-    cleanUrl.includes("fbcdn.net") ||
-    (cleanUrl.includes("instagram.com") && cleanUrl.includes(".mp4"))
-  ) {
-    if (referrer && (referrer.includes("/reel/") || referrer.includes("/p/"))) {
-      cleanUrl = referrer;
-    } else if (effectiveTabId) {
-      try {
-        const tabInfo = await chrome.tabs.get(effectiveTabId);
-        if (tabInfo && tabInfo.url && (tabInfo.url.includes("/reel/") || tabInfo.url.includes("/p/"))) {
-          cleanUrl = tabInfo.url;
-        }
-      } catch {}
-    }
-  }
-
-  // Resolve Kick channel page URL or referrer if raw stream.kick.com URL was intercepted
-  if (cleanUrl.includes("stream.kick.com") && effectiveTabId) {
-    try {
-      const tabInfo = await chrome.tabs.get(effectiveTabId);
-      if (tabInfo && tabInfo.url && tabInfo.url.includes("kick.com/") && !tabInfo.url.includes("stream.kick.com")) {
-        if (!referrer) referrer = tabInfo.url;
-      }
-    } catch {}
-  }
-
-  // Notify tab that request is in progress
-  if (effectiveTabId) {
-    try {
-      await chrome.tabs.sendMessage(effectiveTabId, {
-        action: "SHOW_TOAST",
-        title: "ZR Downloader 🚀",
-        message: isTorrent
-          ? "Adding torrent to ZR Downloader engine..."
-          : quality
-          ? `Sending ${quality} stream to ZR Downloader Engine...`
-          : "Sending link to ZR Downloader engine...",
-        status: "info",
-      });
-    } catch {}
-  }
-
 function launchProtocolUrl(protocolUrl) {
   try {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -930,18 +875,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "CHECK_ZR_STATUS" || request.action === "CHECK_GDM_STATUS") {
-    getBridgeConfig().then(async (config) => {
+    (async () => {
       let isOnline = false;
       let isAuthenticated = false;
       let pingData = null;
+      let config = { port: DEFAULT_ZR_BRIDGE_PORT, token: "", url: `http://127.0.0.1:${DEFAULT_ZR_BRIDGE_PORT}` };
 
       try {
-        const pingRes = await fetch(`${config.url}/ping`, { method: "GET" });
+        config = await getBridgeConfig();
+      } catch (e) {}
+
+      try {
+        const controller = new AbortController();
+        const tId = setTimeout(() => controller.abort(), 1500);
+        const pingRes = await fetch(`${config.url}/ping`, { method: "GET", signal: controller.signal });
+        clearTimeout(tId);
         if (pingRes.ok) {
           pingData = await pingRes.json();
           isOnline = true;
           if (pingData?.port && pingData.port !== config.port) {
             chrome.storage.local.set({ bridgePort: pingData.port });
+            config.port = pingData.port;
+            config.url = `http://127.0.0.1:${pingData.port}`;
           }
         }
       } catch {}
@@ -952,20 +907,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         if (config.token) {
           try {
+            const controller = new AbortController();
+            const tId = setTimeout(() => controller.abort(), 1500);
             let authRes = await fetch(`${config.url}/auth-check`, {
               method: "GET",
               headers: { "X-ZR-Token": config.token },
+              signal: controller.signal,
             });
+            clearTimeout(tId);
             if (authRes.ok) {
               isAuthenticated = true;
             } else if (authRes.status === 401) {
               const freshToken = await autoPairBridge(config);
               if (freshToken) {
                 config.token = freshToken;
+                const c2 = new AbortController();
+                const t2 = setTimeout(() => c2.abort(), 1500);
                 authRes = await fetch(`${config.url}/auth-check`, {
                   method: "GET",
                   headers: { "X-ZR-Token": freshToken },
+                  signal: c2.signal,
                 });
+                clearTimeout(t2);
                 if (authRes.ok) {
                   isAuthenticated = true;
                 }
@@ -991,6 +954,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         port: (pingData && pingData.port) || config.port,
         hasToken: Boolean(config.token),
         data: pingData,
+      });
+    })().catch(() => {
+      sendResponse({
+        online: false,
+        authenticated: false,
+        port: DEFAULT_ZR_BRIDGE_PORT,
+        hasToken: false,
       });
     });
     return true;
