@@ -1,10 +1,13 @@
+pub mod aria2_rpc;
 pub mod clipper;
 pub mod downloader;
+pub mod ftp_downloader;
 pub mod media;
 pub mod queue;
 pub mod scheduler;
 pub mod settings;
 pub mod torrent;
+pub mod url_utils;
 
 use downloader::{DownloadTask, EngineState, UrlMetadata};
 use media::{AppUrlState, DownloadState};
@@ -13,10 +16,13 @@ use settings::{AppSettings, SettingsState};
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{command, AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+
+pub static ACTIVE_BRIDGE_PORT: AtomicU16 = AtomicU16::new(9666);
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -179,9 +185,18 @@ async fn probe_http_url(
     auth_username: Option<String>,
     auth_password: Option<String>,
 ) -> Result<UrlMetadata, String> {
-    let client = state.current_client().await;
     let app_settings = settings_state.get().await;
-    let site_auth = settings::find_credentials_for_url(&app_settings, &url)
+    let unwrapped = url_utils::unwrap_custom_url_scheme(&url);
+    let effective_url = url_utils::apply_mirrors(
+        &unwrapped,
+        app_settings.effective_gh_mirror(),
+        app_settings.effective_hf_mirror(),
+    );
+    if effective_url.starts_with("ftp://") {
+        return ftp_downloader::probe_ftp_url(&effective_url).await;
+    }
+    let client = state.current_client().await;
+    let site_auth = settings::find_credentials_for_url(&app_settings, &effective_url)
         .map(|(u, p)| (u.to_string(), p.to_string()));
     let explicit_user = auth_username.unwrap_or_default();
     let explicit_pass = auth_password.unwrap_or_default();
@@ -190,7 +205,7 @@ async fn probe_http_url(
     } else {
         site_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str()))
     };
-    downloader::probe_url_with_auth(&client, &url, auth_ref).await
+    downloader::probe_url_with_auth(&client, &effective_url, auth_ref).await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -215,6 +230,58 @@ async fn start_http_download(
     auth_password: Option<String>,
 ) -> Result<String, String> {
     let app_settings = settings_state.get().await;
+    let unwrapped = url_utils::unwrap_custom_url_scheme(&url);
+    let url = url_utils::apply_mirrors(
+        &unwrapped,
+        app_settings.effective_gh_mirror(),
+        app_settings.effective_hf_mirror(),
+    );
+
+    if url.starts_with("ftp://") {
+        let meta = ftp_downloader::probe_ftp_url(&url).await.unwrap_or(UrlMetadata {
+            url: url.clone(),
+            filename: "download.bin".to_string(),
+            total_size: None,
+            supports_ranges: false,
+            content_type: None,
+            category: "docs".to_string(),
+            last_modified: None,
+        });
+        let resolved_name = filename.filter(|n| !n.trim().is_empty()).unwrap_or(meta.filename);
+        let save_dir = save_folder.unwrap_or_else(|| {
+            if !app_settings.default_download_dir.trim().is_empty() {
+                app_settings.default_download_dir.clone()
+            } else {
+                std::env::temp_dir().to_string_lossy().to_string()
+            }
+        });
+        let final_path = format!("{}/{}", save_dir.trim_end_matches(['/', '\\']), resolved_name);
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task = DownloadTask {
+            id: task_id.clone(),
+            url: url.clone(),
+            filename: resolved_name,
+            save_path: final_path.clone(),
+            total_bytes: meta.total_size.unwrap_or(0),
+            status: "downloading".to_string(),
+            category: "docs".to_string(),
+            priority: priority.unwrap_or_else(|| "normal".to_string()),
+            chunk_count: 1,
+            is_resumable: false,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            ..Default::default()
+        };
+        state.tasks.write().await.insert(task_id.clone(), task.clone());
+        let app_c = app.clone();
+        let cf_c = cancel_flag.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = ftp_downloader::download_ftp_task(app_c, task, cf_c).await;
+        });
+        spawn_save_all_tasks(&app);
+        return Ok(task_id);
+    }
+
     let client = state.current_client().await;
     let site_auth = settings::find_credentials_for_url(&app_settings, &url)
         .map(|(u, p)| (u.to_string(), p.to_string()));
@@ -249,6 +316,7 @@ async fn start_http_download(
                 supports_ranges: false,
                 content_type: None,
                 category: "docs".to_string(),
+                last_modified: None,
             }
         }
     };
@@ -296,10 +364,42 @@ async fn start_http_download(
             }
         });
 
-    let save_path = PathBuf::from(&resolved_folder)
-        .join(&resolved_name)
-        .to_string_lossy()
-        .to_string();
+    let (final_filename, save_path) = match app_settings.name_conflict.as_str() {
+        "overwrite" => {
+            let p = PathBuf::from(&resolved_folder).join(&resolved_name);
+            (resolved_name.clone(), p.to_string_lossy().to_string())
+        }
+        "ask" => {
+            let target_p = PathBuf::from(&resolved_folder).join(&resolved_name);
+            if target_p.exists() {
+                if let Ok(m) = std::fs::metadata(&target_p) {
+                    let mtime = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let _ = app.emit(
+                        "name-conflict-detected",
+                        serde_json::json!({
+                            "folder": resolved_folder,
+                            "filename": resolved_name,
+                            "existingSize": m.len(),
+                            "existingModified": mtime,
+                        }),
+                    );
+                }
+            }
+            let unique = build_unique_filename(&resolved_folder, &resolved_name);
+            let p = PathBuf::from(&resolved_folder).join(&unique);
+            (unique, p.to_string_lossy().to_string())
+        }
+        _ => {
+            let unique = build_unique_filename(&resolved_folder, &resolved_name);
+            let p = PathBuf::from(&resolved_folder).join(&unique);
+            (unique, p.to_string_lossy().to_string())
+        }
+    };
     let total_bytes = meta.total_size.unwrap_or(0);
     let is_auto = auto_connections.unwrap_or_else(|| app_settings.connection_mode == "auto");
     let default_conns = app_settings.default_connections.clamp(1, 32);
@@ -317,7 +417,7 @@ async fn start_http_download(
             .clamp(1, 32)
     };
     let category =
-        downloader::detect_category_with_mime(&resolved_name, meta.content_type.as_deref());
+        downloader::detect_category_with_mime(&final_filename, meta.content_type.as_deref());
 
     let task_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -325,7 +425,7 @@ async fn start_http_download(
     let task = DownloadTask {
         id: task_id.clone(),
         url,
-        filename: resolved_name,
+        filename: final_filename,
         save_path,
         total_bytes,
         downloaded_bytes: 0,
@@ -352,6 +452,7 @@ async fn start_http_download(
         post_download_program: post_download_program.unwrap_or_default(),
         auth_username: u_val,
         auth_password: p_val,
+        last_modified: meta.last_modified.clone(),
         ..Default::default()
     };
 
@@ -486,6 +587,140 @@ async fn resume_http_download(
 }
 
 #[command]
+async fn relink_http_download(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    settings_state: State<'_, SettingsState>,
+    task_id: String,
+    new_url: String,
+    headers: Option<HashMap<String, String>>,
+    proxy: Option<String>,
+) -> Result<(), String> {
+    let clean_url = new_url.trim().to_string();
+    if clean_url.is_empty() {
+        return Err("New URL cannot be empty".to_string());
+    }
+
+    // 1. Check if task exists and grab old size
+    let old_total_bytes = {
+        let tasks = state.tasks.read().await;
+        let t = tasks
+            .get(&task_id)
+            .ok_or_else(|| format!("Task {} not found", task_id))?;
+        t.total_bytes
+    };
+
+    // 2. Build client with proxy if specified, or use default client
+    let app_settings = settings_state.get().await;
+    let client = if let Some(ref p_str) = proxy {
+        if !p_str.trim().is_empty() {
+            let mut b = reqwest::Client::builder();
+            if !app_settings.verify_ssl {
+                b = b.danger_accept_invalid_certs(true);
+            }
+            if let Ok(p) = reqwest::Proxy::all(p_str.trim()) {
+                b = b.proxy(p);
+            }
+            b.build()
+                .unwrap_or_else(|_| settings::build_reqwest_client(&app_settings))
+        } else {
+            state.current_client().await
+        }
+    } else {
+        state.current_client().await
+    };
+
+    // 3. Probe the new URL
+    let mut probe_req = client
+        .get(&clean_url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .timeout(std::time::Duration::from_secs(10));
+    if let Some(ref hdrs) = headers {
+        for (k, v) in hdrs {
+            if let (Ok(hn), Ok(hv)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                probe_req = probe_req.header(hn, hv);
+            }
+        }
+    }
+
+    let meta = match probe_req.send().await {
+        Ok(resp) => {
+            if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(format!("Server returned HTTP {}", resp.status()));
+            }
+            let is_range = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT
+                || resp
+                    .headers()
+                    .get(reqwest::header::ACCEPT_RANGES)
+                    .map(|v| v.to_str().unwrap_or("").contains("bytes"))
+                    .unwrap_or(false);
+
+            let mut total_size = None;
+            if let Some(cl) = resp.headers().get(reqwest::header::CONTENT_LENGTH) {
+                if let Ok(s) = cl.to_str() {
+                    if let Ok(sz) = s.parse::<u64>() {
+                        total_size = Some(sz);
+                    }
+                }
+            }
+            if total_size == Some(1) || total_size.is_none() {
+                if let Some(cr) = resp.headers().get("content-range") {
+                    if let Ok(cr_str) = cr.to_str() {
+                        if let Some(pos) = cr_str.rfind('/') {
+                            if let Ok(sz) = cr_str[pos + 1..].trim().parse::<u64>() {
+                                total_size = Some(sz);
+                            }
+                        }
+                    }
+                }
+            }
+            (is_range, total_size)
+        }
+        Err(e) => return Err(format!("Failed to probe new URL: {}", e)),
+    };
+
+    let (supports_ranges, new_total_size) = meta;
+
+    if !supports_ranges {
+        return Err(
+            "The new URL does not support byte ranges (resuming is not possible).".to_string(),
+        );
+    }
+
+    if let Some(new_sz) = new_total_size {
+        if old_total_bytes > 0 && new_sz != old_total_bytes {
+            return Err(format!(
+                "Size mismatch: current download has {} bytes, but the new URL has {} bytes.",
+                old_total_bytes, new_sz
+            ));
+        }
+    }
+
+    // 4. Pause the task if currently active
+    let _ = queue::pause_download(app.clone(), state.inner().clone(), task_id.clone()).await;
+
+    // 5. Update task: swap URL, headers, proxy, set status paused so user can resume
+    {
+        let mut tasks = state.tasks.write().await;
+        if let Some(t) = tasks.get_mut(&task_id) {
+            t.url = clean_url;
+            t.custom_headers = headers;
+            t.proxy = proxy;
+            t.status = "paused".to_string();
+            t.speed_bps = 0;
+            t.speed_formatted = "Paused".to_string();
+            let _ = app.emit("download-progress", t.clone());
+        }
+    }
+
+    save_all_tasks(&app).await;
+    Ok(())
+}
+
+#[command]
 async fn cancel_http_download(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -513,9 +748,12 @@ async fn remove_http_download(
     app: AppHandle,
     state: State<'_, EngineState>,
     download_state: State<'_, DownloadState>,
+    settings_state: State<'_, SettingsState>,
     task_id: String,
     delete_file: Option<bool>,
 ) -> Result<(), String> {
+    let app_settings = settings_state.get().await;
+    let should_delete = delete_file.unwrap_or(app_settings.delete_files_on_remove);
     let ds_tasks = download_state.tasks.clone();
     let ds_opts = download_state.task_options.clone();
     let _ = media::cancel_download(app.clone(), download_state.clone(), Some(task_id.clone())).await;
@@ -529,13 +767,13 @@ async fn remove_http_download(
     };
     if let Some(ref mt) = removed_media {
         media::remove_clip_working_dir(&mt.save_path, &task_id);
-        if delete_file.unwrap_or(false) {
+        if should_delete {
             media::delete_task_files_and_partials(&mt.save_path, &mt.filename);
         }
     } else if let Some(ref opt) = removed_opts {
         media::remove_clip_working_dir(&opt.save_folder, &task_id);
     }
-    let res = queue::remove_download(app.clone(), state.inner().clone(), task_id.clone(), delete_file.unwrap_or(false)).await;
+    let res = queue::remove_download(app.clone(), state.inner().clone(), task_id.clone(), should_delete).await;
     media::forget_task(&download_state, &task_id);
     save_all_tasks(&app).await;
     res
@@ -545,13 +783,33 @@ async fn remove_http_download(
 async fn get_all_downloads(
     state: State<'_, EngineState>,
     download_state: State<'_, DownloadState>,
+    settings_state: State<'_, SettingsState>,
 ) -> Result<Vec<DownloadTask>, String> {
+    let app_settings = settings_state.get().await;
     let mut list: Vec<DownloadTask> = {
-        let tasks = state.tasks.read().await;
+        let mut tasks = state.tasks.write().await;
+        if app_settings.remove_missing_tasks {
+            tasks.retain(|_, t| {
+                if matches!(t.status.as_str(), "completed" | "completed_with_warning") {
+                    Path::new(&t.save_path).exists()
+                } else {
+                    true
+                }
+            });
+        }
         tasks.values().cloned().collect()
     };
     {
-        let media_tasks = download_state.tasks.lock().unwrap();
+        let mut media_tasks = download_state.tasks.lock().unwrap();
+        if app_settings.remove_missing_tasks {
+            media_tasks.retain(|_, t| {
+                if matches!(t.status.as_str(), "completed" | "completed_with_warning") {
+                    Path::new(&t.save_path).exists()
+                } else {
+                    true
+                }
+            });
+        }
         for t in media_tasks.values() {
             if let Some(pos) = list.iter().position(|existing| existing.id == t.id) {
                 list[pos] = t.clone();
@@ -603,6 +861,140 @@ fn build_unique_filename(folder: &str, filename: &str) -> String {
         }
     }
     format!("{}_{}", chrono::Utc::now().timestamp(), filename)
+}
+
+#[command]
+fn get_active_bridge_port() -> u16 {
+    ACTIVE_BRIDGE_PORT.load(Ordering::Relaxed)
+}
+
+#[command]
+fn get_active_aria2_rpc_status() -> (bool, u16) {
+    (
+        aria2_rpc::ARIA2_RPC_RUNNING.load(Ordering::Relaxed),
+        aria2_rpc::ACTIVE_ARIA2_RPC_PORT.load(Ordering::Relaxed),
+    )
+}
+
+#[command]
+async fn regenerate_aria2_token(
+    app: AppHandle,
+    settings_state: State<'_, SettingsState>,
+) -> Result<String, String> {
+    let new_token = uuid::Uuid::new_v4().simple().to_string();
+    let mut current = settings_state.get().await;
+    current.aria2_rpc_token = new_token.clone();
+    settings_state.save(current.clone()).await?;
+    let _ = app.emit("app-settings-updated", current);
+    Ok(new_token)
+}
+
+pub async fn rpc_pause_download(app: &AppHandle, task_id: &str) -> Result<(), String> {
+    let dl_state = app.state::<DownloadState>();
+    let _ = media::cancel_download(app.clone(), dl_state, Some(task_id.to_string())).await;
+    let engine = app.state::<EngineState>();
+    let res = queue::pause_download(app.clone(), engine.inner().clone(), task_id.to_string()).await;
+    spawn_save_all_tasks(app);
+    res
+}
+
+pub async fn rpc_resume_download(app: &AppHandle, task_id: &str) -> Result<(), String> {
+    let dl_state = app.state::<DownloadState>();
+    let engine = app.state::<EngineState>();
+    resume_http_download(app.clone(), engine, dl_state, task_id.to_string()).await
+}
+
+pub async fn rpc_remove_download(app: &AppHandle, task_id: &str) -> Result<(), String> {
+    let dl_state = app.state::<DownloadState>();
+    let engine = app.state::<EngineState>();
+    let settings = app.state::<SettingsState>();
+    remove_http_download(app.clone(), engine, dl_state, settings, task_id.to_string(), None).await
+}
+
+pub async fn start_http_download_inner(
+    app: &AppHandle,
+    state: &EngineState,
+    settings_state: &SettingsState,
+    raw_url: String,
+    out_name: String,
+    save_folder: Option<String>,
+    custom_headers: Option<HashMap<String, String>>,
+) -> Result<DownloadTask, String> {
+    let app_settings = settings_state.get().await;
+    let unwrapped = url_utils::unwrap_custom_url_scheme(&raw_url);
+    let url = url_utils::apply_mirrors(
+        &unwrapped,
+        app_settings.effective_gh_mirror(),
+        app_settings.effective_hf_mirror(),
+    );
+    let client = state.current_client().await;
+    let site_auth = settings::find_credentials_for_url(&app_settings, &url)
+        .map(|(u, p)| (u.to_string(), p.to_string()));
+    let auth_ref = site_auth.as_ref().map(|(u, p)| (u.as_str(), p.as_str()));
+
+    let meta = downloader::probe_url_with_auth(&client, &url, auth_ref).await.unwrap_or(UrlMetadata {
+        url: url.clone(),
+        filename: if !out_name.is_empty() { out_name.clone() } else { "download.bin".to_string() },
+        total_size: None,
+        supports_ranges: false,
+        content_type: None,
+        category: "docs".to_string(),
+        last_modified: None,
+    });
+
+    let resolved_name = if !out_name.trim().is_empty() {
+        downloader::sanitize_filename(&out_name)
+    } else {
+        meta.filename.clone()
+    };
+
+    let save_dir = save_folder.unwrap_or_else(|| {
+        if !app_settings.default_download_dir.trim().is_empty() {
+            app_settings.default_download_dir.clone()
+        } else {
+            std::env::temp_dir().to_string_lossy().to_string()
+        }
+    });
+
+    let final_path = format!("{}/{}", save_dir.trim_end_matches(['/', '\\']), resolved_name);
+    let task_id = uuid::Uuid::new_v4().to_string();
+
+    let task = DownloadTask {
+        id: task_id.clone(),
+        url: url.clone(),
+        filename: resolved_name,
+        save_path: final_path.clone(),
+        total_bytes: meta.total_size.unwrap_or(0),
+        status: "downloading".to_string(),
+        category: meta.category,
+        priority: "normal".to_string(),
+        chunk_count: if meta.supports_ranges { app_settings.default_connections } else { 1 },
+        is_resumable: meta.supports_ranges,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        last_modified: meta.last_modified,
+        custom_headers,
+        proxy: app_settings.effective_proxy_url(),
+        ..Default::default()
+    };
+
+    state.tasks.write().await.insert(task_id.clone(), task.clone());
+    let _ = queue::enqueue_download(app.clone(), state.clone(), task.clone()).await;
+    spawn_save_all_tasks(app);
+
+    Ok(task)
+}
+
+#[command]
+async fn regenerate_bridge_token(
+    app: AppHandle,
+    settings_state: State<'_, SettingsState>,
+) -> Result<String, String> {
+    let new_token = settings::generate_bridge_token();
+    let mut current = settings_state.get().await;
+    current.bridge_pair_token = new_token.clone();
+    settings_state.save(current.clone()).await?;
+    let _ = app.emit("app-settings-updated", current);
+    Ok(new_token)
 }
 
 #[command]
@@ -1192,24 +1584,142 @@ pub fn parse_open_query(query_str: &str) -> Option<serde_json::Value> {
     None
 }
 
+fn extract_header_value(req: &str, header_name: &str) -> Option<String> {
+    for line in req.lines() {
+        if let Some((name, val)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case(header_name) {
+                return Some(val.trim().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn extract_bridge_token(req: &str) -> Option<String> {
+    // 1. Check X-ZR-Token header
+    if let Some(token) = extract_header_value(req, "x-zr-token") {
+        let t = token.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    // 2. Check Authorization: Bearer <token>
+    if let Some(auth) = extract_header_value(req, "authorization") {
+        if let Some(token) = auth.strip_prefix("Bearer ").or_else(|| auth.strip_prefix("bearer ")) {
+            let t = token.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+    }
+    // 3. Check query string token=... in the first line
+    let first_line = req.lines().next().unwrap_or("");
+    if let Some(pos) = first_line.find('?') {
+        let end_idx = first_line.find(" HTTP/").unwrap_or(first_line.len());
+        let query = &first_line[pos + 1..end_idx];
+        for part in query.split('&') {
+            if let Some(tok) = part.strip_prefix("token=") {
+                let decoded = decode_percent_encoded(tok);
+                let t = decoded.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+    }
+    // 4. Check JSON body if present
+    if let Some(body_start) = req.find("\r\n\r\n") {
+        let body = &req[body_start + 4..];
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+            if let Some(tok) = v.get("token").and_then(|t| t.as_str()) {
+                let t = tok.trim();
+                if !t.is_empty() {
+                    return Some(t.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn load_existing_bridge_auth() -> (u16, String) {
+    let mut path = None;
+    if let Ok(appdata) = env::var("APPDATA") {
+        let p = PathBuf::from(appdata).join("com.golammowla.zrdownloader").join("settings.json");
+        if p.exists() {
+            path = Some(p);
+        }
+    }
+    if path.is_none() {
+        let p = env::temp_dir().join("zr-downloader").join("settings.json");
+        if p.exists() {
+            path = Some(p);
+        }
+    }
+    if let Some(p) = path {
+        if let Ok(content) = std::fs::read_to_string(p) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                let port = val.get("bridgePort").and_then(|v| v.as_u64()).map(|u| u as u16).unwrap_or(9666);
+                let token = val.get("bridgePairToken").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                return (if port == 0 { 9666 } else { port }, token);
+            }
+        }
+    }
+    (9666, String::new())
+}
+
 async fn start_local_bridge(app_handle: AppHandle) {
+    let settings_state = app_handle.state::<SettingsState>();
+    let (configured_port, auto_port) = {
+        let s = settings_state.get_blocking();
+        (s.bridge_port, s.bridge_auto_port)
+    };
+
+    let base_port = if configured_port == 0 { 9666 } else { configured_port };
     let mut listener = None;
-    for _ in 0..15 {
-        match tokio::net::TcpListener::bind("127.0.0.1:9666").await {
+    let mut actual_port = base_port;
+
+    // 1. Try binding base_port with short retries in case previous process is shutting down
+    for _ in 0..5 {
+        match tokio::net::TcpListener::bind(format!("127.0.0.1:{}", base_port)).await {
             Ok(l) => {
+                actual_port = base_port;
                 listener = Some(l);
                 break;
             }
             Err(_) => {
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            }
+        }
+    }
+
+    // 2. If configured port is busy and auto_port is enabled, fall back to free port
+    if listener.is_none() && auto_port {
+        for p in (base_port + 1)..=(base_port + 20) {
+            if let Ok(l) = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", p)).await {
+                actual_port = p;
+                listener = Some(l);
+                break;
+            }
+        }
+        if listener.is_none() {
+            if let Ok(l) = tokio::net::TcpListener::bind("127.0.0.1:0").await {
+                if let Ok(addr) = l.local_addr() {
+                    actual_port = addr.port();
+                }
+                listener = Some(l);
             }
         }
     }
 
     let listener = match listener {
-        Some(l) => l,
+        Some(l) => {
+            ACTIVE_BRIDGE_PORT.store(actual_port, Ordering::Relaxed);
+            eprintln!("ZR Downloader: Local bridge listening on 127.0.0.1:{}", actual_port);
+            l
+        }
         None => {
-            eprintln!("ZR Downloader: Could not bind local bridge port 9666 after retries");
+            eprintln!("ZR Downloader: Could not bind local bridge port {} (auto_port={})", base_port, auto_port);
             return;
         }
     };
@@ -1217,113 +1727,185 @@ async fn start_local_bridge(app_handle: AppHandle) {
     loop {
         if let Ok((mut stream, _)) = listener.accept().await {
             let handle = app_handle.clone();
+            let port = actual_port;
             tauri::async_runtime::spawn(async move {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 let mut buf = [0u8; 16384];
-                if let Ok(n) = stream.read(&mut buf).await {
-                    let req_str = String::from_utf8_lossy(&buf[..n]);
+                let n = match stream.read(&mut buf).await {
+                    Ok(n) if n > 0 => n,
+                    _ => return,
+                };
+                let req_str = String::from_utf8_lossy(&buf[..n]);
 
-                    if req_str.starts_with("OPTIONS") {
-                        let resp = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\nConnection: close\r\n\r\n";
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                        return;
-                    }
+                // Origin allow-list: ONLY browser extensions (chrome-extension:// and moz-extension://)
+                let origin = extract_header_value(&req_str, "origin");
+                let is_allowed_ext = origin.as_deref().map_or(false, |o| {
+                    let ol = o.to_ascii_lowercase();
+                    ol.starts_with("chrome-extension://") || ol.starts_with("moz-extension://")
+                });
 
-                    let first_line = req_str.lines().next().unwrap_or("").to_string();
-                    if first_line.starts_with("GET /formats?") {
-                        // Real, accurate quality list for the browser extension (IDM-style), powered by yt-dlp.
-                        let q = &first_line["GET /formats?".len()..];
-                        let q = q.split(" HTTP/").next().unwrap_or(q);
-                        let mut target = String::new();
-                        for part in q.split('&') {
-                            if let Some(v) = part.strip_prefix("url=") {
-                                target = decode_percent_encoded(v);
-                            }
-                        }
-                        let (status_line, body) = if target.trim().is_empty() {
-                            ("400 Bad Request", "{\"error\":\"missing_url\"}".to_string())
-                        } else {
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(60),
-                                media::fetch_media_info_with_app(
-                                    Some(handle.clone()),
-                                    target.clone(),
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                ),
-                            )
-                            .await
-                            {
-                                Ok(Ok(info)) => {
-                                    let body = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
-                                    ("200 OK", body)
-                                }
-                                Ok(Err(e)) => ("502 Bad Gateway", serde_json::json!({ "error": e }).to_string()),
-                                Err(_) => ("504 Gateway Timeout", "{\"error\":\"timeout\"}".to_string()),
-                            }
-                        };
+                let first_line = req_str.lines().next().unwrap_or("").to_string();
+
+                // Handle OPTIONS preflight
+                if first_line.starts_with("OPTIONS") {
+                    if is_allowed_ext {
                         let resp = format!(
-                            "HTTP/1.1 {}\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            status_line,
-                            body.as_bytes().len(),
-                            body
-                        );
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                        return;
-                    }
-
-                    if first_line.starts_with("GET /focus") {
-                        if let Some(win) = handle.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.unminimize();
-                            let _ = win.set_focus();
-                        }
-                        let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"focused\",\"app\":\"ZR Downloader\"}\r\n";
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                        return;
-                    }
-
-                    if first_line.starts_with("GET /ping") || req_str.contains("/ping") && !first_line.contains("/open?") {
-                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"alive\",\"app\":\"ZR Downloader\",\"version\":\"1.2.38\"}\r\n";
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                        return;
-                    }
-
-                    let mut payload_opt = None;
-                    if let Some(idx) = req_str.find("/open?") {
-                        let query_str = &req_str[idx + 6..];
-                        let end_idx = query_str.find(|c: char| c == ' ' || c == '\r' || c == '\n').unwrap_or(query_str.len());
-                        let clean_query = &query_str[..end_idx];
-                        payload_opt = parse_open_query(clean_query);
-                    }
-
-                    if let Some(payload) = payload_opt {
-                        let _ = handle.emit("open-url", payload);
-                        if let Some(win) = handle.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.unminimize();
-                            let _ = win.set_always_on_top(true);
-                            let _ = win.set_focus();
-                            let _ = win.set_always_on_top(false);
-                        }
-                        let body = "{\"status\":\"ok\",\"received\":true,\"app\":\"ZR Downloader\"}";
-                        let resp = format!(
-                            "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
+                            "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: X-ZR-Token, Content-Type, Authorization\r\nAccess-Control-Max-Age: 86400\r\nConnection: close\r\n\r\n",
+                            origin.as_deref().unwrap_or("")
                         );
                         let _ = stream.write_all(resp.as_bytes()).await;
                     } else {
-                        let body = "{\"error\":\"missing_url\"}";
-                        let resp = format!(
-                            "HTTP/1.1 400 Bad Request\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
-                        );
+                        let resp = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
                         let _ = stream.write_all(resp.as_bytes()).await;
                     }
+                    return;
+                }
+
+                // Prepare CORS header: Only extensions receive Access-Control-Allow-Origin;
+                // normal web origins receive NO CORS headers at all.
+                let cors_header = if is_allowed_ext {
+                    format!(
+                        "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Headers: X-ZR-Token, Content-Type, Authorization\r\nVary: Origin\r\n",
+                        origin.as_deref().unwrap_or("")
+                    )
+                } else {
+                    String::new()
+                };
+
+                // Health check GET /ping is the ONLY unauthenticated endpoint
+                if first_line.starts_with("GET /ping") || (req_str.contains("/ping") && !first_line.contains("/open?")) {
+                    let body = serde_json::json!({
+                        "status": "alive",
+                        "app": "ZR Downloader",
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "port": port,
+                    }).to_string();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        cors_header,
+                        body.as_bytes().len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                // Authentication verification: every other request must carry the bridge pair token
+                let settings_state = handle.state::<SettingsState>();
+                let expected_token = settings_state.get_blocking().bridge_pair_token;
+                let provided_token = extract_bridge_token(&req_str);
+
+                let is_authenticated = !expected_token.is_empty()
+                    && provided_token.as_deref() == Some(&expected_token);
+
+                if !is_authenticated {
+                    let body = "{\"error\":\"unauthorized\",\"message\":\"Valid X-ZR-Token required\"}";
+                    let resp = format!(
+                        "HTTP/1.1 401 Unauthorized\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        cors_header,
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                if first_line.starts_with("GET /formats?") {
+                    // Real, accurate quality list for the browser extension (IDM-style), powered by yt-dlp.
+                    let q = &first_line["GET /formats?".len()..];
+                    let q = q.split(" HTTP/").next().unwrap_or(q);
+                    let mut target = String::new();
+                    for part in q.split('&') {
+                        if let Some(v) = part.strip_prefix("url=") {
+                            target = decode_percent_encoded(v);
+                        }
+                    }
+                    let (status_line, body) = if target.trim().is_empty() {
+                        ("400 Bad Request", "{\"error\":\"missing_url\"}".to_string())
+                    } else {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(60),
+                            media::fetch_media_info_with_app(
+                                Some(handle.clone()),
+                                target.clone(),
+                                None,
+                                None,
+                                None,
+                                None,
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(Ok(info)) => {
+                                let body = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
+                                ("200 OK", body)
+                            }
+                            Ok(Err(e)) => ("502 Bad Gateway", serde_json::json!({ "error": e }).to_string()),
+                            Err(_) => ("504 Gateway Timeout", "{\"error\":\"timeout\"}".to_string()),
+                        }
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 {}\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        status_line,
+                        cors_header,
+                        body.as_bytes().len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                if first_line.starts_with("GET /focus") {
+                    if let Some(win) = handle.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.unminimize();
+                        let _ = win.set_focus();
+                    }
+                    let body = "{\"status\":\"focused\",\"app\":\"ZR Downloader\"}";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        cors_header,
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                let mut payload_opt = None;
+                if let Some(idx) = req_str.find("/open?") {
+                    let query_str = &req_str[idx + 6..];
+                    let end_idx = query_str.find(|c: char| c == ' ' || c == '\r' || c == '\n').unwrap_or(query_str.len());
+                    let clean_query = &query_str[..end_idx];
+                    payload_opt = parse_open_query(clean_query);
+                }
+
+                if let Some(payload) = payload_opt {
+                    let _ = handle.emit("open-url", payload);
+                    if let Some(win) = handle.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.unminimize();
+                        let _ = win.set_always_on_top(true);
+                        let _ = win.set_focus();
+                        let _ = win.set_always_on_top(false);
+                    }
+                    let body = "{\"status\":\"ok\",\"received\":true,\"app\":\"ZR Downloader\"}";
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        cors_header,
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
+                } else {
+                    let body = "{\"error\":\"missing_url\"}";
+                    let resp = format!(
+                        "HTTP/1.1 400 Bad Request\r\n{}Content-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        cors_header,
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(resp.as_bytes()).await;
                 }
             });
         }
@@ -1716,16 +2298,22 @@ pub fn run() {
         }
     }
 
+    let (ipc_port, ipc_token) = load_existing_bridge_auth();
     if let Some(ref req_path) = pending_arg_req {
-        if let Ok(addr) = "127.0.0.1:9666".parse() {
+        if let Ok(addr) = format!("127.0.0.1:{}", ipc_port).parse::<std::net::SocketAddr>() {
             if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
                 &addr,
                 std::time::Duration::from_millis(350),
             ) {
                 use std::io::Write;
+                let auth_hdr = if !ipc_token.is_empty() {
+                    format!("X-ZR-Token: {}\r\n", ipc_token)
+                } else {
+                    String::new()
+                };
                 let req = format!(
-                    "GET /{} HTTP/1.1\r\nHost: 127.0.0.1:9666\r\nConnection: close\r\n\r\n",
-                    req_path
+                    "GET /{} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}Connection: close\r\n\r\n",
+                    req_path, ipc_port, auth_hdr
                 );
                 let _ = stream.write_all(req.as_bytes());
                 std::process::exit(0);
@@ -1736,16 +2324,23 @@ pub fn run() {
     // Plain launch while ZR Downloader is already running (e.g. hidden in the tray):
     // ask the running one to show its window, then exit, so no second tray icon appears.
     if pending_arg_req.is_none() {
-        if let Ok(addr) = "127.0.0.1:9666".parse::<std::net::SocketAddr>() {
+        if let Ok(addr) = format!("127.0.0.1:{}", ipc_port).parse::<std::net::SocketAddr>() {
             if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
                 &addr,
                 std::time::Duration::from_millis(350),
             ) {
                 use std::io::{Read, Write};
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(800)));
-                let _ = stream.write_all(
-                    b"GET /focus HTTP/1.1\r\nHost: 127.0.0.1:9666\r\nConnection: close\r\n\r\n",
+                let auth_hdr = if !ipc_token.is_empty() {
+                    format!("X-ZR-Token: {}\r\n", ipc_token)
+                } else {
+                    String::new()
+                };
+                let req = format!(
+                    "GET /focus HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}Connection: close\r\n\r\n",
+                    ipc_port, auth_hdr
                 );
+                let _ = stream.write_all(req.as_bytes());
                 let mut buf = [0u8; 512];
                 if let Ok(n) = stream.read(&mut buf) {
                     if String::from_utf8_lossy(&buf[..n]).contains("ZR Downloader") {
@@ -1996,12 +2591,21 @@ pub fn run() {
                 start_local_bridge(handle).await;
             });
 
+            let handle_rpc = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                aria2_rpc::start_aria2_rpc_server(handle_rpc).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             // Settings, Scheduler, Queue & Utility Commands
             get_app_settings,
             save_app_settings,
+            get_active_bridge_port,
+            regenerate_bridge_token,
+            get_active_aria2_rpc_status,
+            regenerate_aria2_token,
             toggle_global_speed_limit,
             get_scheduler_config,
             save_scheduler_config,
@@ -2024,6 +2628,7 @@ pub fn run() {
             start_http_download,
             pause_http_download,
             resume_http_download,
+            relink_http_download,
             cancel_http_download,
             remove_http_download,
             get_all_downloads,
@@ -2033,6 +2638,7 @@ pub fn run() {
             media::start_download,
             media::resume_media_download,
             media::cancel_download,
+            media::stop_and_save_live_recording,
             media::get_installed_tools,
             media::check_tool_updates,
             media::update_tool,
@@ -2066,4 +2672,47 @@ pub fn run() {
                 save_all_tasks_sync(app_handle);
             }
         });
+}
+
+#[cfg(test)]
+mod bridge_tests {
+    use super::{extract_bridge_token, extract_header_value};
+
+    #[test]
+    fn test_extract_bridge_token_header_and_query() {
+        let req1 = "GET /open?url=https%3A%2F%2Fexample.com HTTP/1.1\r\nHost: 127.0.0.1:9666\r\nX-ZR-Token: secret123\r\n\r\n";
+        assert_eq!(extract_bridge_token(req1).as_deref(), Some("secret123"));
+
+        let req2 = "GET /open?url=https%3A%2F%2Fexample.com&token=querytoken456 HTTP/1.1\r\nHost: 127.0.0.1:9666\r\n\r\n";
+        assert_eq!(extract_bridge_token(req2).as_deref(), Some("querytoken456"));
+
+        let req3 = "GET /formats?url=https%3A%2F%2Fexample.com HTTP/1.1\r\nHost: 127.0.0.1:9666\r\nAuthorization: Bearer bearertoken789\r\n\r\n";
+        assert_eq!(extract_bridge_token(req3).as_deref(), Some("bearertoken789"));
+
+        let req4 = "GET /open?url=https%3A%2F%2Fexample.com HTTP/1.1\r\nHost: 127.0.0.1:9666\r\n\r\n";
+        assert_eq!(extract_bridge_token(req4), None);
+    }
+
+    #[test]
+    fn test_origin_allowlist_validation() {
+        let req_header = "Host: 127.0.0.1:9666\r\nOrigin: chrome-extension://abcdefghijklmnop\r\n";
+        assert_eq!(
+            extract_header_value(req_header, "origin").as_deref(),
+            Some("chrome-extension://abcdefghijklmnop")
+        );
+
+        let chrome_origin = "chrome-extension://abcdefghijklmnop";
+        let moz_origin = "moz-extension://12345678-1234-1234-1234-123456789abc";
+        let web_origin = "https://malicious-website.com";
+
+        let is_allowed = |o: &str| {
+            let ol = o.to_ascii_lowercase();
+            ol.starts_with("chrome-extension://") || ol.starts_with("moz-extension://")
+        };
+
+        assert!(is_allowed(chrome_origin));
+        assert!(is_allowed(moz_origin));
+        assert!(!is_allowed(web_origin));
+        assert!(!is_allowed("http://localhost:3000"));
+    }
 }

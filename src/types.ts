@@ -142,6 +142,40 @@ export interface AppSettings {
   startWithWindows: boolean;
   minimizeToTray: boolean;
   closeToTray: boolean;
+
+  // Browser Bridge Integration
+  bridgePort?: number;
+  bridgeAutoPort?: boolean;
+  bridgePairToken?: string;
+
+  // File Handling & Security Settings
+  nameConflict?: "keep_both" | "overwrite" | "ask" | string;
+  preserveLastModified?: boolean;
+  verifySsl?: boolean;
+  useSystemDns?: boolean;
+  deleteFilesOnRemove?: boolean;
+  removeMissingTasks?: boolean;
+
+  // Header Presets
+  headerPresets?: HeaderPreset[];
+  activeHeaderPreset?: string;
+
+  // aria2 RPC
+  aria2RpcEnabled?: boolean;
+  aria2RpcPort?: number;
+  aria2RpcToken?: string;
+
+  // Mirrors
+  githubMirrorEnabled?: boolean;
+  githubMirrorUrl?: string;
+  huggingfaceMirrorEnabled?: boolean;
+  huggingfaceMirrorUrl?: string;
+}
+
+export interface HeaderPreset {
+  name: string;
+  userAgent: string;
+  headers: Record<string, string>;
 }
 
 export interface SchedulerConfig {
@@ -255,6 +289,8 @@ export interface MediaInfo {
   videoStreams: MediaStream[];
   audioStreams: MediaStream[];
   subtitles: SubtitleTrack[];
+  isLive?: boolean;
+  liveStatus?: string;
 }
 
 export type DownloadMode = "video" | "audio" | "subtitles";

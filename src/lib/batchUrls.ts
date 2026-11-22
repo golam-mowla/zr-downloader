@@ -1,16 +1,47 @@
 /**
+ * Unwraps download manager wrapped URLs (Thunder, FlashGet, QQDownload).
+ */
+export function unwrapCustomUrlScheme(raw: string): string {
+  const trimmed = raw.trim();
+  try {
+    if (trimmed.startsWith("thunder://")) {
+      const payload = trimmed.slice(10).trim();
+      const decoded = atob(payload);
+      let inner = decoded;
+      if (inner.startsWith("AA")) inner = inner.slice(2);
+      if (inner.endsWith("ZZ")) inner = inner.slice(0, -2);
+      if (/^(https?|ftp):\/\//i.test(inner)) return inner;
+    } else if (trimmed.startsWith("flashget://")) {
+      const payload = trimmed.slice(11).split("&")[0].trim();
+      const decoded = atob(payload);
+      let inner = decoded;
+      if (inner.startsWith("[FLASHGET]")) inner = inner.slice(10);
+      if (inner.endsWith("[FLASHGET]")) inner = inner.slice(0, -10);
+      if (/^(https?|ftp):\/\//i.test(inner)) return inner;
+    } else if (trimmed.startsWith("qqdl://")) {
+      const payload = trimmed.slice(7).trim();
+      const decoded = atob(payload);
+      if (/^(https?|ftp):\/\//i.test(decoded)) return decoded;
+    }
+  } catch {
+    // fallback to original on base64 error
+  }
+  return trimmed;
+}
+
+/**
  * Expand URL patterns containing numeric ranges such as:
  *   https://example.com/file[001-100].zip
  *   https://example.com/ep[1-12].mp4
  * Supports multi-line input mixed with plain URLs and comments (#).
  */
 export function expandSingleUrlPattern(raw: string): string[] {
-  const line = raw.trim();
+  const line = unwrapCustomUrlScheme(raw.trim());
   if (!line || line.startsWith("#")) return [];
 
   const match = line.match(/\[(\d+)-(\d+)\]/);
   if (!match || match.index === undefined) {
-    return /^https?:\/\//i.test(line) || line.startsWith("magnet:?") ? [line] : [];
+    return /^(https?|ftp):\/\//i.test(line) || line.startsWith("magnet:?") ? [line] : [];
   }
 
   const startStr = match[1];
@@ -67,9 +98,13 @@ export function extractUrlsFromText(text: string): string[] {
   for (const line of text.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const matches = trimmed.match(/(https?:\/\/[^\s"'<>]+|magnet:\?xt=urn:[^\s"'<>]+)/gi);
+    const matches = trimmed.match(
+      /(https?:\/\/[^\s"'<>]+|ftp:\/\/[^\s"'<>]+|magnet:\?xt=urn:[^\s"'<>]+|thunder:\/\/[^\s"'<>]+|flashget:\/\/[^\s"'<>]+|qqdl:\/\/[^\s"'<>]+)/gi,
+    );
     if (matches) {
-      for (const m of matches) urls.add(m);
+      for (const m of matches) {
+        urls.add(unwrapCustomUrlScheme(m));
+      }
     }
   }
   return Array.from(urls);

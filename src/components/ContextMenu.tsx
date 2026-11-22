@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Play, Pause, FolderOpen, FileCheck, Trash2, Link2, RotateCcw } from "lucide-react";
+import { Play, Pause, FolderOpen, FileCheck, Trash2, Link2, RotateCcw, RefreshCw, Square } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { DownloadTask } from "../types";
 
 interface ContextMenuProps {
@@ -13,6 +14,7 @@ interface ContextMenuProps {
   onOpenFile: (path: string) => void;
   onOpenFolder: (path: string) => void;
   onCopyLink: (url: string) => void;
+  onRelink?: (task: DownloadTask) => void;
 }
 
 /**
@@ -30,6 +32,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
   onOpenFile,
   onOpenFolder,
   onCopyLink,
+  onRelink,
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
@@ -119,6 +122,19 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           <span>Pause</span>
         </button>
       )}
+      {isDownloading && task.category === "media" && (
+        <button
+          type="button"
+          role="menuitem"
+          className={itemClass}
+          onClick={run(() => {
+            invoke("stop_and_save_live_recording", { taskId: task.id }).catch(() => {});
+          })}
+        >
+          <Square className="w-4 h-4 text-red-500 fill-current" />
+          <span>Stop & Save Live Stream</span>
+        </button>
+      )}
       {canResume && (
         <button
           type="button"
@@ -152,6 +168,17 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         <Link2 className="w-4 h-4 text-slate-500" />
         <span>Copy download link</span>
       </button>
+      {onRelink && !isFileReady && task.category !== "torrents" && (
+        <button
+          type="button"
+          role="menuitem"
+          className={itemClass}
+          onClick={run(() => onRelink(task))}
+        >
+          <RefreshCw className="w-4 h-4 text-emerald-500" />
+          <span>Change link (Refresh)…</span>
+        </button>
+      )}
       <div className="my-1 border-t border-zr" />
       <button
         type="button"

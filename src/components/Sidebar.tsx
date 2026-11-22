@@ -27,6 +27,7 @@ interface SidebarProps {
   categoryCounts: Record<CategoryType, number>;
   statusCounts: Record<StatusFilterType, number>;
   bridgeOnline: boolean;
+  bridgePort?: number;
   onOpenSettings: () => void;
   onOpenHelp?: (tab?: "help" | "logs") => void;
   onOpenMediaModal: () => void;
@@ -41,6 +42,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   categoryCounts,
   statusCounts,
   bridgeOnline,
+  bridgePort = 9666,
   onOpenSettings,
   onOpenHelp,
   onOpenMediaModal,
@@ -200,7 +202,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="font-medium text-zr-secondary">Browser Bridge</span>
           </div>
           <span className="font-semibold text-zr-secondary text-[12px]">
-            :9666
+            :{bridgePort || 9666}
           </span>
         </div>
 

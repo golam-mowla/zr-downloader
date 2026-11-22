@@ -5,6 +5,7 @@ import { StandaloneDownloadWindow } from "./components/StandaloneDownloadWindow"
 import { CompletionNotice } from "./components/CompletionNotice";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./index.css";
+import "./i18n";
 
 const searchParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
 const isPopupWindow = searchParams?.get("popup") === "true";

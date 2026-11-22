@@ -1,8 +1,21 @@
 // ZR Downloader - Background Service Worker (Manifest V3)
 // IDM-Style High-Speed Interception & Passive Media Stream Sniffer
 
-const ZR_BRIDGE_PORT = 9666;
-const ZR_BRIDGE_URL = `http://127.0.0.1:${ZR_BRIDGE_PORT}`;
+const DEFAULT_ZR_BRIDGE_PORT = 9666;
+
+async function getBridgeConfig() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["bridgePort", "bridgeToken"], (res) => {
+      const port = parseInt(res.bridgePort, 10) || DEFAULT_ZR_BRIDGE_PORT;
+      const token = res.bridgeToken ? String(res.bridgeToken).trim() : "";
+      resolve({
+        port,
+        token,
+        url: `http://127.0.0.1:${port}`,
+      });
+    });
+  });
+}
 
 // Interceptable file extensions for IDM-style capture
 const INTERCEPT_EXTENSIONS = new Set([
@@ -418,7 +431,16 @@ function getRealFormats(url) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
     try {
-      const res = await fetch(`${ZR_BRIDGE_URL}/formats?url=${encodeURIComponent(key)}`, { signal: controller.signal });
+      const config = await getBridgeConfig();
+      const headers = {};
+      if (config.token) {
+        headers["X-ZR-Token"] = config.token;
+      }
+      const tokenParam = config.token ? `&token=${encodeURIComponent(config.token)}` : "";
+      const res = await fetch(`${config.url}/formats?url=${encodeURIComponent(key)}${tokenParam}`, {
+        headers,
+        signal: controller.signal,
+      });
       if (!res.ok) throw new Error("formats " + res.status);
       return await res.json();
     } catch (e) {
@@ -492,6 +514,7 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
   }
 
   // 1. Try sending to local bridge HTTP server (if app is running)
+  const config = await getBridgeConfig();
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 2500);
@@ -505,9 +528,15 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
     const directParam = isDirectFile ? `&isDirectFile=true` : "";
     const lowSpaceParam = lowDiskSpace ? `&lowDiskSpace=true` : "";
     const formatParam = formatId ? `&formatid=${encodeURIComponent(formatId)}` : "";
-    const bridgeEndpoint = `${ZR_BRIDGE_URL}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}${formatParam}`;
+    const tokenParam = config.token ? `&token=${encodeURIComponent(config.token)}` : "";
+    const bridgeEndpoint = `${config.url}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}${formatParam}${tokenParam}`;
+    const headers = {};
+    if (config.token) {
+      headers["X-ZR-Token"] = config.token;
+    }
     const resp = await fetch(bridgeEndpoint, {
       method: "GET",
+      headers,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
@@ -543,7 +572,8 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
   const referrerProtoParam = referrer ? `&referrer=${encodeURIComponent(referrer)}` : "";
   const containerProtoParam = container ? `&container=${encodeURIComponent(container)}` : "";
   const formatProtoParam = formatId ? `&formatid=${encodeURIComponent(formatId)}` : "";
-  const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}${lowSpaceParam}${referrerProtoParam}${containerProtoParam}${formatProtoParam}`;
+  const tokenProtoParam = config.token ? `&token=${encodeURIComponent(config.token)}` : "";
+  const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}${lowSpaceParam}${referrerProtoParam}${containerProtoParam}${formatProtoParam}${tokenProtoParam}`;
 
   if (effectiveTabId) {
     try {
@@ -622,10 +652,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "CHECK_ZR_STATUS" || request.action === "CHECK_GDM_STATUS") {
-    fetch(`${ZR_BRIDGE_URL}/ping`, { method: "GET" })
-      .then((res) => res.json())
-      .then((data) => sendResponse({ online: true, data }))
-      .catch(() => sendResponse({ online: false }));
+    getBridgeConfig().then((config) => {
+      fetch(`${config.url}/ping`, { method: "GET" })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.port && data.port !== config.port) {
+            chrome.storage.local.set({ bridgePort: data.port });
+          }
+          sendResponse({
+            online: true,
+            port: (data && data.port) || config.port,
+            hasToken: Boolean(config.token),
+            data,
+          });
+        })
+        .catch(() => sendResponse({ online: false, port: config.port, hasToken: Boolean(config.token) }));
+    });
     return true;
   }
 });

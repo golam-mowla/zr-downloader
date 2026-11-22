@@ -1,6 +1,6 @@
 [package]
 name = "zr-downloader"
-version = "1.2.42"
+version = "1.2.43"
 description = "ZR Downloader - High-performance multithreaded HTTP, media and torrent downloader"
 authors = ["Golam Mowla"]
 edition = "2021"
@@ -30,3 +30,5 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 md-5 = "0.10"
 sha2 = "0.10"
 arboard = "3"
+base64 = "0.22"
+suppaftp = { version = "6.0", default-features = false, features = ["async"] }

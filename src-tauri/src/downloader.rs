@@ -40,6 +40,8 @@ pub struct UrlMetadata {
     pub supports_ranges: bool,
     pub content_type: Option<String>,
     pub category: String,
+    #[serde(default)]
+    pub last_modified: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +103,12 @@ pub struct DownloadTask {
     pub auth_username: String,
     #[serde(default)]
     pub auth_password: String,
+    #[serde(default)]
+    pub last_modified: Option<String>,
+    #[serde(default)]
+    pub custom_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub proxy: Option<String>,
 }
 
 impl Default for DownloadTask {
@@ -139,6 +147,9 @@ impl Default for DownloadTask {
             scan_status: String::new(),
             auth_username: String::new(),
             auth_password: String::new(),
+            last_modified: None,
+            custom_headers: None,
+            proxy: None,
         }
     }
 }
@@ -155,17 +166,20 @@ pub struct EngineState {
     pub client: Arc<RwLock<reqwest::Client>>,
     pub global_limiter: TokenBucketLimiter,
     pub task_limiters: Arc<RwLock<HashMap<String, TokenBucketLimiter>>>,
+    pub current_settings: Arc<RwLock<AppSettings>>,
 }
 
 impl EngineState {
     pub fn new() -> Self {
-        let client = settings::build_reqwest_client(&AppSettings::default());
+        let default_settings = AppSettings::default();
+        let client = settings::build_reqwest_client(&default_settings);
         Self {
             tasks: Arc::new(RwLock::new(HashMap::new())),
             controls: Arc::new(RwLock::new(HashMap::new())),
             client: Arc::new(RwLock::new(client)),
             global_limiter: TokenBucketLimiter::new(0),
             task_limiters: Arc::new(RwLock::new(HashMap::new())),
+            current_settings: Arc::new(RwLock::new(default_settings)),
         }
     }
 
@@ -176,8 +190,19 @@ impl EngineState {
     pub async fn apply_settings(&self, app_settings: &AppSettings) {
         let rebuilt = settings::build_reqwest_client(app_settings);
         *self.client.write().await = rebuilt;
+        *self.current_settings.write().await = app_settings.clone();
         self.global_limiter
             .set_rate_bps(app_settings.global_speed_limit_bps());
+        if app_settings.remove_missing_tasks {
+            let mut tasks = self.tasks.write().await;
+            tasks.retain(|_, t| {
+                if matches!(t.status.as_str(), "completed" | "completed_with_warning") {
+                    Path::new(&t.save_path).exists()
+                } else {
+                    true
+                }
+            });
+        }
     }
 
     pub async fn set_task_speed_limit(&self, task_id: &str, kb_per_sec: u64) {
@@ -565,6 +590,11 @@ pub async fn probe_url_with_auth(
 
     let category = detect_category_with_mime(&filename, content_type.as_deref());
 
+    let last_modified = headers
+        .get("last-modified")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     Ok(UrlMetadata {
         url: url.to_string(),
         filename,
@@ -572,6 +602,7 @@ pub async fn probe_url_with_auth(
         supports_ranges,
         content_type,
         category,
+        last_modified,
     })
 }
 
@@ -690,6 +721,51 @@ pub fn split_fixed_ranges(total_bytes: u64, chunk_count: usize) -> Vec<(usize, u
         ranges.push((i, start, end));
     }
     ranges
+}
+
+/// Rolling speed window to evaluate stable throughput across 5 samples
+#[derive(Debug, Clone, Default)]
+pub struct RollingSpeedWindow {
+    pub samples: Vec<u64>,
+    pub capacity: usize,
+}
+
+impl RollingSpeedWindow {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            samples: Vec::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn push(&mut self, speed: u64) {
+        if self.samples.len() >= self.capacity {
+            self.samples.remove(0);
+        }
+        self.samples.push(speed);
+    }
+
+    pub fn average(&self) -> u64 {
+        if self.samples.is_empty() {
+            return 0;
+        }
+        let sum: u64 = self.samples.iter().sum();
+        sum / (self.samples.len() as u64)
+    }
+
+    pub fn is_stable(&self, max_deviation: f64) -> bool {
+        if self.samples.len() < self.capacity {
+            return false;
+        }
+        let avg = self.average() as f64;
+        if avg <= 0.0 {
+            return false;
+        }
+        self.samples.iter().all(|&s| {
+            let diff = (s as f64 - avg).abs();
+            (diff / avg) <= max_deviation
+        })
+    }
 }
 
 /// Auto-connection scaling condition: add 4 connections every 5 s while total speed grew >10% up to 32.
@@ -819,19 +895,25 @@ async fn run_chunk_worker(mut p: ChunkWorkerParams) -> Result<(), String> {
 
         let url = p.current_url.read().await.clone();
         let client = p.state.current_client().await;
+        let (active_ua, active_headers) = {
+            let s = p.state.current_settings.read().await;
+            (s.get_active_user_agent(), s.get_active_headers())
+        };
         let mut req = client
             .get(&url)
-            .header(
-                USER_AGENT,
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            )
-            .header(
-                "Accept",
-                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            )
-            .header("Accept-Language", "en-US,en;q=0.9")
+            .header(USER_AGENT, active_ua)
             .header("Accept-Encoding", "identity")
             .header("Connection", "keep-alive");
+
+        for (k, v) in active_headers {
+            req = req.header(k, v);
+        }
+
+        if let Some(task_headers) = p.state.tasks.read().await.get(&p.task_id).and_then(|t| t.custom_headers.clone()) {
+            for (k, v) in task_headers {
+                req = req.header(k, v);
+            }
+        }
 
         if url.contains("safefilehosting.com") {
             req = req.header("Referer", "https://igetintopc.com/");
@@ -1718,6 +1800,17 @@ pub async fn execute_multithreaded_download(
             }
             t.checksum_status = checksum_status;
             t.checksum_actual = checksum_actual;
+
+            if current_settings.preserve_last_modified {
+                if let Some(ref lm) = task_snapshot.last_modified {
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(lm) {
+                        let sys_time = std::time::SystemTime::from(dt);
+                        if let Ok(file) = std::fs::File::options().write(true).open(&final_path) {
+                            let _ = file.set_modified(sys_time);
+                        }
+                    }
+                }
+            }
 
             let _ = app.emit("download-complete", t.clone());
             let _ = app.emit("download-progress", t.clone());

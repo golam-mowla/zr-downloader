@@ -16,11 +16,17 @@ import {
   AlertTriangle,
   Plus,
   Trash2,
+  Copy,
+  Check,
+  Key,
+  FileCode,
+  Terminal,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { ToolVersionInfo, AppSettings, SchedulerConfig } from "../types";
+import { ToolVersionInfo, AppSettings, SchedulerConfig, HeaderPreset } from "../types";
 import { AppUpdatePanel, useAppUpdate } from "./AppUpdatePanel";
 
 const TOOLS_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -94,6 +100,24 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   startWithWindows: false,
   minimizeToTray: false,
   closeToTray: true,
+  bridgePort: 9666,
+  bridgeAutoPort: true,
+  bridgePairToken: "",
+  nameConflict: "keep_both",
+  preserveLastModified: false,
+  verifySsl: true,
+  useSystemDns: true,
+  deleteFilesOnRemove: false,
+  removeMissingTasks: false,
+  headerPresets: [],
+  activeHeaderPreset: "Chrome (Windows)",
+  aria2RpcEnabled: false,
+  aria2RpcPort: 16800,
+  aria2RpcToken: "",
+  githubMirrorEnabled: false,
+  githubMirrorUrl: "https://ghproxy.net/",
+  huggingfaceMirrorEnabled: false,
+  huggingfaceMirrorUrl: "https://hf-mirror.com/",
 };
 
 const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
@@ -116,7 +140,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   onListImported,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    "general" | "connection" | "scheduler" | "network" | "tools"
+    "general" | "connection" | "scheduler" | "network" | "headers" | "aria2" | "tools"
   >("general");
   const [savePath, setSavePath] = useState(defaultDir);
   const [appSettings, setAppSettings] = useState<AppSettings>({
@@ -130,6 +154,33 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   const [newCredPass, setNewCredPass] = useState("");
   const [savingSettings, setSavingSettings] = useState(false);
   const [transferMsg, setTransferMsg] = useState<string | null>(null);
+  const [copiedToken, setCopiedToken] = useState(false);
+  const [regeneratingToken, setRegeneratingToken] = useState(false);
+  const [activeBridgePort, setActiveBridgePort] = useState<number>(9666);
+  const [copiedRpcToken, setCopiedRpcToken] = useState(false);
+  const [regeneratingRpcToken, setRegeneratingRpcToken] = useState(false);
+  const [activeAria2Port, setActiveAria2Port] = useState<number>(16800);
+  const [aria2Running, setAria2Running] = useState<boolean>(false);
+
+  const { i18n } = useTranslation();
+  const [currentLang, setCurrentLang] = useState(localStorage.getItem("zr-lang") || "en");
+  const handleLanguageChange = (lang: string) => {
+    setCurrentLang(lang);
+    localStorage.setItem("zr-lang", lang);
+    i18n.changeLanguage(lang);
+  };
+
+  const handleRegenerateRpcToken = async () => {
+    try {
+      setRegeneratingRpcToken(true);
+      const newToken = await invoke<string>("regenerate_aria2_token");
+      setAppSettings((prev) => ({ ...prev, aria2RpcToken: newToken }));
+    } catch (e) {
+      console.error("Failed to regenerate aria2 token:", e);
+    } finally {
+      setRegeneratingRpcToken(false);
+    }
+  };
 
   // Core Tools Info
   const [tools, setTools] = useState<ToolVersionInfo[]>([]);
@@ -162,8 +213,29 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
           if (res) setSchedulerCfg({ ...DEFAULT_SCHEDULER_CONFIG, ...res });
         })
         .catch(() => {});
+      invoke<number>("get_active_bridge_port")
+        .then(setActiveBridgePort)
+        .catch(() => {});
+      invoke<[boolean, number]>("get_active_aria2_rpc_status")
+        .then(([running, port]) => {
+          setAria2Running(running);
+          setActiveAria2Port(port);
+        })
+        .catch(() => {});
     }
   }, [isOpen]);
+
+  const handleRegenerateToken = async () => {
+    setRegeneratingToken(true);
+    try {
+      const newToken = await invoke<string>("regenerate_bridge_token");
+      setAppSettings((prev) => ({ ...prev, bridgePairToken: newToken }));
+    } catch (err) {
+      console.error("Failed to regenerate bridge token:", err);
+    } finally {
+      setRegeneratingToken(false);
+    }
+  };
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
@@ -541,6 +613,30 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
           </button>
 
           <button
+            onClick={() => setActiveTab("headers")}
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+              activeTab === "headers"
+                ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
+            }`}
+          >
+            <FileCode className="w-4 h-4" />
+            <span>Headers & UA</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab("aria2")}
+            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+              activeTab === "aria2"
+                ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
+                : "border-transparent text-zr-secondary hover:text-zr-primary"
+            }`}
+          >
+            <Terminal className="w-4 h-4" />
+            <span>aria2 RPC</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab("tools")}
             className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
               activeTab === "tools"
@@ -557,6 +653,27 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
         <div className="p-6 space-y-4 max-h-[65vh] overflow-y-auto">
           {activeTab === "general" && (
             <div className="space-y-4">
+              {/* Display Language (i18n) */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-[13px] text-zr-primary flex items-center gap-1.5">
+                    <Globe className="w-4 h-4 text-blue-500" />
+                    <span>Display Language / ভাষা</span>
+                  </div>
+                  <div className="text-[12px] text-zr-secondary">
+                    Select English or বাংলা (Bangla)
+                  </div>
+                </div>
+                <select
+                  value={currentLang}
+                  onChange={(e) => handleLanguageChange(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px] font-medium"
+                >
+                  <option value="en">English</option>
+                  <option value="bn">বাংলা (Bangla)</option>
+                </select>
+              </div>
+
               {/* Default Downloads Directory */}
               <div className="space-y-1.5">
                 <label className="text-[13px] font-medium text-zr-secondary">
@@ -684,6 +801,95 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 </p>
               </div>
 
+              {/* File Handling & Conflict Resolution */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-3">
+                <div className="text-[13px] font-semibold text-zr-primary flex items-center space-x-2">
+                  <Folder className="w-4 h-4 text-zr-accent" />
+                  <span>File Handling &amp; Conflict Management</span>
+                </div>
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-[12.5px] font-medium text-zr-primary">Existing File Name Conflict</div>
+                      <div className="text-[11px] text-zr-secondary">When a file with the same name already exists</div>
+                    </div>
+                    <select
+                      value={appSettings.nameConflict || "keep_both"}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({ ...prev, nameConflict: e.target.value }))
+                      }
+                      className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12px] font-semibold"
+                    >
+                      <option value="keep_both">Keep Both (Auto-rename)</option>
+                      <option value="overwrite">Overwrite Existing</option>
+                      <option value="ask">Ask Each Time</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[12.5px] pt-1">
+                    <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                      <div>
+                        <span className="text-zr-primary font-medium block">Preserve Server Date</span>
+                        <span className="text-[10.5px] text-zr-secondary">Set file mtime from Last-Modified</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(appSettings.preserveLastModified)}
+                        onChange={(e) =>
+                          setAppSettings((p) => ({ ...p, preserveLastModified: e.target.checked }))
+                        }
+                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                      <div>
+                        <span className="text-zr-primary font-medium block">Delete Files on Remove</span>
+                        <span className="text-[10.5px] text-zr-secondary">Also delete from disk on remove</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(appSettings.deleteFilesOnRemove)}
+                        onChange={(e) =>
+                          setAppSettings((p) => ({ ...p, deleteFilesOnRemove: e.target.checked }))
+                        }
+                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                      <div>
+                        <span className="text-zr-primary font-medium block">Prune Missing Files</span>
+                        <span className="text-[10.5px] text-zr-secondary">Remove tasks if file deleted</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(appSettings.removeMissingTasks)}
+                        onChange={(e) =>
+                          setAppSettings((p) => ({ ...p, removeMissingTasks: e.target.checked }))
+                        }
+                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                      />
+                    </label>
+
+                    <label className="flex items-center justify-between p-2 rounded-lg border border-zr bg-zr-surface cursor-pointer">
+                      <div>
+                        <span className="text-zr-primary font-medium block">Use System DNS</span>
+                        <span className="text-[10.5px] text-zr-secondary">OS native socket resolution</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={appSettings.useSystemDns !== false}
+                        onChange={(e) =>
+                          setAppSettings((p) => ({ ...p, useSystemDns: e.target.checked }))
+                        }
+                        className="w-4 h-4 accent-blue-600 cursor-pointer"
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               {/* App Shell & UX Settings (I, J) */}
               <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
                 <div className="text-[13px] font-semibold text-zr-primary">
@@ -745,12 +951,119 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 )}
               </div>
 
-              {/* Browser Integration Info */}
-              <div className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-900/40 border border-zr flex items-center space-x-2 text-[12px] text-zr-secondary">
-                <Globe className="w-4 h-4 text-zr-accent shrink-0" />
-                <span>
-                  Listening on <b>http://127.0.0.1:9666</b> &amp; <b>zr://</b> protocol handler.
-                </span>
+              {/* Browser Extension Bridge & Security */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-zr space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Globe className="w-4 h-4 text-zr-accent shrink-0" />
+                    <span className="text-[13px] font-semibold text-zr-primary">
+                      Browser Extension Bridge
+                    </span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800">
+                    Active: :{activeBridgePort || appSettings.bridgePort || 9666}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="text-[11px] font-medium text-zr-secondary block mb-1">
+                      Bridge Port
+                    </label>
+                    <input
+                      type="number"
+                      value={appSettings.bridgePort || 9666}
+                      onChange={(e) =>
+                        setAppSettings((p) => ({
+                          ...p,
+                          bridgePort: parseInt(e.target.value, 10) || 9666,
+                        }))
+                      }
+                      className="w-full px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[12px] font-mono"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2 pt-5">
+                    <input
+                      type="checkbox"
+                      id="bridgeAutoPort"
+                      checked={appSettings.bridgeAutoPort !== false}
+                      onChange={(e) =>
+                        setAppSettings((p) => ({
+                          ...p,
+                          bridgeAutoPort: e.target.checked,
+                        }))
+                      }
+                      className="w-4 h-4 text-zr-accent rounded border-zr focus:ring-0 cursor-pointer"
+                    />
+                    <label
+                      htmlFor="bridgeAutoPort"
+                      className="text-[12px] text-zr-secondary cursor-pointer select-none"
+                    >
+                      Auto-fallback to free port if busy
+                    </label>
+                  </div>
+                </div>
+
+                {/* Bridge Pair Token */}
+                <div className="pt-2 border-t border-zr space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-semibold text-zr-primary flex items-center space-x-1.5">
+                      <Key className="w-3.5 h-3.5 text-zr-accent" />
+                      <span>Bridge Pair Token (Security)</span>
+                    </label>
+                    <span className="text-[10px] text-zr-secondary">
+                      Paste once into Chrome/Firefox extension
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={appSettings.bridgePairToken || ""}
+                      className="flex-1 px-3 py-1.5 rounded-lg border border-zr bg-zr-tableHead text-zr-primary text-[12px] font-mono tracking-wider select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (appSettings.bridgePairToken) {
+                          navigator.clipboard.writeText(appSettings.bridgePairToken);
+                          setCopiedToken(true);
+                          setTimeout(() => setCopiedToken(false), 2000);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-[12px] font-semibold text-zr-primary flex items-center space-x-1 shrink-0"
+                    >
+                      {copiedToken ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-500" />
+                          <span className="text-emerald-500">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-zr-secondary" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={regeneratingToken}
+                      onClick={handleRegenerateToken}
+                      className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface hover:bg-slate-100 dark:hover:bg-slate-800 text-[12px] font-semibold text-zr-primary flex items-center space-x-1 shrink-0 disabled:opacity-50"
+                      title="Generate a new secure pair token"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 text-zr-secondary ${
+                          regeneratingToken ? "animate-spin" : ""
+                        }`}
+                      />
+                      <span>Regenerate</span>
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-zr-secondary">
+                    ZR Downloader requires browser requests to authenticate with this token. Web pages cannot access your downloads.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -1128,6 +1441,37 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                 </div>
               </div>
 
+              {/* SSL Certificate & Security */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-[13px] text-zr-primary flex items-center space-x-1.5">
+                      <Shield className="w-4 h-4 text-zr-accent" />
+                      <span>SSL / TLS Certificate Verification</span>
+                    </div>
+                    <div className="text-[12px] text-zr-secondary">
+                      Validates HTTPS certificates against standard trust store
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={appSettings.verifySsl !== false}
+                    onChange={(e) =>
+                      setAppSettings((p) => ({ ...p, verifySsl: e.target.checked }))
+                    }
+                    className="w-4 h-4 accent-blue-600 cursor-pointer"
+                  />
+                </div>
+                {appSettings.verifySsl === false && (
+                  <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[12px] flex items-center space-x-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    <span>
+                      <b>Warning:</b> SSL verification is disabled. Untrusted, self-signed, and invalid HTTPS certificates will be accepted without validation.
+                    </span>
+                  </div>
+                )}
+              </div>
+
               {/* Per-Site HTTP Basic Auth Credentials */}
               <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-2.5">
                 <div className="font-semibold text-[13px] text-zr-primary">
@@ -1208,6 +1552,234 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* GitHub & HuggingFace Mirror Proxy */}
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-3">
+                <div className="font-semibold text-[13px] text-zr-primary">
+                  Download Mirrors & Proxies (GitHub & HuggingFace)
+                </div>
+                <div className="text-[12px] text-zr-secondary">
+                  Accelerate downloads from GitHub releases/archives and HuggingFace model repos via fast mirror endpoints.
+                </div>
+
+                <div className="space-y-2 pt-1 border-t border-zr">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-medium text-zr-primary">GitHub Fast Mirror</span>
+                    <input
+                      type="checkbox"
+                      checked={appSettings.githubMirrorEnabled ?? false}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({ ...prev, githubMirrorEnabled: e.target.checked }))
+                      }
+                      className="w-4 h-4 accent-blue-600 cursor-pointer"
+                    />
+                  </div>
+                  {appSettings.githubMirrorEnabled && (
+                    <input
+                      type="text"
+                      value={appSettings.githubMirrorUrl || ""}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({ ...prev, githubMirrorUrl: e.target.value }))
+                      }
+                      placeholder="https://ghproxy.net/"
+                      className="w-full px-3 py-1.5 rounded-lg font-mono text-[12px] border border-zr bg-zr-surface text-zr-primary"
+                    />
+                  )}
+                </div>
+
+                <div className="space-y-2 pt-2 border-t border-zr">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-medium text-zr-primary">HuggingFace Mirror</span>
+                    <input
+                      type="checkbox"
+                      checked={appSettings.huggingfaceMirrorEnabled ?? false}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({ ...prev, huggingfaceMirrorEnabled: e.target.checked }))
+                      }
+                      className="w-4 h-4 accent-blue-600 cursor-pointer"
+                    />
+                  </div>
+                  {appSettings.huggingfaceMirrorEnabled && (
+                    <input
+                      type="text"
+                      value={appSettings.huggingfaceMirrorUrl || ""}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({ ...prev, huggingfaceMirrorUrl: e.target.value }))
+                      }
+                      placeholder="https://hf-mirror.com"
+                      className="w-full px-3 py-1.5 rounded-lg font-mono text-[12px] border border-zr bg-zr-surface text-zr-primary"
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "headers" && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-3">
+                <div className="font-semibold text-[13px] text-zr-primary flex items-center gap-1.5">
+                  <FileCode className="w-4 h-4 text-blue-500" />
+                  <span>User-Agent & Request Header Presets</span>
+                </div>
+                <div className="text-[12px] text-zr-secondary">
+                  Choose the active browser profile used when requesting downloads. Sites blocking non-browser clients will see standard browser headers.
+                </div>
+
+                <div className="space-y-1.5 pt-2">
+                  <label className="text-[12px] font-semibold text-zr-primary">Active Preset</label>
+                  <select
+                    value={appSettings.activeHeaderPreset || "Chrome (Windows)"}
+                    onChange={(e) =>
+                      setAppSettings((prev) => ({ ...prev, activeHeaderPreset: e.target.value }))
+                    }
+                    className="w-full px-3 py-2 rounded-lg border border-zr bg-zr-surface text-zr-primary text-[13px] font-medium"
+                  >
+                    {(appSettings.headerPresets && appSettings.headerPresets.length > 0
+                      ? appSettings.headerPresets
+                      : [
+                          { name: "Chrome (Windows)" },
+                          { name: "Firefox (Windows)" },
+                          { name: "Edge (Windows)" },
+                          { name: "Android Chrome" },
+                          { name: "curl" },
+                        ]
+                    ).map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {(() => {
+                  const active = appSettings.headerPresets?.find(
+                    (p) => p.name === (appSettings.activeHeaderPreset || "Chrome (Windows)")
+                  );
+                  return (
+                    <div className="space-y-2 pt-2 border-t border-zr text-[12px]">
+                      <div>
+                        <span className="font-semibold text-zr-secondary block mb-0.5">User-Agent:</span>
+                        <div className="px-3 py-2 rounded-lg border border-zr bg-zr-surface font-mono text-[11px] text-zr-primary break-all select-all">
+                          {active?.userAgent ||
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"}
+                        </div>
+                      </div>
+                      {active?.headers && Object.keys(active.headers).length > 0 && (
+                        <div>
+                          <span className="font-semibold text-zr-secondary block mb-0.5">Headers:</span>
+                          <div className="p-2 rounded-lg border border-zr bg-zr-surface font-mono text-[11px] space-y-0.5 text-zr-primary max-h-36 overflow-y-auto">
+                            {Object.entries(active.headers).map(([k, v]) => (
+                              <div key={k} className="truncate">
+                                <b className="text-blue-500">{k}:</b> {v}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "aria2" && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-xl border border-zr bg-slate-50 dark:bg-slate-900/40 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Terminal className="w-4 h-4 text-emerald-500" />
+                    <div>
+                      <div className="font-semibold text-[13px] text-zr-primary">
+                        aria2-Compatible JSON-RPC API
+                      </div>
+                      <div className="text-[12px] text-zr-secondary">
+                        Allow web extensions (Aria2 for Chrome, Baidu Exporter, YAAW) and tools to send downloads directly to ZR Downloader
+                      </div>
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={appSettings.aria2RpcEnabled ?? false}
+                    onChange={(e) =>
+                      setAppSettings((prev) => ({ ...prev, aria2RpcEnabled: e.target.checked }))
+                    }
+                    className="w-4 h-4 accent-blue-600 cursor-pointer"
+                  />
+                </div>
+
+                <div className="pt-2 border-t border-zr space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-semibold text-zr-primary">RPC Listening Port</span>
+                    <input
+                      type="number"
+                      value={appSettings.aria2RpcPort || 16800}
+                      onChange={(e) =>
+                        setAppSettings((prev) => ({
+                          ...prev,
+                          aria2RpcPort: parseInt(e.target.value, 10) || 16800,
+                        }))
+                      }
+                      className="w-28 px-3 py-1.5 rounded-lg font-mono text-[13px] border border-zr bg-zr-surface text-zr-primary text-right"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[12px] font-semibold text-zr-primary">Secret RPC Token (Optional)</span>
+                      <button
+                        type="button"
+                        onClick={handleRegenerateRpcToken}
+                        disabled={regeneratingRpcToken}
+                        className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 flex items-center space-x-1"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${regeneratingRpcToken ? "animate-spin" : ""}`} />
+                        <span>Regenerate</span>
+                      </button>
+                    </div>
+                    <div className="flex space-x-2">
+                      <input
+                        type="text"
+                        value={appSettings.aria2RpcToken || ""}
+                        onChange={(e) =>
+                          setAppSettings((prev) => ({ ...prev, aria2RpcToken: e.target.value }))
+                        }
+                        placeholder="Leave empty for no secret token"
+                        className="flex-1 px-3 py-1.5 rounded-lg font-mono text-[12px] border border-zr bg-zr-surface text-zr-primary"
+                      />
+                      {appSettings.aria2RpcToken && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(appSettings.aria2RpcToken || "");
+                            setCopiedRpcToken(true);
+                            setTimeout(() => setCopiedRpcToken(false), 2000);
+                          }}
+                          className="px-3 py-1.5 rounded-lg border border-zr bg-zr-surface text-[12px] font-semibold text-zr-secondary hover:text-zr-primary flex items-center space-x-1"
+                        >
+                          {copiedRpcToken ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                          <span>{copiedRpcToken ? "Copied" : "Copy"}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-lg border border-zr bg-zr-surface flex items-center justify-between text-[12px]">
+                    <span className="text-zr-secondary">RPC Endpoint:</span>
+                    <span className="font-mono text-emerald-600 dark:text-emerald-400 font-semibold select-all">
+                      http://127.0.0.1:{appSettings.aria2RpcPort || 16800}/jsonrpc
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-[12px]">
+                    <span className={`inline-block w-2.5 h-2.5 rounded-full ${aria2Running ? "bg-emerald-500" : "bg-slate-400"}`} />
+                    <span className="text-zr-secondary">
+                      Status: {aria2Running ? `Active on port ${activeAria2Port}` : "Stopped (save to activate)"}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           )}

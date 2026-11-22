@@ -91,6 +91,10 @@ pub struct MediaInfo {
     #[serde(rename = "audioStreams")]
     pub audio_streams: Vec<MediaStream>,
     pub subtitles: Vec<SubtitleTrack>,
+    #[serde(default)]
+    pub is_live: bool,
+    #[serde(default)]
+    pub live_status: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -1803,6 +1807,10 @@ pub async fn fetch_media_info_with_app(
             .map(|s| s.to_string());
         let duration = v["duration"].as_f64();
         let thumbnail = v["thumbnail"].as_str().map(|s| s.to_string());
+        let is_live = v["is_live"].as_bool().unwrap_or(false)
+            || v["was_live"].as_bool().unwrap_or(false)
+            || v["live_status"].as_str() == Some("is_live");
+        let live_status = v["live_status"].as_str().map(|s| s.to_string());
 
         let mut video_raw: Vec<(u32, u32, u64, MediaStream)> = Vec::new();
         let mut audio_raw: Vec<(u32, u64, MediaStream)> = Vec::new();
@@ -2028,6 +2036,8 @@ pub async fn fetch_media_info_with_app(
             video_streams,
             audio_streams,
             subtitles,
+            is_live,
+            live_status,
         })
     })
     .await
@@ -5079,6 +5089,46 @@ pub async fn cancel_download(
     }
     for pid in pids_to_kill {
         kill_process_tree(pid);
+    }
+    crate::spawn_save_all_tasks(&app);
+    Ok(())
+}
+
+#[command]
+pub async fn stop_and_save_live_recording(
+    app: AppHandle,
+    state: State<'_, DownloadState>,
+    task_id: String,
+) -> Result<(), String> {
+    let mut pid_to_kill = None;
+    {
+        let mut pids = state.active_pids.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cancels = state.cancelled_tasks.lock().unwrap_or_else(|e| e.into_inner());
+        cancels.insert(task_id.clone(), true);
+        if let Some(pid) = pids.remove(&task_id) {
+            pid_to_kill = Some(pid);
+        }
+    }
+    if let Some(pid) = pid_to_kill {
+        kill_process_tree(pid);
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    if let Ok(mut tasks_lock) = state.tasks.lock() {
+        if let Some(t) = tasks_lock.get_mut(&task_id) {
+            t.status = "completed".to_string();
+            t.percent = 100.0;
+            t.speed_bps = 0;
+            t.speed_formatted = "0 B/s".to_string();
+            t.eta_formatted = "--".to_string();
+
+            let target_path = std::path::PathBuf::from(&t.save_path);
+            let part_path = target_path.with_extension(format!("{}.part", target_path.extension().and_then(|s| s.to_str()).unwrap_or("mp4")));
+            if part_path.exists() && !target_path.exists() {
+                let _ = std::fs::rename(&part_path, &target_path);
+            }
+        }
     }
     crate::spawn_save_all_tasks(&app);
     Ok(())
