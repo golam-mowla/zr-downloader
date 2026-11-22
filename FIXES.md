@@ -45,3 +45,46 @@
 * Low Disk Space mode still has no effect on HLS/Kick (yt-dlp always needs fragments + merge space).
 * In low-disk mode the pre-allocated file still lives under the final name while downloading.
 * Added unit tests: `cargo test resume_safety_tests` (in media.rs).
+
+## Browser Extension → Desktop App Download Hand-off & Bridge Security (v3.7.0 / v1.2.44)
+
+### A. Rust Backend (`src-tauri/src`)
+1. **Settings Token Persistence (`settings.rs`)**:
+   - `SettingsState::load_or_default()` now immediately writes the configuration to disk (atomic tmp + rename) whenever `settings.json` was missing, unparsable, or contained an empty `bridgePairToken`. This keeps the pairing token stable across app restarts.
+2. **Single-Instance Forwarder Guard (`lib.rs`)**:
+   - `run()` single-instance forwarders (for command-line arguments and `/focus`) now read the HTTP response with a 1.5s timeout and ONLY exit the process on HTTP 200. On HTTP 401 or network failure, the process does not exit, continuing normally to handle the link in-process.
+3. **Bridge Security & Endpoints (`lib.rs`)**:
+   - Path matching for `/ping` is now exact (`path == "/ping"` or `path.starts_with("/ping?")`). Non-ping endpoints cannot bypass token authentication.
+   - Socket read loop reads until `\r\n\r\n` (capped at 64 KB, 3s timeout) to reliably parse complete headers and POST bodies.
+   - Added CORS support for Tauri webview origins (`http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost`).
+   - Added authenticated `GET /auth-check` endpoint returning `{"ok":true}`.
+   - `parse_open_query` parses `cookies` and `userAgent` query params. Added POST `/open` JSON body parsing.
+4. **Bridge Status Command (`lib.rs`)**:
+   - Added `get_bridge_status` Tauri command returning `{port, listening: bool}`.
+5. **Cookie & User-Agent Forwarding (`downloader.rs`, `media.rs`)**:
+   - Direct HTTP downloads apply `Cookie` and `User-Agent` headers in worker requests.
+   - yt-dlp media downloads forward cookies via `--add-header "Cookie:..."` and custom `--user-agent`.
+
+### B. Frontend (`src`)
+6. **Bridge Status Hook (`App.tsx`)**:
+   - Replaced localhost fetch polling with `invoke("get_bridge_status")`, syncing `bridgeOnline` and `bridgePort` without CORS or webview fetch restrictions.
+7. **Handoff Propagation (`App.tsx`, `AddDownloadModal.tsx`)**:
+   - `handleOpenUrl` forwards `referrer`, `cookies`, and `userAgent` through both direct downloads and the Add Download modal.
+
+### C. Browser Extension (`browser-extension`)
+8. **Manifest Version**: Bumped to `3.7.0`.
+9. **Startup Guard Removal (`background.js`)**: Removed arbitrary 4s startup timer while maintaining in-progress state and age checks.
+10. **Non-Destructive Interception Order (`background.js`)**:
+    - Browser download is NOT cancelled or erased until the desktop bridge responds successfully.
+    - If desktop bridge is offline, attempts `zr://` deep link and retries bridge.
+    - If handoff fails or is unauthorized, leaves browser download intact and displays a desktop notification explaining why.
+11. **Cookie & Header Forwarding (`background.js`, `content.js`)**:
+    - Collects cookies via `chrome.cookies.getAll` and `navigator.userAgent`.
+    - Switches from GET to POST JSON when payload exceeds 7000 characters.
+    - Best Quality grabber passes `referrer` and `isDirectFile`.
+12. **Pairing Status & Badge (`popup.js`)**:
+    - Verifies connectivity via `/ping` and authentication via `/auth-check`.
+    - Distinct states: Offline, Online (Token Required / Token Invalid), Online (Paired ✓).
+    - Sets extension badge (`KEY` with warning color) when token is invalid or unauthenticated.
+13. **Expanded Interception Rules (`background.js`)**:
+    - Intercepts documents, compressed archives (including 7z variants), packages (apk, aab, ipa), audio/video formats, and any file > 5 MB (excluding `text/html`).

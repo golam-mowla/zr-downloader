@@ -21,21 +21,117 @@ async function getBridgeConfig() {
 const INTERCEPT_EXTENSIONS = new Set([
   // Torrent files
   "torrent",
-  // Archives
+  // Archives & 7zip variants
   "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "tgz",
-  // Executables & Installers
-  "exe", "msi", "dmg", "pkg", "deb", "rpm", "apk", "appx", "msix",
-  // Media files
+  "cab", "lzh", "zst", "tbz2", "txz",
+  // Executables, Installers, Packages & Mobile
+  "exe", "msi", "dmg", "pkg", "deb", "rpm", "apk", "aab", "ipa", "appx", "msix", "jar",
+  // Media files & variants
   "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "mp3", "flac", "wav", "m4a", "aac", "ogg",
-  // Documents
-  "pdf", "epub", "mobi",
+  "ts", "m4v", "3gp", "mpg", "mpeg", "opus", "wma",
+  // Documents & Data
+  "pdf", "epub", "mobi", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv", "txt",
+  // Fonts
+  "ttf", "otf", "woff2",
   // Disk / Data
   "img", "vhd", "vmdk", "bin"
 ]);
 
 // Keep track of downloads we are actively intercepting to avoid loops
 const interceptedDownloadIds = new Set();
-const SERVICE_WORKER_START_TIME = Date.now();
+
+// Helper to get cookies for a URL as "name=value; ..." header string
+async function getCookiesHeader(url) {
+  try {
+    if (!chrome.cookies || !chrome.cookies.getAll) return "";
+    const cookies = await chrome.cookies.getAll({ url });
+    if (!cookies || cookies.length === 0) return "";
+    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  } catch (e) {
+    return "";
+  }
+}
+
+// Sends an open request to the local bridge (timeout 2.5s)
+// Returns { ok: true, status: 200 } on HTTP 200 with token,
+// { ok: false, reason: "unauthorized" } on 401 or missing token,
+// or { ok: false, reason: "offline" | "error" } otherwise.
+async function sendBridgeOpen(payload) {
+  const config = await getBridgeConfig();
+  if (!config.token) {
+    return { ok: false, reason: "unauthorized", message: "Token missing" };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+  try {
+    const filenameParam = payload.filename ? `&filename=${encodeURIComponent(payload.filename)}` : "";
+    const qualityParam = payload.quality ? `&quality=${encodeURIComponent(payload.quality)}` : "";
+    const autoParam = payload.autoStart ? `&autostart=true` : "";
+    const torrentParam = payload.isTorrent ? `&isTorrent=true` : "";
+    const referrerParam = payload.referrer ? `&referrer=${encodeURIComponent(payload.referrer)}` : "";
+    const containerParam = payload.container ? `&container=${encodeURIComponent(payload.container)}` : "";
+    const directParam = payload.isDirectFile ? `&isDirectFile=true` : "";
+    const lowSpaceParam = payload.lowDiskSpace ? `&lowDiskSpace=true` : "";
+    const formatParam = payload.formatId ? `&formatid=${encodeURIComponent(payload.formatId)}` : "";
+    const tokenParam = `&token=${encodeURIComponent(config.token)}`;
+    const cookiesParam = payload.cookies ? `&cookies=${encodeURIComponent(payload.cookies)}` : "";
+    const uaParam = payload.userAgent ? `&userAgent=${encodeURIComponent(payload.userAgent)}` : "";
+
+    const fullGetUrl = `${config.url}/open?url=${encodeURIComponent(payload.url)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}${formatParam}${tokenParam}${cookiesParam}${uaParam}`;
+
+    const headers = {
+      "X-ZR-Token": config.token,
+    };
+
+    let resp;
+    if (fullGetUrl.length > 7000) {
+      resp = await fetch(`${config.url}/open`, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: payload.url,
+          filename: payload.filename,
+          quality: payload.quality,
+          autoStart: Boolean(payload.autoStart),
+          isTorrent: Boolean(payload.isTorrent),
+          referrer: payload.referrer,
+          container: payload.container,
+          formatId: payload.formatId,
+          isDirectFile: Boolean(payload.isDirectFile),
+          lowDiskSpace: Boolean(payload.lowDiskSpace),
+          cookies: payload.cookies,
+          userAgent: payload.userAgent,
+          token: config.token,
+        }),
+        signal: controller.signal,
+      });
+    } else {
+      resp = await fetch(fullGetUrl, {
+        method: "GET",
+        headers,
+        signal: controller.signal,
+      });
+    }
+
+    clearTimeout(timeoutId);
+
+    if (resp.status === 200) {
+      return { ok: true, status: 200 };
+    } else if (resp.status === 401) {
+      return { ok: false, reason: "unauthorized", status: 401 };
+    } else {
+      return { ok: false, reason: "error", status: resp.status };
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return { ok: false, reason: "offline", error: err?.message };
+  }
+}
 
 // Passive media stream sniffer cache: tabId -> Map(streamUrl -> streamInfo)
 const tabMediaStreams = new Map();
@@ -256,18 +352,12 @@ async function handleDownloadInterception(downloadItem, suggest) {
   try {
     if (!downloadItem) return false;
 
-    // 1. Prevent startup notification/interception storms:
-    // If browser just launched or restored tabs, ignore historical items
-    if (Date.now() - SERVICE_WORKER_START_TIME < 4000) {
-      return false;
-    }
-
-    // 2. Ignore non-active downloads (completed, interrupted, paused from previous sessions)
+    // 1. Ignore non-active downloads (completed, interrupted, paused from previous sessions)
     if (downloadItem.state && downloadItem.state !== "in_progress") {
       return false;
     }
 
-    // 3. Ignore stale downloads whose start time was before this session or > 12 seconds ago
+    // 2. Ignore stale downloads whose start time was before this session or > 12 seconds ago
     if (downloadItem.startTime) {
       const ageMs = Date.now() - new Date(downloadItem.startTime).getTime();
       if (ageMs > 12000) {
@@ -297,7 +387,11 @@ async function handleDownloadInterception(downloadItem, suggest) {
       (downloadItem.mime && downloadItem.mime.toLowerCase().includes("bittorrent")) ||
       rawUrl.toLowerCase().includes(".torrent");
 
-    if (INTERCEPT_EXTENSIONS.has(ext) || isTorrent) {
+    const isBigFile =
+      downloadItem.fileSize > 5 * 1024 * 1024 &&
+      !(downloadItem.mime && downloadItem.mime.toLowerCase().includes("text/html"));
+
+    if (INTERCEPT_EXTENSIONS.has(ext) || isTorrent || isBigFile) {
       const storage = await chrome.storage.local.get(["interceptDownloads", "showNotifications"]);
       if (storage.interceptDownloads === false) {
         return false; // User disabled interception in popup/settings
@@ -306,31 +400,83 @@ async function handleDownloadInterception(downloadItem, suggest) {
       if (interceptedDownloadIds.has(downloadItem.id)) return true;
       interceptedDownloadIds.add(downloadItem.id);
 
-      // Cancel the browser's native download immediately before Brave/Chrome shows Save As dialog
-      try {
-        chrome.downloads.cancel(downloadItem.id, () => {
-          chrome.downloads.erase({ id: downloadItem.id }, () => {});
-        });
-      } catch (e) {}
+      const cleanFilename = downloadItem.filename ? downloadItem.filename.replace(/^.*[\\\/]/, "") : "";
+      const referrer = downloadItem.referrer || "";
+      const cookies = await getCookiesHeader(rawUrl);
+      const userAgent = navigator.userAgent || "";
 
-      // Only show desktop notification if user explicitly enabled it (default: silent like IDM)
-      if (storage.showNotifications === true) {
+      const payload = {
+        url: rawUrl,
+        filename: cleanFilename,
+        quality: null,
+        autoStart: true,
+        isTorrent,
+        referrer,
+        container: null,
+        isDirectFile: !isTorrent,
+        lowDiskSpace: false,
+        formatId: "",
+        cookies,
+        userAgent,
+      };
+
+      let bridgeRes = await sendBridgeOpen(payload);
+
+      // If app is not running (offline), optionally try zr:// launch once, then retry the bridge up to 3 times over ~4s
+      if (!bridgeRes.ok && bridgeRes.reason === "offline") {
+        const config = await getBridgeConfig();
+        const tokenProtoParam = config.token ? `&token=${encodeURIComponent(config.token)}` : "";
+        const fnParam = cleanFilename ? `&filename=${encodeURIComponent(cleanFilename)}` : "";
+        const refParam = referrer ? `&referrer=${encodeURIComponent(referrer)}` : "";
+        const protoUrl = `zr://open?url=${encodeURIComponent(rawUrl)}${fnParam}&autostart=true${isTorrent ? "&isTorrent=true" : "&isDirectFile=true"}${refParam}${tokenProtoParam}`;
+        launchProtocolUrl(protoUrl);
+
+        for (let i = 0; i < 3; i++) {
+          await new Promise((r) => setTimeout(r, 1200));
+          bridgeRes = await sendBridgeOpen(payload);
+          if (bridgeRes.ok) break;
+        }
+      }
+
+      if (bridgeRes.ok) {
+        // Success! Cancel browser download only now
+        try {
+          chrome.downloads.cancel(downloadItem.id, () => {
+            chrome.downloads.erase({ id: downloadItem.id }, () => {});
+          });
+        } catch (e) {}
+
+        if (storage.showNotifications === true) {
+          chrome.notifications.create({
+            type: "basic",
+            iconUrl: "icons/icon128.png",
+            title: "ZR Downloader 🚀",
+            message: isTorrent
+              ? `Intercepted BitTorrent download:\n${cleanFilename || "Torrent file"}`
+              : `Intercepted high-speed download:\n${cleanFilename || (ext ? ext.toUpperCase() + " file" : "File")}`,
+            priority: 1,
+          });
+        }
+        return true;
+      } else {
+        // Bridge failed (offline, 401, timeout) -> do NOT cancel native download! Let browser download proceed.
+        interceptedDownloadIds.delete(downloadItem.id);
+        if (suggest) {
+          suggest();
+        }
+        const failMessage =
+          bridgeRes.reason === "unauthorized"
+            ? "Token missing or mismatch: open ZR Downloader → Preferences → copy pair token into the extension popup."
+            : "ZR Downloader is not running. Download will proceed in browser.";
         chrome.notifications.create({
           type: "basic",
           iconUrl: "icons/icon128.png",
-          title: "ZR Downloader 🚀",
-          message: isTorrent
-            ? `Intercepted BitTorrent download:\n${downloadItem.filename || "Torrent file"}`
-            : `Intercepted high-speed download:\n${downloadItem.filename || ext.toUpperCase() + " file"}`,
-          priority: 1,
+          title: "ZR Downloader - Capture Skipped",
+          message: failMessage,
+          priority: 2,
         });
+        return false;
       }
-
-      // Forward to ZR Downloader Desktop Engine
-      const cleanFilename = downloadItem.filename ? downloadItem.filename.replace(/^.*[\\\/]/, "") : "";
-      const referrer = downloadItem.referrer || "";
-      await sendUrlToZr(rawUrl, null, cleanFilename, null, false, isTorrent, referrer);
-      return true;
     }
   } catch (err) {
     console.error("Error intercepting download:", err);
@@ -513,56 +659,138 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
     } catch {}
   }
 
-  // 1. Try sending to local bridge HTTP server (if app is running)
-  const config = await getBridgeConfig();
+function launchProtocolUrl(protocolUrl) {
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2500);
-
-    const filenameParam = customFilename ? `&filename=${encodeURIComponent(customFilename)}` : "";
-    const qualityParam = quality ? `&quality=${encodeURIComponent(quality)}` : "";
-    const autoParam = autoStart ? `&autostart=true` : "";
-    const torrentParam = isTorrent ? `&isTorrent=true` : "";
-    const referrerParam = referrer ? `&referrer=${encodeURIComponent(referrer)}` : "";
-    const containerParam = container ? `&container=${encodeURIComponent(container)}` : "";
-    const directParam = isDirectFile ? `&isDirectFile=true` : "";
-    const lowSpaceParam = lowDiskSpace ? `&lowDiskSpace=true` : "";
-    const formatParam = formatId ? `&formatid=${encodeURIComponent(formatId)}` : "";
-    const tokenParam = config.token ? `&token=${encodeURIComponent(config.token)}` : "";
-    const bridgeEndpoint = `${config.url}/open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${referrerParam}${containerParam}${directParam}${lowSpaceParam}${formatParam}${tokenParam}`;
-    const headers = {};
-    if (config.token) {
-      headers["X-ZR-Token"] = config.token;
-    }
-    const resp = await fetch(bridgeEndpoint, {
-      method: "GET",
-      headers,
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (resp.ok) {
-      if (effectiveTabId) {
-        try {
-          await chrome.tabs.sendMessage(effectiveTabId, {
-            action: "SHOW_TOAST",
-            title: "ZR Downloader 🚀",
-            message: isTorrent
-              ? "Torrent added in ZR Downloader!"
-              : quality
-              ? `${quality} Download started in ZR Downloader!`
-              : "Link sent to ZR Downloader! Download starting...",
-            status: "success",
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs && tabs[0] && tabs[0].id) {
+        chrome.scripting.executeScript({
+          target: { tabId: tabs[0].id },
+          func: (proto) => {
+            const a = document.createElement("a");
+            a.href = proto;
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => a.remove(), 1500);
+          },
+          args: [protocolUrl],
+        }).catch(() => {
+          chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
+            setTimeout(() => chrome.tabs.remove(t.id), 2500);
           });
-        } catch {}
+        });
+      } else {
+        chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
+          setTimeout(() => chrome.tabs.remove(t.id), 2500);
+        });
       }
-      return { success: true, method: "bridge" };
-    }
-  } catch (err) {
-    // Local bridge not active (app might be closed or starting)
+    });
+  } catch (e) {}
+}
+
+async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart = false, isTorrent = false, referrer = "", container = "", isDirectFile = false, lowDiskSpace = false, formatId = "") {
+  let cleanUrl = normalizeMediaUrl((mediaUrl || "").trim());
+  if (!cleanUrl) return { success: false, reason: "error", message: "Missing URL" };
+
+  // Resolve active tab if not passed
+  let effectiveTabId = tabId;
+  if (!effectiveTabId) {
+    try {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTab && activeTab.id) {
+        effectiveTabId = activeTab.id;
+      }
+    } catch {}
   }
 
-  // 2. Launch ZR Downloader via custom Windows protocol
+  // Resolve Instagram reel/post page URL if direct video-only CDN URL was intercepted
+  if (
+    cleanUrl.includes("cdninstagram.com") ||
+    cleanUrl.includes("fbcdn.net") ||
+    (cleanUrl.includes("instagram.com") && cleanUrl.includes(".mp4"))
+  ) {
+    if (referrer && (referrer.includes("/reel/") || referrer.includes("/p/"))) {
+      cleanUrl = referrer;
+    } else if (effectiveTabId) {
+      try {
+        const tabInfo = await chrome.tabs.get(effectiveTabId);
+        if (tabInfo && tabInfo.url && (tabInfo.url.includes("/reel/") || tabInfo.url.includes("/p/"))) {
+          cleanUrl = tabInfo.url;
+        }
+      } catch {}
+    }
+  }
+
+  // Resolve Kick channel page URL or referrer if raw stream.kick.com URL was intercepted
+  if (cleanUrl.includes("stream.kick.com") && effectiveTabId) {
+    try {
+      const tabInfo = await chrome.tabs.get(effectiveTabId);
+      if (tabInfo && tabInfo.url && tabInfo.url.includes("kick.com/") && !tabInfo.url.includes("stream.kick.com")) {
+        if (!referrer) referrer = tabInfo.url;
+      }
+    } catch {}
+  }
+
+  // Notify tab that request is in progress
+  if (effectiveTabId) {
+    try {
+      await chrome.tabs.sendMessage(effectiveTabId, {
+        action: "SHOW_TOAST",
+        title: "ZR Downloader 🚀",
+        message: isTorrent
+          ? "Adding torrent to ZR Downloader engine..."
+          : quality
+          ? `Sending ${quality} stream to ZR Downloader Engine...`
+          : "Sending link to ZR Downloader engine...",
+        status: "info",
+      });
+    } catch {}
+  }
+
+  const cookies = await getCookiesHeader(cleanUrl);
+  const userAgent = navigator.userAgent || "";
+
+  const payload = {
+    url: cleanUrl,
+    filename: customFilename,
+    quality,
+    autoStart: Boolean(autoStart),
+    isTorrent: Boolean(isTorrent),
+    referrer: referrer || "",
+    container: container || "",
+    isDirectFile: Boolean(isDirectFile),
+    lowDiskSpace: Boolean(lowDiskSpace),
+    formatId: formatId || "",
+    cookies,
+    userAgent,
+  };
+
+  const bridgeRes = await sendBridgeOpen(payload);
+
+  if (bridgeRes.ok) {
+    if (effectiveTabId) {
+      try {
+        await chrome.tabs.sendMessage(effectiveTabId, {
+          action: "SHOW_TOAST",
+          title: "ZR Downloader 🚀",
+          message: isTorrent
+            ? "Torrent added in ZR Downloader!"
+            : quality
+            ? `${quality} Download started in ZR Downloader!`
+            : "Link sent to ZR Downloader! Download starting...",
+          status: "success",
+        });
+      } catch {}
+    }
+    return { success: true, method: "bridge" };
+  }
+
+  if (bridgeRes.reason === "unauthorized") {
+    return { success: false, reason: "unauthorized" };
+  }
+
+  // Local bridge is offline -> launch via protocol fallback without overwriting clipboard
+  const config = await getBridgeConfig();
   const filenameParam = customFilename ? `&filename=${encodeURIComponent(customFilename)}` : "";
   const qualityParam = quality ? `&quality=${encodeURIComponent(quality)}` : "";
   const autoParam = autoStart ? `&autostart=true` : "";
@@ -575,44 +803,9 @@ async function sendUrlToZr(mediaUrl, tabId, customFilename, quality, autoStart =
   const tokenProtoParam = config.token ? `&token=${encodeURIComponent(config.token)}` : "";
   const protocolUrl = `zr://open?url=${encodeURIComponent(cleanUrl)}${filenameParam}${qualityParam}${autoParam}${torrentParam}${directParam}${lowSpaceParam}${referrerProtoParam}${containerProtoParam}${formatProtoParam}${tokenProtoParam}`;
 
-  if (effectiveTabId) {
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: effectiveTabId },
-        func: (proto, raw) => {
-          try {
-            navigator.clipboard.writeText(raw).catch(() => {});
-          } catch {}
-          const a = document.createElement("a");
-          a.href = proto;
-          a.style.display = "none";
-          document.body.appendChild(a);
-          a.click();
-          setTimeout(() => a.remove(), 1500);
-        },
-        args: [protocolUrl, cleanUrl],
-      });
+  launchProtocolUrl(protocolUrl);
 
-      await chrome.tabs.sendMessage(effectiveTabId, {
-        action: "SHOW_TOAST",
-        title: "ZR Downloader 🚀",
-        message: "Opening ZR Downloader desktop app...",
-        status: "info",
-      });
-
-      return { success: true, method: "protocol" };
-    } catch (e) {
-      chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
-        setTimeout(() => chrome.tabs.remove(t.id), 2500);
-      });
-    }
-  } else {
-    chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
-      setTimeout(() => chrome.tabs.remove(t.id), 2500);
-    });
-  }
-
-  return { success: true, method: "protocol" };
+  return { success: false, reason: "offline" };
 }
 
 // Listen to messages from popup or content script
@@ -652,21 +845,51 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "CHECK_ZR_STATUS" || request.action === "CHECK_GDM_STATUS") {
-    getBridgeConfig().then((config) => {
-      fetch(`${config.url}/ping`, { method: "GET" })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data && data.port && data.port !== config.port) {
-            chrome.storage.local.set({ bridgePort: data.port });
+    getBridgeConfig().then(async (config) => {
+      let isOnline = false;
+      let isAuthenticated = false;
+      let pingData = null;
+
+      try {
+        const pingRes = await fetch(`${config.url}/ping`, { method: "GET" });
+        if (pingRes.ok) {
+          pingData = await pingRes.json();
+          isOnline = true;
+          if (pingData?.port && pingData.port !== config.port) {
+            chrome.storage.local.set({ bridgePort: pingData.port });
           }
-          sendResponse({
-            online: true,
-            port: (data && data.port) || config.port,
-            hasToken: Boolean(config.token),
-            data,
+        }
+      } catch {}
+
+      if (isOnline && config.token) {
+        try {
+          const authRes = await fetch(`${config.url}/auth-check`, {
+            method: "GET",
+            headers: { "X-ZR-Token": config.token },
           });
-        })
-        .catch(() => sendResponse({ online: false, port: config.port, hasToken: Boolean(config.token) }));
+          if (authRes.ok) {
+            isAuthenticated = true;
+          }
+        } catch {}
+      }
+
+      // Update badge
+      if (!isOnline) {
+        chrome.action.setBadgeText({ text: "" });
+      } else if (!isAuthenticated) {
+        chrome.action.setBadgeText({ text: "KEY" });
+        chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" }); // amber
+      } else {
+        chrome.action.setBadgeText({ text: "" });
+      }
+
+      sendResponse({
+        online: isOnline,
+        authenticated: isAuthenticated,
+        port: (pingData && pingData.port) || config.port,
+        hasToken: Boolean(config.token),
+        data: pingData,
+      });
     });
     return true;
   }

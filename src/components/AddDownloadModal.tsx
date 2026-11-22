@@ -36,6 +36,8 @@ export interface DirectDownloadExtras {
   postDownloadProgram?: string;
   authUsername?: string;
   authPassword?: string;
+  cookies?: string;
+  userAgent?: string;
 }
 
 interface AddDownloadModalProps {
@@ -44,6 +46,9 @@ interface AddDownloadModalProps {
   defaultUrl?: string;
   defaultFilename?: string;
   defaultBatchText?: string;
+  defaultReferrer?: string;
+  defaultCookies?: string;
+  defaultUserAgent?: string;
   onAddDirectDownload: (
     url: string,
     savePath: string,
@@ -67,6 +72,9 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
   defaultUrl = "",
   defaultFilename = "",
   defaultBatchText = "",
+  defaultReferrer = "",
+  defaultCookies = "",
+  defaultUserAgent = "",
   onAddDirectDownload,
   onAddMediaDownload,
   onAddTorrentDownload,
@@ -342,6 +350,9 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
         postDownloadAction,
         authUsername: authUsername.trim(),
         authPassword,
+        originPageUrl: defaultReferrer || undefined,
+        cookies: defaultCookies || undefined,
+        userAgent: defaultUserAgent || undefined,
       }
     );
     onClose();
@@ -537,6 +548,9 @@ export const AddDownloadModal: React.FC<AddDownloadModalProps> = ({
       authUsername: authUsername.trim(),
       authPassword,
       duration: mediaInfo?.duration && mediaInfo.duration > 0 ? mediaInfo.duration : undefined,
+      referer: defaultReferrer || "",
+      cookies: defaultCookies || undefined,
+      userAgent: defaultUserAgent || undefined,
       proxy: "",
       cookiesFile: "",
       cookiesBrowser: "",

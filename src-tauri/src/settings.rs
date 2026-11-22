@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+#[cfg(not(test))]
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
@@ -395,12 +396,43 @@ pub struct SettingsState {
 
 impl SettingsState {
     pub fn load_or_default(settings_path: Option<PathBuf>) -> Self {
-        let initial = settings_path
-            .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| serde_json::from_str::<AppSettings>(&s).ok())
-            .map(|s| s.sanitized())
-            .unwrap_or_default();
+        let (initial, should_persist) = match settings_path.as_ref() {
+            Some(path) => match std::fs::read_to_string(path) {
+                Ok(content) => match serde_json::from_str::<AppSettings>(&content) {
+                    Ok(parsed) => {
+                        let token_was_empty = parsed.bridge_pair_token.trim().is_empty();
+                        let sanitized = parsed.sanitized();
+                        (sanitized, token_was_empty)
+                    }
+                    Err(_) => {
+                        let default = AppSettings::default().sanitized();
+                        (default, true)
+                    }
+                },
+                Err(_) => {
+                    let default = AppSettings::default().sanitized();
+                    (default, true)
+                }
+            },
+            None => (AppSettings::default().sanitized(), false),
+        };
+
+        if should_persist {
+            if let Some(ref path) = settings_path {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Ok(json) = serde_json::to_string_pretty(&initial) {
+                    let tmp = path.with_extension("json.tmp");
+                    if std::fs::write(&tmp, json.as_bytes()).is_ok() {
+                        if std::fs::rename(&tmp, path).is_err() {
+                            let _ = std::fs::copy(&tmp, path);
+                            let _ = std::fs::remove_file(&tmp);
+                        }
+                    }
+                }
+            }
+        }
 
         Self {
             inner: Arc::new(RwLock::new(initial)),
@@ -717,6 +749,7 @@ fn find_windows_defender_cli() -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(test))]
 pub fn execute_post_download_action(
     app: &AppHandle,
     task_id: &str,
@@ -936,5 +969,27 @@ mod tests {
         let sanitized = settings.sanitized();
         assert_eq!(sanitized.bridge_port, 9666);
         assert!(!sanitized.bridge_pair_token.is_empty());
+    }
+
+    #[test]
+    fn test_load_or_default_persists_token() {
+        let temp_dir = std::env::temp_dir().join(format!("zr_test_settings_{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let settings_file = temp_dir.join("settings.json");
+
+        // 1. Initial load from non-existent file
+        assert!(!settings_file.exists());
+        let state1 = SettingsState::load_or_default(Some(settings_file.clone()));
+        let token1 = state1.get_blocking().bridge_pair_token;
+        assert!(!token1.is_empty(), "Token should be generated");
+        assert!(settings_file.exists(), "settings.json should be persisted immediately");
+
+        // 2. Second load from the now-existing file
+        let state2 = SettingsState::load_or_default(Some(settings_file.clone()));
+        let token2 = state2.get_blocking().bridge_pair_token;
+        assert_eq!(token1, token2, "Token must remain stable across restarts");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
