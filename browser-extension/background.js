@@ -51,20 +51,26 @@ async function getBridgeConfig() {
 const INTERCEPT_EXTENSIONS = new Set([
   // Torrent files
   "torrent",
+  // Images (full IDM format coverage)
+  "jpg", "jpeg", "png", "webp", "gif", "bmp", "svg", "ico", "tiff", "tif",
+  "avif", "heic", "heif", "psd", "ai", "raw", "cr2", "nef",
   // Archives & 7zip variants
   "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "tgz",
-  "cab", "lzh", "zst", "tbz2", "txz",
+  "cab", "lzh", "zst", "tbz2", "txz", "lzma", "cpio", "arj",
   // Executables, Installers, Packages & Mobile
-  "exe", "msi", "dmg", "pkg", "deb", "rpm", "apk", "aab", "ipa", "appx", "msix", "jar",
+  "exe", "msi", "dmg", "pkg", "deb", "rpm", "apk", "aab", "ipa", "xapk", "apkm", "appx", "msix", "jar",
   // Media files & variants
   "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "mp3", "flac", "wav", "m4a", "aac", "ogg",
-  "ts", "m4v", "3gp", "mpg", "mpeg", "opus", "wma",
+  "ts", "m4v", "3gp", "mpg", "mpeg", "opus", "wma", "m4s", "f4v", "ogv", "vob", "m2ts", "mts", "alac", "aiff", "mid", "midi",
   // Documents & Data
-  "pdf", "epub", "mobi", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv", "txt",
+  "pdf", "epub", "mobi", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "csv", "txt", "rtf", "odt", "ods", "odp",
+  "json", "xml", "yaml", "yml", "sql", "md", "log",
+  // AI Models & 3D
+  "safetensors", "ckpt", "gguf", "onnx", "pt", "pth", "h5", "tflite", "obj", "fbx", "gltf", "glb", "blend", "stl",
   // Fonts
-  "ttf", "otf", "woff2",
-  // Disk / Data
-  "img", "vhd", "vmdk", "bin"
+  "ttf", "otf", "woff2", "woff", "eot",
+  // Disk / Data / Binary
+  "img", "vhd", "vmdk", "bin", "cue", "nrg", "rom"
 ]);
 
 // Keep track of downloads we are actively intercepting to avoid loops
@@ -453,6 +459,15 @@ async function handleDownloadInterception(downloadItem, suggest) {
       mime.includes("mp4") ||
       mime.includes("webm") ||
       mime.includes("avi");
+    const isImageMime = mime.startsWith("image/");
+    const isDocumentMime =
+      mime === "application/pdf" ||
+      mime.includes("officedocument") ||
+      mime.includes("msword") ||
+      mime.includes("msexcel") ||
+      mime.includes("powerpoint") ||
+      mime.includes("opendocument") ||
+      mime === "application/epub+zip";
     const isBinaryMime =
       mime === "application/octet-stream" ||
       mime === "application/x-zip-compressed" ||
@@ -465,6 +480,8 @@ async function handleDownloadInterception(downloadItem, suggest) {
       isTorrent ||
       isBigFile ||
       isMediaMime ||
+      isImageMime ||
+      isDocumentMime ||
       (isBinaryMime && ext && ext !== "html" && ext !== "htm");
 
     if (isInterceptable) {
@@ -529,6 +546,8 @@ async function handleDownloadInterception(downloadItem, suggest) {
             title: "ZR Downloader 🚀",
             message: isTorrent
               ? `Intercepted BitTorrent download:\n${cleanFilename || "Torrent file"}`
+              : isImageMime
+              ? `Intercepted image download:\n${cleanFilename || (ext ? ext.toUpperCase() + " image" : "Image")}`
               : `Intercepted high-speed download:\n${cleanFilename || (ext ? ext.toUpperCase() + " file" : "File")}`,
             priority: 1,
           });
@@ -581,20 +600,9 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "download-with-zr") {
     let candidateUrl = "";
+    let isDirectFile = false;
+    let customFilename = "";
 
-    // 1. Ask content script for detected element URL
-    if (tab && tab.id) {
-      try {
-        const resp = await chrome.tabs.sendMessage(tab.id, {
-          action: "GET_LAST_CLICKED_MEDIA",
-        });
-        if (resp && resp.url) {
-          candidateUrl = resp.url;
-        }
-      } catch (e) {}
-    }
-
-    // 2. Fallbacks from contextMenus info
     const isClean = (u) =>
       u &&
       typeof u === "string" &&
@@ -602,12 +610,38 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       !u.startsWith("data:") &&
       (u.startsWith("http://") || u.startsWith("https://"));
 
+    // 1. Direct media / image / link check from context menu info
+    if (info.mediaType === "image" && isClean(info.srcUrl)) {
+      candidateUrl = info.srcUrl;
+      isDirectFile = true;
+    } else if (info.linkUrl && isClean(info.linkUrl)) {
+      candidateUrl = info.linkUrl;
+    } else if (info.srcUrl && isClean(info.srcUrl)) {
+      candidateUrl = info.srcUrl;
+      isDirectFile = true;
+    }
+
+    // 2. Ask content script for detected element URL if not already found
+    if (!isClean(candidateUrl) && tab && tab.id) {
+      try {
+        const resp = await chrome.tabs.sendMessage(tab.id, {
+          action: "GET_LAST_CLICKED_MEDIA",
+        });
+        if (resp && isClean(resp.url)) {
+          candidateUrl = resp.url;
+          if (resp.isDirectFile || resp.isImage) {
+            isDirectFile = true;
+          }
+          if (resp.title) {
+            customFilename = resp.title;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 3. Fallbacks from contextMenus info
     if (!isClean(candidateUrl)) {
-      if (isClean(info.linkUrl)) {
-        candidateUrl = info.linkUrl;
-      } else if (isClean(info.srcUrl)) {
-        candidateUrl = info.srcUrl;
-      } else if (info.selectionText && isClean(info.selectionText.trim())) {
+      if (info.selectionText && isClean(info.selectionText.trim())) {
         candidateUrl = info.selectionText.trim();
       } else if (isClean(info.pageUrl)) {
         candidateUrl = info.pageUrl;
@@ -624,7 +658,28 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }
 
-    await sendUrlToZr(candidateUrl, tab ? tab.id : null);
+    // Derive isDirectFile if candidateUrl clearly matches direct intercept extensions
+    if (!isDirectFile) {
+      try {
+        const pathname = new URL(candidateUrl).pathname;
+        const match = pathname.match(/\.([a-zA-Z0-9]+)$/);
+        if (match && INTERCEPT_EXTENSIONS.has(match[1].toLowerCase())) {
+          isDirectFile = true;
+        }
+      } catch (e) {}
+    }
+
+    await sendUrlToZr(
+      candidateUrl,
+      tab ? tab.id : null,
+      customFilename,
+      null,
+      true, // autoStart
+      false, // isTorrent
+      tab ? tab.url : "",
+      "",
+      isDirectFile
+    );
   }
 });
 

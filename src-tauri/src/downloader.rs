@@ -238,6 +238,17 @@ impl EngineState {
 pub fn extension_from_mime(mime: &str) -> Option<&'static str> {
     let clean = mime.split(';').next().unwrap_or("").trim().to_lowercase();
     match clean.as_str() {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        "image/svg+xml" => Some("svg"),
+        "image/bmp" | "image/x-ms-bmp" => Some("bmp"),
+        "image/x-icon" | "image/vnd.microsoft.icon" => Some("ico"),
+        "image/tiff" => Some("tiff"),
+        "image/avif" => Some("avif"),
+        "image/heic" => Some("heic"),
+        "image/heif" => Some("heif"),
         "video/mp4" => Some("mp4"),
         "video/x-matroska" | "video/mkv" => Some("mkv"),
         "video/webm" => Some("webm"),
@@ -248,6 +259,7 @@ pub fn extension_from_mime(mime: &str) -> Option<&'static str> {
         "audio/flac" | "audio/x-flac" => Some("flac"),
         "audio/ogg" | "application/ogg" => Some("ogg"),
         "audio/wav" | "audio/x-wav" => Some("wav"),
+        "audio/opus" => Some("opus"),
         "application/zip" => Some("zip"),
         "application/x-rar-compressed" | "application/vnd.rar" => Some("rar"),
         "application/x-7z-compressed" => Some("7z"),
@@ -256,6 +268,18 @@ pub fn extension_from_mime(mime: &str) -> Option<&'static str> {
         "application/pdf" => Some("pdf"),
         "application/x-msdownload" | "application/vnd.microsoft.portable-executable" => Some("exe"),
         "application/x-iso9660-image" => Some("iso"),
+        "application/vnd.android.package-archive" => Some("apk"),
+        "text/plain" => Some("txt"),
+        "text/csv" => Some("csv"),
+        "application/json" => Some("json"),
+        "application/xml" | "text/xml" => Some("xml"),
+        "application/epub+zip" => Some("epub"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some("docx"),
+        "application/msword" => Some("doc"),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some("xlsx"),
+        "application/vnd.ms-excel" => Some("xls"),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => Some("pptx"),
+        "application/vnd.ms-powerpoint" => Some("ppt"),
         _ => None,
     }
 }
@@ -269,7 +293,11 @@ pub fn detect_category_with_mime(filename: &str, content_type: Option<&str>) -> 
 
     if !ext.is_empty() {
         match ext.as_str() {
-            "mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "wmv" | "m4v" => {
+            "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "svg" | "ico" | "tiff" | "tif"
+            | "avif" | "heic" | "heif" | "psd" | "ai" | "raw" | "cr2" | "nef" => {
+                return "images".to_string()
+            }
+            "mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "wmv" | "m4v" | "ts" => {
                 return "video".to_string()
             }
             "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "opus" | "wma" => {
@@ -278,10 +306,10 @@ pub fn detect_category_with_mime(filename: &str, content_type: Option<&str>) -> 
             "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "epub" | "csv" => {
                 return "docs".to_string()
             }
-            "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "iso" => {
+            "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "iso" | "tgz" | "7zip" => {
                 return "compressed".to_string()
             }
-            "exe" | "msi" | "apk" | "dmg" | "deb" | "rpm" | "appimage" => {
+            "exe" | "msi" | "apk" | "dmg" | "deb" | "rpm" | "appimage" | "appx" | "msix" => {
                 return "programs".to_string()
             }
             _ => {}
@@ -290,7 +318,9 @@ pub fn detect_category_with_mime(filename: &str, content_type: Option<&str>) -> 
 
     if let Some(ct) = content_type {
         let ct_lower = ct.to_lowercase();
-        if ct_lower.starts_with("video/") {
+        if ct_lower.starts_with("image/") {
+            return "images".to_string();
+        } else if ct_lower.starts_with("video/") {
             return "video".to_string();
         } else if ct_lower.starts_with("audio/") {
             return "audio".to_string();
@@ -303,9 +333,14 @@ pub fn detect_category_with_mime(filename: &str, content_type: Option<&str>) -> 
         } else if ct_lower.contains("pdf")
             || ct_lower.contains("text")
             || ct_lower.contains("document")
+            || ct_lower.contains("sheet")
+            || ct_lower.contains("presentation")
         {
             return "docs".to_string();
-        } else if ct_lower.contains("executable") || ct_lower.contains("x-msdownload") {
+        } else if ct_lower.contains("executable")
+            || ct_lower.contains("x-msdownload")
+            || ct_lower.contains("android.package-archive")
+        {
             return "programs".to_string();
         }
     }

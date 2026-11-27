@@ -1694,6 +1694,7 @@ export const App: React.FC = () => {
       torrents: 0,
       compressed: 0,
       docs: 0,
+      images: 0,
       audio: 0,
       programs: 0,
       video: 0,
