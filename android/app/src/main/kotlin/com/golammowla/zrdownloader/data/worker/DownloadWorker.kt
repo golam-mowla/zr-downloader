@@ -75,12 +75,51 @@ class DownloadWorker @AssistedInject constructor(
                     request.addOption("-f", "ba/b")
                 } else {
                     val fn = domainItem.filename
-                    val formatMatch = "\\[(\\d+p?)\\]".toRegex().find(fn)?.groupValues?.get(1)
-                    if (formatMatch != null) {
-                        val res = formatMatch.replace("p", "")
-                        request.addOption("-f", "bestvideo[height<=$res]+bestaudio/best[height<=$res]/best")
-                    } else {
-                        request.addOption("-f", "bestvideo+bestaudio/best")
+                    val resWithIdMatch = "\\[(\\d+)p_id_([^\\]]+)\\]".toRegex().find(fn)
+                    val resOnlyMatch = "\\[(\\d+)p\\]".toRegex().find(fn)
+                    val fmtOnlyMatch = "\\[fmt_([^\\]]+)\\]".toRegex().find(fn)
+                    val legacyHeightMatch = "\\[(\\d{3,4})\\]".toRegex().find(fn)
+
+                    when {
+                        resWithIdMatch != null -> {
+                            val res = resWithIdMatch.groupValues[1]
+                            val fid = resWithIdMatch.groupValues[2]
+                            request.addOption(
+                                "-f",
+                                "$fid+bestaudio[ext=m4a]/$fid+bestaudio/bestvideo[height<=$res]+bestaudio/best[height<=$res]/best"
+                            )
+                        }
+                        resOnlyMatch != null -> {
+                            val res = resOnlyMatch.groupValues[1]
+                            request.addOption(
+                                "-f",
+                                "bestvideo[height<=$res]+bestaudio/best[height<=$res]/best"
+                            )
+                        }
+                        fmtOnlyMatch != null -> {
+                            val fid = fmtOnlyMatch.groupValues[1]
+                            request.addOption(
+                                "-f",
+                                "$fid+bestaudio/$fid/bestvideo+bestaudio/best"
+                            )
+                        }
+                        legacyHeightMatch != null -> {
+                            val h = legacyHeightMatch.groupValues[1].toIntOrNull() ?: 0
+                            if (h >= 360) {
+                                request.addOption(
+                                    "-f",
+                                    "bestvideo[height<=$h]+bestaudio/best[height<=$h]/best"
+                                )
+                            } else {
+                                request.addOption(
+                                    "-f",
+                                    "$h+bestaudio/$h/bestvideo+bestaudio/best"
+                                )
+                            }
+                        }
+                        else -> {
+                            request.addOption("-f", "bestvideo+bestaudio/best")
+                        }
                     }
                     request.addOption("--merge-output-format", "mp4")
                 }
