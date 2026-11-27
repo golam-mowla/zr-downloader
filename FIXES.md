@@ -128,3 +128,10 @@
    - Added `extensionFromMime` in `DownloadEngine.kt` to infer extensions for images and documents.
 10. **Version Bump**:
     - Bumped `versionCode = 19`, `versionName = "1.2.46"`.
+
+
+## Android YouTube Quality Selection Fix (v1.2.47)
+- **Root Cause (`MediaGrabberDialog.kt`, `DownloadWorker.kt`)**: Inspected yt-dlp format IDs (such as `137` for 1080p or `136` for 720p) were tagged as `[137]` in the filename and matched by `\[(\d+p?)\]` in `DownloadWorker.kt`, which treated `137` as `height<=137` and caused yt-dlp to fall back to `/best` (360p format `18`). Additionally, inspected formats were not sorted descending by resolution and included storyboard `mhtml` entries.
+- **Fix**:
+  - `MediaGrabberDialog.kt`: Filtered out storyboard (`mhtml`/`sb*`) formats, sorted video formats by resolution descending (preferring MP4), and emitted explicit `[<height>p_id_<formatId>]` / `[<height>p]` / `[fmt_<formatId>]` tags with `.mp4` output extension for merged video.
+  - `DownloadWorker.kt`: Parsed explicit resolution + format ID tags so yt-dlp downloads `<formatId>+bestaudio[ext=m4a]/<formatId>+bestaudio/bestvideo[height<=<height>]+bestaudio/...` and merges to MP4 via FFmpeg.

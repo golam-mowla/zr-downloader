@@ -68,6 +68,7 @@ data class GrabberFormat(
     val label: String,
     val ext: String,
     val isAudio: Boolean,
+    val height: Int = 0,
     val streamUrl: String? = null,
     val sizeText: String? = null
 )
@@ -83,11 +84,11 @@ fun MediaGrabberDialog(
 
     val defaultFormats = remember {
         listOf(
-            GrabberFormat("best", "Best Available Quality", "mp4", false),
-            GrabberFormat("1080p", "1080p Full HD", "mp4", false),
-            GrabberFormat("720p", "720p HD", "mp4", false),
-            GrabberFormat("480p", "480p SD", "mp4", false),
-            GrabberFormat("bestaudio", "MP3 Audio (High Bitrate)", "mp3", true)
+            GrabberFormat("best", "Best Available Quality", "mp4", false, 0),
+            GrabberFormat("1080p", "1080p Full HD", "mp4", false, 1080),
+            GrabberFormat("720p", "720p HD", "mp4", false, 720),
+            GrabberFormat("480p", "480p SD", "mp4", false, 480),
+            GrabberFormat("bestaudio", "MP3 Audio (High Bitrate)", "mp3", true, 0)
         )
     }
 
@@ -127,12 +128,18 @@ fun MediaGrabberDialog(
                     val parsed = raw.mapNotNull { f ->
                         val fid = f.formatId ?: return@mapNotNull null
                         val ext = f.ext ?: "mp4"
+                        if (ext.equals("mhtml", ignoreCase = true) || fid.startsWith("sb")) {
+                            return@mapNotNull null
+                        }
                         val h = f.height
                         val fps = f.fps
                         val vcodec = f.vcodec
                         val acodec = f.acodec
                         val isAudioOnly = (vcodec == "none" || vcodec.isNullOrEmpty()) && !acodec.isNullOrEmpty() && acodec != "none"
                         val isVideoOnly = (acodec == "none" || acodec.isNullOrEmpty()) && !vcodec.isNullOrEmpty() && vcodec != "none"
+                        if (!isAudioOnly && h <= 0 && (vcodec == "none" || vcodec.isNullOrEmpty())) {
+                            return@mapNotNull null
+                        }
 
                         val sizeMb = if (f.fileSize > 0) String.format("%.1f MB", f.fileSize / (1024.0 * 1024.0)) else null
 
@@ -144,8 +151,7 @@ fun MediaGrabberDialog(
                             }
                             h > 0 -> {
                                 val fpsTag = if (fps > 30) "${fps}fps" else ""
-                                val codecTag = vcodec?.substringBefore(".") ?: ""
-                                "${h}p $fpsTag • ${ext.uppercase()} ${if (isVideoOnly) "(Video)" else ""}".trim()
+                                "${h}p $fpsTag • ${ext.uppercase()}".replace("  ", " ").trim()
                             }
                             else -> f.format ?: fid
                         }
@@ -153,15 +159,26 @@ fun MediaGrabberDialog(
                         GrabberFormat(
                             id = fid,
                             label = label,
-                            ext = ext,
+                            ext = if (isAudioOnly) "mp3" else "mp4",
                             isAudio = isAudioOnly,
+                            height = h,
                             streamUrl = f.url,
                             sizeText = sizeMb
                         )
                     }
 
-                    // Sort: video with highest resolution first, then audio
-                    val sorted = parsed.distinctBy { it.label }
+                    // Sort: video with highest resolution first (preferring mp4), then audio
+                    val videoFormats = parsed
+                        .filter { !it.isAudio && it.height > 0 }
+                        .sortedWith(
+                            compareByDescending<GrabberFormat> { it.height }
+                                .thenByDescending { it.label.contains("MP4") }
+                        )
+                        .distinctBy { it.label }
+                    val audioFormats = parsed
+                        .filter { it.isAudio }
+                        .distinctBy { it.label }
+                    val sorted = videoFormats + audioFormats
                     if (sorted.isNotEmpty()) {
                         formatsList = sorted
                         selectedFormat = sorted.first()
@@ -462,11 +479,18 @@ fun MediaGrabberDialog(
                             val sanitizedTitle = inspectedTitle
                                 ?.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
                                 ?.take(80)
-                            val qualityTag = if (selectedFormat.isAudio) "[Audio]" else "[${selectedFormat.id}]"
+                            val qualityTag = when {
+                                selectedFormat.isAudio -> "[Audio]"
+                                selectedFormat.id == "best" -> "[best]"
+                                selectedFormat.id.endsWith("p") && selectedFormat.height > 0 -> "[${selectedFormat.id}]"
+                                selectedFormat.height > 0 -> "[${selectedFormat.height}p_id_${selectedFormat.id}]"
+                                else -> "[fmt_${selectedFormat.id}]"
+                            }
+                            val targetExt = if (selectedFormat.isAudio) "mp3" else "mp4"
                             val targetFilename = if (!sanitizedTitle.isNullOrBlank()) {
-                                "$sanitizedTitle $qualityTag.${selectedFormat.ext}"
+                                "$sanitizedTitle $qualityTag.$targetExt"
                             } else {
-                                "Media_${System.currentTimeMillis()} $qualityTag.${selectedFormat.ext}"
+                                "Media_${System.currentTimeMillis()} $qualityTag.$targetExt"
                             }
 
                             // Pass original URL so native embedded yt-dlp & FFmpeg process it
