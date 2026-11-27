@@ -7,6 +7,9 @@ import androidx.work.WorkManager
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -39,6 +42,18 @@ class ZrApplication : Application(), Configuration.Provider {
             YoutubeDL.getInstance().init(this)
             FFmpeg.getInstance().init(this)
             Timber.i("yt-dlp and FFmpeg native engines initialized successfully")
+            // Auto-update embedded yt-dlp binary in background so YouTube SABR/403 fixes stay current
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val status = YoutubeDL.getInstance().updateYoutubeDL(
+                        this@ZrApplication,
+                        YoutubeDL.UpdateChannel.STABLE
+                    )
+                    Timber.i("Background yt-dlp auto-update status: $status, version=${YoutubeDL.getInstance().version(this@ZrApplication)}")
+                } catch (e: Throwable) {
+                    Timber.w(e, "Background yt-dlp auto-update skipped or failed")
+                }
+            }
         } catch (e: Throwable) {
             Timber.e(e, "Failed to initialize native yt-dlp/FFmpeg engine")
         }

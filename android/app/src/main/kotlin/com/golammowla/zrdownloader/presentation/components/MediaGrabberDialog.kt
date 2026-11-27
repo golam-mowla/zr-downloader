@@ -58,6 +58,7 @@ import com.golammowla.zrdownloader.presentation.theme.GlassAccentGradientEnd
 import com.golammowla.zrdownloader.presentation.theme.GlassAccentGradientStart
 import com.golammowla.zrdownloader.presentation.theme.PrimaryBlue
 import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -110,7 +111,14 @@ fun MediaGrabberDialog(
             errorMessage = null
             try {
                 val info = withContext(Dispatchers.IO) {
-                    YoutubeDL.getInstance().getInfo(clean)
+                    val req = YoutubeDLRequest(clean)
+                    req.addOption("--no-update")
+                    req.addOption("--no-check-certificates")
+                    val lower = clean.lowercase()
+                    if (lower.contains("youtube.com") || lower.contains("youtu.be")) {
+                        req.addOption("--extractor-args", "youtube:player_client=android_vr,android,tv")
+                    }
+                    YoutubeDL.getInstance().getInfo(req)
                 }
 
                 inspectedTitle = info.title
