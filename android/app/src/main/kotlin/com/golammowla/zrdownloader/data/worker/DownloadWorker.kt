@@ -67,7 +67,17 @@ class DownloadWorker @AssistedInject constructor(
                 request.addOption("-o", targetFile.absolutePath)
                 request.addOption("--no-part")
                 request.addOption("--no-playlist")
+                request.addOption("--no-update")
+                request.addOption("--no-check-certificates")
+                request.addOption("--retries", "5")
+                request.addOption("--fragment-retries", "5")
                 request.addOption("-c")
+
+                val lowerUrl = domainItem.url.lowercase()
+                if (lowerUrl.contains("youtube.com") || lowerUrl.contains("youtu.be")) {
+                    // Bypass web client SABR streaming / 403 Forbidden on Android (no JS runtime)
+                    request.addOption("--extractor-args", "youtube:player_client=android_vr,android,tv")
+                }
 
                 if (isAudio) {
                     request.addOption("-x")

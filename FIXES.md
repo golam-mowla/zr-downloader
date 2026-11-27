@@ -135,3 +135,11 @@
 - **Fix**:
   - `MediaGrabberDialog.kt`: Filtered out storyboard (`mhtml`/`sb*`) formats, sorted video formats by resolution descending (preferring MP4), and emitted explicit `[<height>p_id_<formatId>]` / `[<height>p]` / `[fmt_<formatId>]` tags with `.mp4` output extension for merged video.
   - `DownloadWorker.kt`: Parsed explicit resolution + format ID tags so yt-dlp downloads `<formatId>+bestaudio[ext=m4a]/<formatId>+bestaudio/bestvideo[height<=<height>]+bestaudio/...` and merges to MP4 via FFmpeg.
+
+
+## Android yt-dlp Self-Update & YouTube 403/SABR Fix (v1.2.48)
+- **Root Cause**: `DownloadViewModel.updateYtdlpEngine()` only queried the GitHub release tag string and saved it to DataStore without calling `YoutubeDL.getInstance().updateYoutubeDL(...)`, leaving the embedded `yt-dlp` binary stuck on `2025.11.12` and hitting YouTube's `web` client SABR / `HTTP Error 403: Forbidden` error.
+- **Fix**:
+  - `ZrApplication.kt`: Runs background `YoutubeDL.getInstance().updateYoutubeDL(..., UpdateChannel.STABLE)` on startup.
+  - `DownloadViewModel.kt`: Reads real binary version via `YoutubeDL.getInstance().version(appContext)` on init, and performs real binary update via `YoutubeDL.getInstance().updateYoutubeDL(...)` (Nightly/Stable) when tapping Update.
+  - `DownloadWorker.kt` & `MediaGrabberDialog.kt`: Uses `--extractor-args "youtube:player_client=android_vr,android,tv"` for YouTube URLs along with `--no-update --no-check-certificates --retries 5 --fragment-retries 5` to bypass web-client SABR / 403 Forbidden errors on Android.

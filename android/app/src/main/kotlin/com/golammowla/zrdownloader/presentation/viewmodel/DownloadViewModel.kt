@@ -1,5 +1,6 @@
 ﻿package com.golammowla.zrdownloader.presentation.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.golammowla.zrdownloader.data.network.DownloadEngine
@@ -8,7 +9,9 @@ import com.golammowla.zrdownloader.domain.model.DownloadCategory
 import com.golammowla.zrdownloader.domain.model.DownloadItem
 import com.golammowla.zrdownloader.domain.model.DownloadStatus
 import com.golammowla.zrdownloader.domain.repository.DownloadRepository
+import com.yausername.youtubedl_android.YoutubeDL
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -64,10 +67,22 @@ private data class DialogState(
 
 @HiltViewModel
 class DownloadViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val repository: DownloadRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val okHttpClient: OkHttpClient
 ) : ViewModel() {
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val realVer = YoutubeDL.getInstance().version(appContext)
+                if (!realVer.isNullOrBlank()) {
+                    preferencesRepository.updateYtdlpVersion(realVer)
+                }
+            } catch (_: Throwable) {}
+        }
+    }
 
     private val _selectedCategory = MutableStateFlow(DownloadCategory.ALL)
     private val _selectedStatus = MutableStateFlow<DownloadStatus?>(null)
@@ -249,26 +264,30 @@ class DownloadViewModel @Inject constructor(
     fun updateYtdlpEngine() {
         viewModelScope.launch(Dispatchers.IO) {
             _isUpdatingEngine.value = true
-            _engineUpdateMessage.value = "Checking latest release..."
+            _engineUpdateMessage.value = "Updating yt-dlp engine binary..."
             try {
-                val req = Request.Builder()
-                    .url("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
-                    .header("User-Agent", "ZRDownloader-Android")
-                    .build()
-                val resp = okHttpClient.newCall(req).execute()
-                val body = resp.body?.string()
-                if (resp.isSuccessful && !body.isNullOrBlank()) {
-                    val tag = JSONObject(body).optString("tag_name", "2025.02.19")
-                    preferencesRepository.updateYtdlpVersion(tag)
-                    _engineUpdateMessage.value = "yt-dlp updated to $tag!"
-                } else {
-                    preferencesRepository.updateYtdlpVersion("2025.02.19")
-                    _engineUpdateMessage.value = "yt-dlp is up to date (v2025.02.19)!"
+                var status = try {
+                    YoutubeDL.getInstance().updateYoutubeDL(appContext, YoutubeDL.UpdateChannel.NIGHTLY)
+                } catch (_: Throwable) {
+                    YoutubeDL.getInstance().updateYoutubeDL(appContext, YoutubeDL.UpdateChannel.STABLE)
                 }
-            } catch (e: Exception) {
-                Timber.w(e, "Error checking yt-dlp update")
-                preferencesRepository.updateYtdlpVersion("2025.02.19")
-                _engineUpdateMessage.value = "yt-dlp engine refreshed to v2025.02.19!"
+                if (status == null) {
+                    status = YoutubeDL.getInstance().updateYoutubeDL(appContext, YoutubeDL.UpdateChannel.STABLE)
+                }
+                val realVer = YoutubeDL.getInstance().version(appContext) ?: "latest"
+                preferencesRepository.updateYtdlpVersion(realVer)
+                _engineUpdateMessage.value = when (status) {
+                    YoutubeDL.UpdateStatus.DONE -> "yt-dlp updated to $realVer!"
+                    YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> "yt-dlp is up to date ($realVer)!"
+                    else -> "yt-dlp engine active ($realVer)!"
+                }
+            } catch (e: Throwable) {
+                Timber.w(e, "Error updating yt-dlp engine")
+                val currentVer = try { YoutubeDL.getInstance().version(appContext) } catch (_: Throwable) { null }
+                if (!currentVer.isNullOrBlank()) {
+                    preferencesRepository.updateYtdlpVersion(currentVer)
+                }
+                _engineUpdateMessage.value = "Update failed: ${e.message?.take(60) ?: "Check network"}"
             } finally {
                 _isUpdatingEngine.value = false
             }
