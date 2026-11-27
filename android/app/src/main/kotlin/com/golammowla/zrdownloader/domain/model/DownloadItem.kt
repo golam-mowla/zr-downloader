@@ -14,6 +14,7 @@ enum class DownloadStatus {
 enum class DownloadCategory(val label: String) {
     ALL("All"),
     VIDEOS("Videos"),
+    IMAGES("Images"),
     AUDIO("Music & Audio"),
     COMPRESSED("Compressed"),
     PROGRAMS("Programs"),
@@ -24,11 +25,12 @@ enum class DownloadCategory(val label: String) {
         fun fromExtension(ext: String): DownloadCategory {
             val lower = ext.lowercase()
             return when (lower) {
+                "jpg", "jpeg", "png", "webp", "gif", "bmp", "svg", "ico", "tiff", "tif", "avif", "heic", "heif", "psd" -> IMAGES
                 "mp4", "mkv", "webm", "avi", "mov", "flv", "wmv", "m3u8", "ts" -> VIDEOS
                 "mp3", "m4a", "flac", "wav", "aac", "ogg", "opus" -> AUDIO
-                "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "tgz" -> COMPRESSED
-                "apk", "exe", "msi", "dmg", "pkg", "deb", "rpm", "appx" -> PROGRAMS
-                "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "epub" -> DOCUMENTS
+                "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "iso", "tgz", "7zip" -> COMPRESSED
+                "apk", "aab", "xapk", "exe", "msi", "dmg", "pkg", "deb", "rpm", "appx" -> PROGRAMS
+                "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "epub", "csv" -> DOCUMENTS
                 "torrent" -> TORRENTS
                 else -> ALL
             }

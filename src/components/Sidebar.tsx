@@ -3,6 +3,7 @@ import {
   Layers,
   Video,
   Music,
+  Image as ImageIcon,
   FileText,
   Archive,
   Binary,
@@ -16,7 +17,7 @@ import {
   HelpCircle,
 } from "lucide-react";
 
-export type CategoryType = "all" | "video" | "audio" | "docs" | "compressed" | "programs" | "torrents";
+export type CategoryType = "all" | "video" | "images" | "audio" | "docs" | "compressed" | "programs" | "torrents";
 export type StatusFilterType = "all" | "downloading" | "completed" | "paused" | "error";
 
 interface SidebarProps {
@@ -55,6 +56,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "torrents", label: "Torrents", icon: <Radio className="w-[18px] h-[18px] text-orange-500 flex-shrink-0" /> },
     { id: "compressed", label: "Compressed", icon: <Archive className="w-[18px] h-[18px] text-amber-500 flex-shrink-0" /> },
     { id: "docs", label: "Documents", icon: <FileText className="w-[18px] h-[18px] text-emerald-500 flex-shrink-0" /> },
+    { id: "images", label: "Images", icon: <ImageIcon className="w-[18px] h-[18px] text-emerald-400 flex-shrink-0" /> },
     { id: "audio", label: "Music & Audio", icon: <Music className="w-[18px] h-[18px] text-pink-500 flex-shrink-0" /> },
     { id: "programs", label: "Programs", icon: <Binary className="w-[18px] h-[18px] text-teal-500 flex-shrink-0" /> },
     { id: "video", label: "Videos", icon: <Video className="w-[18px] h-[18px] text-purple-500 flex-shrink-0" /> },

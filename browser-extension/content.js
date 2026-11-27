@@ -551,6 +551,24 @@
       }
     }
 
+    // 5.5 Direct Image Element check
+    if (element) {
+      const img = element.tagName === "IMG" ? element : element.querySelector?.("img") || element.closest?.("img");
+      if (img) {
+        const imgSrc = img.currentSrc || img.src;
+        if (isValidDownloadUrl(imgSrc)) {
+          const imgTitle = (img.alt || img.title || "").trim() || title;
+          return {
+            url: imgSrc,
+            title: imgTitle,
+            videoEl: null,
+            isDirectFile: true,
+            isImage: true,
+          };
+        }
+      }
+    }
+
     // 6. Anchor links
     const anchor = element?.closest?.("a");
     if (anchor && anchor.href && isValidDownloadUrl(anchor.href)) {
@@ -894,6 +912,7 @@
 
     const options = [];
 
+    try {
     // 0. Build base options immediately so the menu opens with zero lag
     const pageUrl = (function () {
       let p = mediaTarget.postUrl || mediaTarget.url || window.location.href;
@@ -1244,6 +1263,17 @@
           isDirectFile: true,
           filename: `${cleanTitle.slice(0, 45)}_cover.jpg`,
         });
+      }
+    }
+    } catch (err) {
+      console.warn("ZR: error building formats, falling back to standard list:", err);
+      if (options.length === 0) {
+        options.push(
+          { label: "1080p HD (MP4)", quality: "1080p", formatDisplay: "1080p • MP4", url: window.location.href, container: "MP4" },
+          { label: "720p HD (MP4)", quality: "720p", formatDisplay: "720p • MP4", url: window.location.href, container: "MP4" },
+          { label: "480p (MP4)", quality: "480p", formatDisplay: "480p • MP4", url: window.location.href, container: "MP4" },
+          { label: "MP3 Audio (Highest Quality)", quality: "Audio", formatDisplay: "MP3 Audio", url: window.location.href, container: "MP3" }
+        );
       }
     }
 

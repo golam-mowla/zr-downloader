@@ -51,6 +51,7 @@ class DownloadEngine @Inject constructor(
         var totalBytes = -1L
         var isResumable = false
         var filename = extractFilenameFromUrl(url)
+        var detectedMime: String? = null
 
         try {
             val headRequest = Request.Builder()
@@ -69,6 +70,11 @@ class DownloadEngine @Inject constructor(
                     val acceptRanges = response.header("Accept-Ranges")
                     if (acceptRanges != null && acceptRanges.contains("bytes", ignoreCase = true)) {
                         isResumable = true
+                    }
+
+                    val ct = response.header("Content-Type")
+                    if (!ct.isNullOrBlank()) {
+                        detectedMime = ct
                     }
 
                     val disposition = response.header("Content-Disposition")
@@ -99,6 +105,12 @@ class DownloadEngine @Inject constructor(
                         val totalStr = contentRange.substringAfterLast("/")
                         totalBytes = totalStr.toLongOrNull() ?: -1L
                     }
+
+                    val ct = response.header("Content-Type")
+                    if (!ct.isNullOrBlank()) {
+                        detectedMime = ct
+                    }
+
                     val disposition = response.header("Content-Disposition")
                     val parsedName = parseContentDispositionFilename(disposition)
                     if (!parsedName.isNullOrBlank()) {
@@ -107,6 +119,13 @@ class DownloadEngine @Inject constructor(
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Range probe failed")
+            }
+        }
+
+        if (!filename.contains('.')) {
+            val inferredExt = extensionFromMime(detectedMime)
+            if (inferredExt != null) {
+                filename = "$filename.$inferredExt"
             }
         }
 
@@ -426,7 +445,6 @@ class DownloadEngine @Inject constructor(
         }
 
         fun formatEta(seconds: Long): String {
-            if (seconds <= 0) return "--"
             val h = seconds / 3600
             val m = (seconds % 3600) / 60
             val s = seconds % 60
@@ -434,6 +452,38 @@ class DownloadEngine @Inject constructor(
                 h > 0 -> String.format("%02d:%02d:%02d", h, m, s)
                 m > 0 -> String.format("%02d:%02d", m, s)
                 else -> "${s}s"
+            }
+        }
+
+        fun extensionFromMime(mime: String?): String? {
+            if (mime.isNullOrBlank()) return null
+            val clean = mime.substringBefore(';').trim().lowercase()
+            return when (clean) {
+                "image/jpeg" -> "jpg"
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                "image/gif" -> "gif"
+                "image/svg+xml" -> "svg"
+                "image/bmp", "image/x-ms-bmp" -> "bmp"
+                "image/x-icon", "image/vnd.microsoft.icon" -> "ico"
+                "image/tiff" -> "tiff"
+                "image/avif" -> "avif"
+                "image/heic" -> "heic"
+                "image/heif" -> "heif"
+                "video/mp4" -> "mp4"
+                "video/x-matroska", "video/mkv" -> "mkv"
+                "video/webm" -> "webm"
+                "audio/mpeg", "audio/mp3" -> "mp3"
+                "audio/mp4", "audio/m4a" -> "m4a"
+                "application/zip" -> "zip"
+                "application/x-rar-compressed", "application/vnd.rar" -> "rar"
+                "application/x-7z-compressed" -> "7z"
+                "application/pdf" -> "pdf"
+                "application/vnd.android.package-archive" -> "apk"
+                "text/plain" -> "txt"
+                "text/csv" -> "csv"
+                "application/json" -> "json"
+                else -> null
             }
         }
     }

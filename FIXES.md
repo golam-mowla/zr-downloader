@@ -88,3 +88,43 @@
     - Sets extension badge (`KEY` with warning color) when token is invalid or unauthenticated.
 13. **Expanded Interception Rules (`background.js`)**:
     - Intercepts documents, compressed archives (including 7z variants), packages (apk, aab, ipa), audio/video formats, and any file > 5 MB (excluding `text/html`).
+
+
+## Universal Interception, Images Support & Android Release (v3.7.2 / v1.2.46)
+
+### A. Universal Interception & Image Downloads (`browser-extension/`)
+1. **Comprehensive File Type Coverage (`background.js`)**:
+   - Expanded `INTERCEPT_EXTENSIONS` to include all image formats: `jpg`, `jpeg`, `png`, `webp`, `gif`, `bmp`, `svg`, `ico`, `tiff`, `tif`, `avif`, `heic`, `heif`, `psd`, `ai`, `raw`, `cr2`, `nef`.
+   - Added missing archives (`lzma`, `cpio`, `arj`), packages (`xapk`, `apkm`), office documents, and 3D/AI models (`safetensors`, `ckpt`, `gguf`, `onnx`).
+2. **MIME & Image Interception (`background.js`)**:
+   - `handleDownloadInterception` detects `image/*` MIME types, document MIME types, and all image extensions.
+   - Images and small direct downloads are no longer skipped.
+3. **Context Menu Image Downloads (`background.js`, `content.js`)**:
+   - When right-clicking on an image (`<img>` or `<picture>`), `info.srcUrl` is preserved and passed with `isDirectFile: true` and clean filename.
+   - Bypasses yt-dlp to start high-speed accelerated HTTP downloads immediately in ZR Downloader.
+4. **Resilient Video Grabber Overlay (`content.js`)**:
+   - Fixed potential lockup where "fetching available qualities..." could stay on screen if player API parsing failed.
+   - Wrapped format extraction in try/catch with immediate fallback to standard formats.
+   - Added image element detection in `extractMediaTarget`.
+
+### B. Desktop App Backend (`src-tauri/`)
+5. **Image MIME Detection (`downloader.rs`)**:
+   - Added mapping for all image MIME types in `extension_from_mime`.
+   - Files without extensions in the URL now receive their proper image extension from the server's `Content-Type`.
+6. **Images Categorization (`settings.rs`, `downloader.rs`)**:
+   - Added `"Images"` category in `auto_category_subfolder` and `"images"` in `detect_category_with_mime`.
+   - Automatically sorts downloaded images into the `Images` subfolder.
+
+### C. Desktop UI (`src/`)
+7. **Images Category & Sidebar (`Sidebar.tsx`, `App.tsx`)**:
+   - Added `"images"` filter category with Lucide `Image` icon.
+   - Added category counters for images.
+8. **Settings Dialog Layout (`PreferencesModal.tsx`)**:
+   - Optimized tab bar spacing and responsiveness so "Core Engines" and all 7 tabs fit on screen without being clipped.
+
+### D. Android Native App (`android/`)
+9. **Images Category Parity (`DownloadItem.kt`, `DownloadEngine.kt`)**:
+   - Added `IMAGES("Images")` to `DownloadCategory`.
+   - Added `extensionFromMime` in `DownloadEngine.kt` to infer extensions for images and documents.
+10. **Version Bump**:
+    - Bumped `versionCode = 19`, `versionName = "1.2.46"`.

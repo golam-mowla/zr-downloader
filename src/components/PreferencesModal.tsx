@@ -543,8 +543,8 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 select-none">
-      <div className="w-full max-w-4xl rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden transition-colors">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50 select-none">
+      <div className="w-full max-w-4xl max-h-[92vh] rounded-xl border border-zr bg-zr-surface shadow-2xl overflow-hidden flex flex-col transition-colors">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-zr bg-zr-tableHead transition-colors">
           <div className="flex items-center space-x-2.5">
@@ -562,11 +562,11 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex border-b border-zr bg-zr-surface px-5 pt-2.5 space-x-3 overflow-x-auto scrollbar-thin transition-colors">
+        {/* Tab Navigation - Responsive layout ensuring Core Engines and all tabs are fully accessible */}
+        <div className="flex border-b border-zr bg-zr-surface px-3 sm:px-5 pt-2 gap-1 sm:gap-2 overflow-x-auto scrollbar-thin transition-colors">
           <button
             onClick={() => setActiveTab("general")}
-            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+            className={`px-2.5 py-2 text-[12px] sm:text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap shrink-0 transition-all ${
               activeTab === "general"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
@@ -578,7 +578,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
           <button
             onClick={() => setActiveTab("connection")}
-            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+            className={`px-2.5 py-2 text-[12px] sm:text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap shrink-0 transition-all ${
               activeTab === "connection"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
@@ -590,7 +590,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
           <button
             onClick={() => setActiveTab("scheduler")}
-            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+            className={`px-2.5 py-2 text-[12px] sm:text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap shrink-0 transition-all ${
               activeTab === "scheduler"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
@@ -602,7 +602,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
           <button
             onClick={() => setActiveTab("network")}
-            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+            className={`px-2.5 py-2 text-[12px] sm:text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap shrink-0 transition-all ${
               activeTab === "network"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
@@ -614,7 +614,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
           <button
             onClick={() => setActiveTab("headers")}
-            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+            className={`px-2.5 py-2 text-[12px] sm:text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap shrink-0 transition-all ${
               activeTab === "headers"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
@@ -626,7 +626,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
           <button
             onClick={() => setActiveTab("aria2")}
-            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+            className={`px-2.5 py-2 text-[12px] sm:text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap shrink-0 transition-all ${
               activeTab === "aria2"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"
@@ -638,7 +638,7 @@ export const PreferencesModal: React.FC<PreferencesModalProps> = ({
 
           <button
             onClick={() => setActiveTab("tools")}
-            className={`pb-2.5 text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap transition-all ${
+            className={`px-2.5 py-2 text-[12px] sm:text-[12.5px] font-semibold flex items-center space-x-1.5 border-b-2 whitespace-nowrap shrink-0 transition-all ${
               activeTab === "tools"
                 ? "border-blue-600 dark:border-blue-400 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-zr-secondary hover:text-zr-primary"

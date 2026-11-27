@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-#[cfg(not(test))]
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
@@ -606,9 +605,11 @@ pub fn auto_category_subfolder(filename: &str) -> &'static str {
         .unwrap_or("")
         .to_lowercase();
     match ext.as_str() {
+        "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "svg" | "ico" | "tiff" | "tif"
+        | "avif" | "heic" | "heif" | "psd" => "Images",
         "mp4" | "mkv" | "avi" | "mov" | "webm" | "flv" | "wmv" | "m4v" | "ts" => "Videos",
         "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" | "opus" | "wma" => "Music",
-        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "iso" => "Compressed",
+        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "iso" | "tgz" | "7zip" => "Compressed",
         "exe" | "msi" | "apk" | "dmg" | "deb" | "rpm" | "appimage" | "msix" => "Programs",
         _ => "Documents",
     }
@@ -749,7 +750,6 @@ fn find_windows_defender_cli() -> Option<PathBuf> {
     None
 }
 
-#[cfg(not(test))]
 pub fn execute_post_download_action(
     app: &AppHandle,
     task_id: &str,
@@ -949,6 +949,8 @@ mod tests {
 
     #[test]
     fn auto_category_maps_expected_folders() {
+        assert_eq!(auto_category_subfolder("photo.jpg"), "Images");
+        assert_eq!(auto_category_subfolder("banner.png"), "Images");
         assert_eq!(auto_category_subfolder("movie.mkv"), "Videos");
         assert_eq!(auto_category_subfolder("song.flac"), "Music");
         assert_eq!(auto_category_subfolder("archive.zip"), "Compressed");
