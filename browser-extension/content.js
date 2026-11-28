@@ -29,6 +29,25 @@
     }
   } catch (e) {}
 
+  // Firefox MV2 fallback: inject yt-main-world.js into page MAIN world (MV3 uses manifest world:MAIN)
+  try {
+    const isYtHost =
+      window.location.hostname.includes("youtube.com") ||
+      window.location.hostname.includes("youtu.be");
+    const mv =
+      typeof chrome !== "undefined" &&
+      chrome.runtime &&
+      chrome.runtime.getManifest &&
+      chrome.runtime.getManifest().manifest_version;
+    if (isYtHost && mv === 2 && !document.getElementById("zr-yt-main-injected")) {
+      const s = document.createElement("script");
+      s.id = "zr-yt-main-injected";
+      s.src = chrome.runtime.getURL("yt-main-world.js");
+      s.onload = () => s.remove();
+      (document.head || document.documentElement).appendChild(s);
+    }
+  } catch (e) {}
+
   // Cached YouTube data from MAIN world helper (yt-main-world.js)
   let lastYouTubeData = null;
 
@@ -332,6 +351,230 @@
     return window.location.href;
   }
 
+  // Cross-Shadow-DOM ancestor lookup (critical for Reddit shreddit-player web components)
+  function closestAcrossShadow(el, selector) {
+    let cur = el;
+    let guard = 0;
+    while (cur && guard < 25) {
+      guard++;
+      if (cur.closest) {
+        const hit = cur.closest(selector);
+        if (hit) return hit;
+      }
+      const root = cur.getRootNode ? cur.getRootNode() : null;
+      if (root && root.host) {
+        cur = root.host;
+      } else {
+        break;
+      }
+    }
+    return null;
+  }
+
+  // Collect <video> elements across both light DOM and open Shadow DOM (e.g., Reddit shreddit-player)
+  function collectAllVideos() {
+    const result = [];
+    const seen = new Set();
+    const addVid = (v) => {
+      if (v && !seen.has(v)) {
+        seen.add(v);
+        result.push(v);
+      }
+    };
+    document.querySelectorAll("video").forEach(addVid);
+    const shadowHosts = document.querySelectorAll(
+      "shreddit-player, shreddit-player-2, shreddit-embed, shreddit-async-loader, video-js, media-controller"
+    );
+    for (let i = 0; i < shadowHosts.length; i++) {
+      const host = shadowHosts[i];
+      if (host && host.shadowRoot) {
+        host.shadowRoot.querySelectorAll("video").forEach(addVid);
+        const nested = host.shadowRoot.querySelectorAll("shreddit-player, shreddit-player-2");
+        for (let j = 0; j < nested.length; j++) {
+          if (nested[j].shadowRoot) {
+            nested[j].shadowRoot.querySelectorAll("video").forEach(addVid);
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  function resolveSocialPostTarget(element, hostname) {
+    // Twitter / X
+    if (hostname.includes("twitter.com") || hostname.includes("x.com")) {
+      const tweet = closestAcrossShadow(
+        element,
+        "article[data-testid='tweet'], [data-testid='tweetDetail'], article"
+      );
+      let postUrl = "";
+      let tweetTitle = "";
+      let posterUrl = "";
+      let vid =
+        element?.tagName === "VIDEO"
+          ? element
+          : element?.querySelector?.("video") || currentTargetVideo;
+
+      if (tweet) {
+        const timeAnchor = tweet.querySelector("a[href*='/status/'] time")?.closest("a");
+        const statusAnchor = timeAnchor || tweet.querySelector("a[href*='/status/']");
+        if (statusAnchor && statusAnchor.href) {
+          const m = statusAnchor.href.match(/(https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/[^\/?#]+\/status\/\d+)/i);
+          postUrl = m ? m[1] : statusAnchor.href.split("?")[0];
+        }
+        const textEl = tweet.querySelector("[data-testid='tweetText']");
+        const userEl = tweet.querySelector("[data-testid='User-Name']");
+        const handleMatch = userEl?.innerText?.match(/@([A-Za-z0-9_]+)/);
+        const rawText = textEl?.innerText?.replace(/\s+/g, " ").trim() || "";
+        if (handleMatch && rawText) {
+          tweetTitle = `${handleMatch[0]} - ${rawText.slice(0, 60)}`;
+        } else if (rawText) {
+          tweetTitle = rawText.slice(0, 70);
+        } else if (handleMatch) {
+          tweetTitle = `${handleMatch[0]} X Video`;
+        }
+        if (!vid) {
+          vid = tweet.querySelector("video");
+        }
+        const thumbImg = tweet.querySelector(
+          "img[src*='pbs.twimg.com/amplify_video_thumb'], img[src*='pbs.twimg.com/ext_tw_video_thumb'], img[src*='pbs.twimg.com/media']"
+        );
+        posterUrl = (vid && vid.poster) || thumbImg?.src || "";
+      }
+
+      if (!postUrl) {
+        const m = window.location.href.match(/(https?:\/\/(?:www\.)?(?:twitter\.com|x\.com)\/[^\/?#]+\/status\/\d+)/i);
+        postUrl = m ? m[1] : window.location.href;
+      }
+
+      return {
+        url: postUrl,
+        postUrl,
+        title:
+          tweetTitle ||
+          document.title.replace(/ \/ X$/, "").replace(/ on X$/, "").trim() ||
+          "X Video",
+        videoEl: vid,
+        thumbnail: posterUrl,
+      };
+    }
+
+    // Reddit (new Shreddit shadow DOM & classic Reddit)
+    if (hostname.includes("reddit.com")) {
+      const playerEl = closestAcrossShadow(
+        element,
+        "shreddit-player, shreddit-player-2, shreddit-embed"
+      );
+      const postEl = closestAcrossShadow(
+        element,
+        "shreddit-post, [data-testid='post-container'], .Post, article"
+      );
+
+      let vid =
+        element?.tagName === "VIDEO"
+          ? element
+          : playerEl?.shadowRoot?.querySelector("video") ||
+            element?.querySelector?.("video") ||
+            currentTargetVideo;
+
+      let postUrl = "";
+      const rawPermalink =
+        playerEl?.getAttribute("permalink") ||
+        postEl?.getAttribute("permalink") ||
+        postEl?.getAttribute("content-href");
+      if (rawPermalink) {
+        postUrl = rawPermalink.startsWith("http")
+          ? rawPermalink
+          : `https://www.reddit.com${rawPermalink.startsWith("/") ? "" : "/"}${rawPermalink}`;
+      }
+      if (!postUrl && postEl) {
+        const commentAnchor = postEl.querySelector("a[href*='/comments/']");
+        if (commentAnchor && commentAnchor.href) {
+          postUrl = commentAnchor.href.split("?")[0];
+        }
+      }
+      if (!postUrl) {
+        const anc = closestAcrossShadow(element, "a[href*='/comments/']");
+        if (anc && anc.href) {
+          postUrl = anc.href.split("?")[0];
+        }
+      }
+      if (!postUrl || (!postUrl.includes("/comments/") && window.location.href.includes("/comments/"))) {
+        postUrl = window.location.href;
+      }
+
+      const rawTitle =
+        playerEl?.getAttribute("post-title") ||
+        postEl?.getAttribute("post-title") ||
+        postEl?.querySelector("[slot='title'], h1, h2, h3, a[data-click-id='body']")?.innerText?.trim() ||
+        document.title.replace(/ : r\/.+$/, "").replace(/ - Reddit$/, "").trim();
+
+      const posterUrl =
+        playerEl?.getAttribute("poster") ||
+        (vid && vid.poster) ||
+        postEl?.querySelector("img[src*='redd.it']")?.src ||
+        "";
+
+      const playerSrc = playerEl?.getAttribute("src") || "";
+
+      return {
+        url: postUrl || window.location.href,
+        postUrl: postUrl || window.location.href,
+        title: (rawTitle || "Reddit Video").replace(/\s+/g, " ").trim(),
+        videoEl: vid,
+        thumbnail: posterUrl,
+        streamHint: isValidDownloadUrl(playerSrc) ? playerSrc : "",
+      };
+    }
+
+    // Facebook / TikTok / Twitch / Vimeo / Others
+    let fallbackPostUrl = "";
+    if (hostname.includes("facebook.com") || hostname.includes("fb.watch")) {
+      if (!/\/(reel|videos|watch)\b/i.test(window.location.href)) {
+        const card = closestAcrossShadow(element, "div[role='article'], article");
+        const anchor = card?.querySelector(
+          "a[href*='/reel/'], a[href*='/videos/'], a[href*='/watch/'], a[href*='/posts/']"
+        );
+        if (anchor && anchor.href && isValidDownloadUrl(anchor.href)) {
+          fallbackPostUrl = anchor.href;
+        }
+      }
+    } else if (hostname.includes("tiktok.com")) {
+      if (!window.location.href.includes("/video/")) {
+        const card = closestAcrossShadow(
+          element,
+          "[data-e2e='recommend-list-item-container'], [class*='DivItemContainer'], article"
+        );
+        const anchor = card?.querySelector("a[href*='/video/']");
+        if (anchor && anchor.href && isValidDownloadUrl(anchor.href)) {
+          fallbackPostUrl = anchor.href;
+        }
+      }
+    }
+
+    const vid =
+      (element?.tagName === "VIDEO"
+        ? element
+        : element?.querySelector?.("video") || closestAcrossShadow(element, "video")) ||
+      currentTargetVideo;
+
+    const cleanTitle = document.title
+      .replace(/ - Kick$/, "")
+      .replace(/ \| Instagram$/, "")
+      .replace(/ \/ X$/, "")
+      .replace(/ \| Facebook$/, "")
+      .replace(/ \| TikTok$/, "")
+      .trim();
+
+    return {
+      url: fallbackPostUrl || window.location.href,
+      postUrl: fallbackPostUrl || window.location.href,
+      title: cleanTitle || "Video",
+      videoEl: vid,
+      thumbnail: vid?.poster || "",
+    };
+  }
+
   // Extract clean target URL and best human filename/title
   function extractMediaTarget(element) {
     const hostname = window.location.hostname;
@@ -510,22 +753,10 @@
       hostname.includes("dailymotion.com") ||
       hostname.includes("reddit.com") ||
       hostname.includes("bilibili.com") ||
-      hostname.includes("soundcloud.com")
+      hostname.includes("soundcloud.com") ||
+      hostname.includes("bsky.app")
     ) {
-      title = document.title
-        .replace(/ - Kick$/, "")
-        .replace(/ \| Instagram$/, "")
-        .replace(/ \/ X$/, "")
-        .replace(/ \| Facebook$/, "")
-        .trim();
-      return {
-        url: window.location.href,
-        title,
-        videoEl:
-          element?.tagName === "VIDEO"
-            ? element
-            : element?.querySelector?.("video"),
-      };
+      return resolveSocialPostTarget(element, hostname);
     }
 
     // 5. Direct HTML5 Video Element check
@@ -662,6 +893,14 @@
         const vid = u.pathname.replace(/^\/+/, "").split("/")[0];
         if (vid) return `https://www.youtube.com/watch?v=${vid}`;
       }
+      if (host.includes("twitter.com") || host.includes("x.com")) {
+        const m = u.pathname.match(/^\/([^\/]+)\/status\/(\d+)/i);
+        if (m) return `https://x.com/${m[1]}/status/${m[2]}`;
+      }
+      if (host.includes("reddit.com")) {
+        const m = u.pathname.match(/^(\/(?:r|u|user)\/[^\/]+\/comments\/[^\/]+(?:\/[^\/]+)?)/i);
+        if (m) return `https://www.reddit.com${m[1]}/`;
+      }
     } catch {}
     return rawUrl;
   }
@@ -694,13 +933,20 @@
     return promise;
   }
 
-  function prefetchFormatsForPage() {
+  function prefetchFormatsForPage(targetUrl) {
     try {
+      const urlToFetch = targetUrl || location.href;
       if (ZR_FORMAT_HOSTS.test(location.hostname)) {
         if (location.hostname.includes("youtube.com") && !location.pathname.startsWith("/watch") && !location.pathname.startsWith("/shorts")) {
           return;
         }
-        fetchRealFormats(location.href);
+        if ((location.hostname.includes("twitter.com") || location.hostname.includes("x.com")) && !/\/status\/\d+/i.test(urlToFetch)) {
+          return;
+        }
+        if (location.hostname.includes("reddit.com") && !/\/comments\//i.test(urlToFetch)) {
+          return;
+        }
+        fetchRealFormats(urlToFetch);
       }
     } catch (e) {}
   }
@@ -837,9 +1083,9 @@
     const mySeq = ++dropdownSeq;
     const stillOpen = () => activeDropdown === shell && dropdownSeq === mySeq && shell.isConnected;
 
-    // Preserve specific mediaTarget attached to this button
-    if (!mediaTarget || !mediaTarget.videoEl) {
-      const allVids = Array.from(document.querySelectorAll("video"));
+    // Preserve specific mediaTarget attached to this button (crossing Shadow DOM if needed)
+    if (!mediaTarget || (!mediaTarget.videoEl && !mediaTarget.postUrl)) {
+      const allVids = collectAllVideos();
       let targetActiveVid = allVids.find((v) => !v.paused && v.currentTime > 0 && v.readyState >= 2);
       if (!targetActiveVid) {
         targetActiveVid = allVids.find((v) => {
@@ -853,8 +1099,10 @@
       if (targetActiveVid) {
         currentTargetVideo = targetActiveVid;
         mediaTarget = extractMediaTarget(targetActiveVid);
+      } else if (currentTargetContainer) {
+        mediaTarget = extractMediaTarget(currentTargetContainer);
       }
-    } else {
+    } else if (mediaTarget.videoEl) {
       currentTargetVideo = mediaTarget.videoEl;
     }
 
@@ -1165,9 +1413,13 @@
         });
       });
     } else {
-      // 4. Any other website (Facebook, TikTok, Twitter/X, Vimeo, News & HTML5 video)
-      const cleanTitle = title.length > 40 ? title.slice(0, 40) + "..." : title;
-      const cleanTargetUrl = directSrc || stripRangeParams(mediaTarget.url || window.location.href);
+      // 4. Any other website (Facebook, TikTok, Twitter/X, Reddit, Vimeo, News & HTML5 video)
+      const cleanTitle = title.length > 50 ? title.slice(0, 50) + "..." : title;
+      const shortTitle = getShortTitle(cleanTitle, 28);
+      const isKnownMediaSite = ZR_FORMAT_HOSTS.test(hostname);
+      const cleanTargetUrl = isKnownMediaSite
+        ? pageUrl
+        : (directSrc || stripRangeParams(mediaTarget.url || window.location.href));
 
       const vW = vid && vid.videoWidth ? vid.videoWidth : 0;
       const vH = vid && vid.videoHeight ? vid.videoHeight : 0;
@@ -1175,12 +1427,88 @@
       const realQuality = maxDim >= 1080 ? "1080p HD" : maxDim >= 720 ? "720p HD" : maxDim >= 480 ? "480p" : maxDim > 0 ? `${maxDim}p` : "HD";
       const dimStr = vW > 0 && vH > 0 ? ` (${vW}x${vH})` : "";
 
-      // Add all sniffed media streams from background webRequest
+      // Standard selectable resolutions (yt-dlp muxed video + audio) FIRST for social platforms
+      if (isKnownMediaSite) {
+        options.push({
+          label: `${cleanTitle}, Best Available Quality (MP4 Video + Audio)`,
+          fullLabel: `${title}, Best Available Quality (MP4 Video + Audio)`,
+          shortTitle,
+          quality: "Best",
+          formatDisplay: "Best • MP4",
+          url: cleanTargetUrl,
+          container: "MP4",
+          isDirectFile: false,
+          filename: `${cleanTitle}.mp4`,
+        });
+      }
+
+      options.push({
+        label: `${cleanTitle}, Full HD 1080p MP4`,
+        fullLabel: `${title}, Full HD 1080p MP4`,
+        shortTitle,
+        quality: "1080p",
+        formatDisplay: "1080p • Full HD",
+        url: cleanTargetUrl,
+        container: "MP4",
+        isDirectFile: false,
+        filename: `${cleanTitle}.mp4`,
+      });
+
+      options.push({
+        label: `${cleanTitle}, HD 720p MP4`,
+        fullLabel: `${title}, HD 720p MP4`,
+        shortTitle,
+        quality: "720p",
+        formatDisplay: "720p • HD",
+        url: cleanTargetUrl,
+        container: "MP4",
+        isDirectFile: false,
+        filename: `${cleanTitle}.mp4`,
+      });
+
+      options.push({
+        label: `${cleanTitle}, SD 480p MP4`,
+        fullLabel: `${title}, SD 480p MP4`,
+        shortTitle,
+        quality: "480p",
+        formatDisplay: "480p • SD",
+        url: cleanTargetUrl,
+        container: "MP4",
+        isDirectFile: false,
+        filename: `${cleanTitle}.mp4`,
+      });
+
+      // Player streamHint fallback (e.g. Reddit shreddit-player HLS URL if post URL unavailable)
+      if (mediaTarget.streamHint && isValidDownloadUrl(mediaTarget.streamHint)) {
+        const hintIsPlaylist = /\.(m3u8|mpd)(\?|$)/i.test(mediaTarget.streamHint);
+        options.push({
+          label: `${cleanTitle}, ${hintIsPlaylist ? "HLS Video + Audio" : "Direct Stream"}`,
+          shortTitle,
+          quality: "Best",
+          formatDisplay: hintIsPlaylist ? "HLS • MP4" : "Stream • MP4",
+          url: mediaTarget.streamHint,
+          container: "MP4",
+          isDirectFile: !hintIsPlaylist,
+          filename: `${cleanTitle}.mp4`,
+        });
+      }
+
+      // Add sniffed media streams from background webRequest
       const seen = new Set();
       sniffedStreams.forEach((st) => {
         if (st.isAudio) return;
         if (st.contentLength > 0 && st.contentLength < 50000) return;
         const sUrl = stripRangeParams(st.url);
+        // Skip video-only DASH fragments on Reddit when we have the post URL
+        if (/v\.redd\.it\/.*\/DASH_/i.test(sUrl) && /\/comments\//i.test(cleanTargetUrl)) return;
+        // On Twitter/Reddit feeds, avoid listing unrelated streams from other posts once post URL is resolved
+        if (hostname.includes("reddit.com") && !sUrl.includes("redd.it")) return;
+        if ((hostname.includes("twitter.com") || hostname.includes("x.com")) && !sUrl.includes("twimg.com")) return;
+
+        const isPlaylist =
+          /\.m3u8(\?|$)/i.test(sUrl) ||
+          /\.mpd(\?|$)/i.test(sUrl) ||
+          (st.contentType && (st.contentType.includes("mpegurl") || st.contentType.includes("dash+xml")));
         const bitStr = st.bitrate ? `${st.bitrate} kbps` : "";
         const key = `${st.quality}_${bitStr}_${sUrl.split("?")[0]}`;
         if (seen.has(key)) return;
@@ -1190,48 +1518,22 @@
         const detailStr = detailsList.length > 0 ? `, ${detailsList.join(", ")}` : "";
 
         options.push({
-          label: `${cleanTitle}, MP4 file, ${durStr}quality ${st.quality}${detailStr}`,
+          label: `${cleanTitle}, ${isPlaylist ? "HLS Stream" : "MP4 file"}, ${durStr}quality ${st.quality}${detailStr}`,
+          shortTitle,
           quality: st.quality || "HD",
-          formatDisplay: `${st.quality || 'HD'} • MP4${st.sizeFormatted ? ' (' + st.sizeFormatted + ')' : ''}`,
+          formatDisplay: `${st.quality || 'HD'} • ${isPlaylist ? "HLS/MP4" : "MP4"}${st.sizeFormatted ? ' (' + st.sizeFormatted + ')' : ''}`,
           url: sUrl,
           container: "MP4",
-          isDirectFile: true,
+          isDirectFile: !isPlaylist,
           filename: `${cleanTitle}.mp4`,
         });
       });
 
-      // Standard selectable resolutions (IDM style)
-      options.push({
-        label: `${cleanTitle}, Full HD 1080p MP4`,
-        quality: "1080p",
-        formatDisplay: "1080p • Full HD",
-        url: cleanTargetUrl,
-        container: "MP4",
-        isDirectFile: false,
-      });
-
-      options.push({
-        label: `${cleanTitle}, HD 720p MP4`,
-        quality: "720p",
-        formatDisplay: "720p • HD",
-        url: cleanTargetUrl,
-        container: "MP4",
-        isDirectFile: false,
-      });
-
-      options.push({
-        label: `${cleanTitle}, SD 480p MP4`,
-        quality: "480p",
-        formatDisplay: "480p • SD",
-        url: cleanTargetUrl,
-        container: "MP4",
-        isDirectFile: false,
-      });
-
-      // Direct playing video
-      if (directSrc) {
+      // Direct playing video (only if real HTTP media file, not blob: or playlist)
+      if (directSrc && !/\.(m3u8|mpd)(\?|$)/i.test(directSrc)) {
         options.push({
           label: `${cleanTitle}, Playing Video${dimStr} (Direct File)`,
+          shortTitle,
           quality: realQuality,
           formatDisplay: `${realQuality}${dimStr} • Direct`,
           url: directSrc,
@@ -1244,11 +1546,13 @@
       // Audio only option
       options.push({
         label: `${cleanTitle}, MP3 Audio (Highest Quality)`,
+        shortTitle,
         quality: "Audio",
         formatDisplay: "MP3 Audio",
         url: cleanTargetUrl,
         container: "MP3",
         isDirectFile: false,
+        filename: `${cleanTitle}.mp3`,
       });
 
       // Cover thumbnail if present
@@ -1256,6 +1560,7 @@
       if (poster && isValidDownloadUrl(poster)) {
         options.push({
           label: `${cleanTitle}, Thumbnail Cover Image (JPG)`,
+          shortTitle,
           quality: "Thumbnail",
           formatDisplay: "Cover JPG",
           url: poster,
@@ -1758,15 +2063,20 @@
     ensureGrabberContainer();
 
     currentTargetVideo = video;
-    currentTargetContainer = container || (video ? video.parentElement : null);
+    currentTargetContainer =
+      container ||
+      closestAcrossShadow(
+        video,
+        "shreddit-player, shreddit-player-2, [data-testid='videoPlayer'], [data-testid='videoComponent'], article"
+      ) ||
+      (video ? video.parentElement : null);
     clearTimeout(hideTimer);
 
-    // ALWAYS use the video element's bounding rect so the button stays anchored to the actual video
-    const rect = video
-      ? video.getBoundingClientRect()
-      : container
-      ? container.getBoundingClientRect()
-      : null;
+    // Prefer the video element's bounding rect; fall back to player container if video rect is empty (e.g. Twitter/Reddit lazy containers)
+    let rect = video ? video.getBoundingClientRect() : null;
+    if ((!rect || rect.width < 100 || rect.height < 60) && container) {
+      rect = container.getBoundingClientRect();
+    }
 
     if (!rect || rect.width < 100 || rect.height < 60) return;
 
@@ -1823,7 +2133,10 @@
     activeGrabberButton.style.display = "flex";
     activeGrabberButton.style.opacity = "1";
     activeGrabberButton.style.pointerEvents = "auto";
-    prefetchFormatsForPage();
+    try {
+      const target = extractMediaTarget(video || currentTargetContainer);
+      prefetchFormatsForPage(target?.url);
+    } catch (e) {}
   }
 
   // ---------------------------------------------------------------------------
@@ -1911,8 +2224,37 @@
       }
     }
 
-    // 4. Scan all HTML5 video elements across any website
-    const videos = document.querySelectorAll("video");
+    // 3.5 Reddit & Twitter/X Shadow DOM & Wrapper Fast-Path
+    if (
+      hostname.includes("reddit.com") ||
+      hostname.includes("twitter.com") ||
+      hostname.includes("x.com")
+    ) {
+      const players = document.querySelectorAll(
+        "shreddit-player, shreddit-player-2, [data-testid='videoPlayer'], [data-testid='videoComponent']"
+      );
+      for (let i = 0; i < players.length; i++) {
+        const p = players[i];
+        const r = p.getBoundingClientRect();
+        if (r.width < 120 || r.height < 80) continue;
+        if (
+          x >= r.left &&
+          x <= r.right &&
+          y >= r.top &&
+          y <= r.bottom
+        ) {
+          const innerVid =
+            (p.shadowRoot && p.shadowRoot.querySelector("video")) ||
+            p.querySelector("video") ||
+            null;
+          positionGrabber(innerVid, p);
+          return;
+        }
+      }
+    }
+
+    // 4. Scan all HTML5 video elements across any website (including Shadow DOM)
+    const videos = collectAllVideos();
     let foundHovered = false;
 
     for (let i = 0; i < videos.length; i++) {
@@ -1945,13 +2287,13 @@
     passive: true,
   });
 
-  // When ANY video starts playing, show the grabber
+  // When ANY video starts playing (even inside Shadow DOM), show the grabber
   window.addEventListener(
     "play",
     (e) => {
-      if (e.target && e.target.tagName === "VIDEO") {
-        const vid = e.target;
-        positionGrabber(vid, vid);
+      const target = (e.composedPath && e.composedPath()[0]) || e.target;
+      if (target && target.tagName === "VIDEO") {
+        positionGrabber(target, target);
         setTimeout(scheduleHide, 4000);
       }
     },
@@ -1962,15 +2304,23 @@
   document.addEventListener("fullscreenchange", ensureGrabberContainer);
   document.addEventListener("webkitfullscreenchange", ensureGrabberContainer);
 
-  // Periodic check to attach to playing video on Instagram / social feeds
+  // Periodic check to attach to playing video on Instagram / Twitter / Reddit / social feeds
   setInterval(() => {
-    if (window.location.hostname.includes("instagram.com")) {
-      const playing = Array.from(document.querySelectorAll("video")).find(
+    const h = window.location.hostname;
+    if (
+      h.includes("instagram.com") ||
+      h.includes("twitter.com") ||
+      h.includes("x.com") ||
+      h.includes("reddit.com") ||
+      h.includes("facebook.com") ||
+      h.includes("tiktok.com")
+    ) {
+      const playing = collectAllVideos().find(
         (v) => !v.paused && v.currentTime > 0
       );
       if (playing && (!activeGrabberButton || activeGrabberButton.style.display === "none")) {
         const r = playing.getBoundingClientRect();
-        if (r.top >= 0 && r.bottom <= window.innerHeight) {
+        if (r.width >= 100 && r.height >= 60 && r.top >= 0 && r.bottom <= window.innerHeight) {
           positionGrabber(playing, playing);
           setTimeout(scheduleHide, 4000);
         }
@@ -1983,9 +2333,14 @@
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "GET_LAST_CLICKED_MEDIA") {
       const target = extractMediaTarget(
-        currentTargetVideo || lastRightClickedElement
+        currentTargetVideo || currentTargetContainer || lastRightClickedElement
       );
-      sendResponse({ url: target.url, title: target.title });
+      sendResponse({
+        url: target.url,
+        title: target.title,
+        isDirectFile: Boolean(target.isDirectFile),
+        isImage: Boolean(target.isImage),
+      });
       return true;
     }
 

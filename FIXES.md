@@ -143,3 +143,15 @@
   - `ZrApplication.kt`: Runs background `YoutubeDL.getInstance().updateYoutubeDL(..., UpdateChannel.STABLE)` on startup.
   - `DownloadViewModel.kt`: Reads real binary version via `YoutubeDL.getInstance().version(appContext)` on init, and performs real binary update via `YoutubeDL.getInstance().updateYoutubeDL(...)` (Nightly/Stable) when tapping Update.
   - `DownloadWorker.kt` & `MediaGrabberDialog.kt`: Uses `--extractor-args "youtube:player_client=android_vr,android,tv"` for YouTube URLs along with `--no-update --no-check-certificates --retries 5 --fragment-retries 5` to bypass web-client SABR / 403 Forbidden errors on Android.
+
+
+## Browser Extension Social Video Grabber & Firefox Edition (v3.7.3)
+- **Twitter/X, Reddit, Facebook & TikTok Video Grabber Fixes (`browser-extension/content.js`, `background.js`)**:
+  - Added Shadow DOM traversal helpers (`closestAcrossShadow`, `collectAllVideos`) so Reddit `<shreddit-player>` / `<shreddit-player-2>` shadow-DOM `<video>` elements and `play` events (`e.composedPath()[0]`) are reliably detected.
+  - Added `resolveSocialPostTarget()` to extract actual tweet URLs (`/status/<id>`), Reddit post permalinks (`/comments/...`), Facebook post/reel links, and TikTok video links instead of sending feed URLs like `x.com/home` or `reddit.com/`.
+  - Fixed `positionGrabber()` fallback to player container bounds (`[data-testid="videoPlayer"]`, `[data-testid="videoComponent"]`, `shreddit-player`) and stopped `sniffedStreams` from marking `.m3u8`/`.mpd` streams as `isDirectFile: true` (so HLS/DASH streams go through yt-dlp/FFmpeg instead of downloading raw playlist text).
+  - Canonicalized Twitter/X and Reddit post URLs in `fetchRealFormats` / `canonicalizeFormatUrl` and preserved `isDirectFile`/`isImage` in `GET_LAST_CLICKED_MEDIA`.
+- **Firefox Extension Folder & `.xpi` Package (`firefox-extension/`)**:
+  - Created dedicated `firefox-extension/` directory with Firefox MV2 `manifest.json` (`browser_specific_settings.gecko`, automatic `<all_urls>` & `127.0.0.1` permissions, `browser_action`, persistent background script, `web_accessible_resources` for `yt-main-world.js`).
+  - Added cross-browser `chrome.action || chrome.browserAction` badge handling and `chrome.scripting` guard in `background.js`, plus MV2 main-world script injection in `content.js`.
+  - Built packaged `firefox-extension/zr-downloader-firefox.xpi` bundle ready for Firefox installation.

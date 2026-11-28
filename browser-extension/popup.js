@@ -148,7 +148,13 @@ chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
 
 // Download current media button
 btnDownloadCurrent.addEventListener("click", () => {
-  if (!detectedUrl || detectedUrl.startsWith("chrome://")) return;
+  if (
+    !detectedUrl ||
+    detectedUrl.startsWith("chrome://") ||
+    detectedUrl.startsWith("about:") ||
+    detectedUrl.startsWith("moz-extension://") ||
+    detectedUrl.startsWith("chrome-extension://")
+  ) return;
   btnDownloadCurrent.textContent = "Sending to ZR Engine...";
   const isLowSpace = toggleLowDiskSpace ? toggleLowDiskSpace.checked : false;
   chrome.runtime.sendMessage({ action: "SEND_TO_ZR", url: detectedUrl, lowDiskSpace: isLowSpace }, () => {
