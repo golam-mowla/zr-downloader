@@ -696,6 +696,14 @@ function canonicalizeFormatUrl(rawUrl) {
       const vid = u.pathname.replace(/^\/+/, "").split("/")[0];
       if (vid) return `https://www.youtube.com/watch?v=${vid}`;
     }
+    if (host.includes("twitter.com") || host.includes("x.com")) {
+      const m = u.pathname.match(/^\/([^\/]+)\/status\/(\d+)/i);
+      if (m) return `https://x.com/${m[1]}/status/${m[2]}`;
+    }
+    if (host.includes("reddit.com")) {
+      const m = u.pathname.match(/^(\/(?:r|u|user)\/[^\/]+\/comments\/[^\/]+(?:\/[^\/]+)?)/i);
+      if (m) return `https://www.reddit.com${m[1]}/`;
+    }
   } catch {}
   return rawUrl;
 }
@@ -747,7 +755,7 @@ function getRealFormats(url) {
 function launchProtocolUrl(protocolUrl) {
   try {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs && tabs[0] && tabs[0].id) {
+      if (tabs && tabs[0] && tabs[0].id && chrome.scripting && chrome.scripting.executeScript) {
         chrome.scripting.executeScript({
           target: { tabId: tabs[0].id },
           func: (proto) => {
@@ -761,12 +769,12 @@ function launchProtocolUrl(protocolUrl) {
           args: [protocolUrl],
         }).catch(() => {
           chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
-            setTimeout(() => chrome.tabs.remove(t.id), 2500);
+            if (t && t.id) setTimeout(() => chrome.tabs.remove(t.id), 2500);
           });
         });
       } else {
         chrome.tabs.create({ url: protocolUrl, active: false }, (t) => {
-          setTimeout(() => chrome.tabs.remove(t.id), 2500);
+          if (t && t.id) setTimeout(() => chrome.tabs.remove(t.id), 2500);
         });
       }
     });
@@ -993,14 +1001,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
       }
 
-      // Update badge
-      if (!isOnline) {
-        chrome.action.setBadgeText({ text: "" });
-      } else if (!isAuthenticated) {
-        chrome.action.setBadgeText({ text: "KEY" });
-        chrome.action.setBadgeBackgroundColor({ color: "#f59e0b" }); // amber
-      } else {
-        chrome.action.setBadgeText({ text: "" });
+      // Update badge (MV3 chrome.action or Firefox MV2 chrome.browserAction)
+      const badgeApi = (typeof chrome !== "undefined" && (chrome.action || chrome.browserAction)) || null;
+      if (badgeApi) {
+        if (!isOnline) {
+          badgeApi.setBadgeText({ text: "" });
+        } else if (!isAuthenticated) {
+          badgeApi.setBadgeText({ text: "KEY" });
+          badgeApi.setBadgeBackgroundColor({ color: "#f59e0b" }); // amber
+        } else {
+          badgeApi.setBadgeText({ text: "" });
+        }
       }
 
       sendResponse({

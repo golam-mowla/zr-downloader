@@ -1,0 +1,54 @@
+{
+  "manifest_version": 2,
+  "name": "ZR Downloader Assistant",
+  "version": "3.7.3",
+  "description": "High-speed 16-segment HTTP download accelerator and intelligent media stream grabber for ZR Downloader (Firefox Edition).",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "zr-downloader@golammowla.dev",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "downloads",
+    "contextMenus",
+    "activeTab",
+    "notifications",
+    "storage",
+    "webRequest",
+    "cookies",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    "yt-main-world.js"
+  ],
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "ZR Downloader",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  }
+}
